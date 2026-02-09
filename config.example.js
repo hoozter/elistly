@@ -10,5 +10,5 @@
   'use strict';
   window.SUPABASE_URL = 'https://your-project.supabase.co';
   window.SUPABASE_ANON_KEY = 'your-anon-public-key';
-  window.ELISTLY_API_URL = ''; // optional: Worker URL for delete account and admin (e.g. https://elistly-api.xxx.workers.dev)
+  window.ELISTLY_API_URL = ''; // optional: full Worker URL including https:// (e.g. https://elistly-api.xxx.workers.dev)
 })();

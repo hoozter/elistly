@@ -216,13 +216,24 @@ const App = {
           }
           this.data.isAdmin = false;
           const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
-          if (apiUrl && apiUrl.trim()) {
+          if (!apiUrl || !apiUrl.trim()) {
+            if (typeof console !== 'undefined' && console.warn) {
+              console.warn('Elistly: ELISTLY_API_URL is not set. Admin and Delete account will not appear. Set it in config or (on Cloudflare Pages) as env var ELISTLY_API_URL.');
+            }
+          } else {
             try {
               const base = apiUrl.replace(/\/$/, '');
               const r = await fetch(`${base}/admin/me`, { headers: { Authorization: `Bearer ${session.access_token}` } });
               const b = await r.json();
               this.data.isAdmin = !!b.admin;
-            } catch (_) {}
+              if (!this.data.isAdmin && typeof console !== 'undefined' && console.warn) {
+                console.warn('Elistly: /admin/me returned admin: false or error.', r.status, b);
+              }
+            } catch (e) {
+              if (typeof console !== 'undefined' && console.warn) {
+                console.warn('Elistly: /admin/me request failed (check Worker URL, CORS, or Network tab).', e);
+              }
+            }
           }
           this.initProfileDropdown(session.user);
           const params = new URLSearchParams(window.location.search);

@@ -55,26 +55,27 @@ function jsonResponse(body, status = 200, origin = null) {
 
 export default {
   async fetch(req, env, ctx) {
-    const url = new URL(req.url);
-    const path = url.pathname;
     const origin = req.headers.get('Origin') || '*';
+    try {
+      const url = new URL(req.url);
+      const path = url.pathname;
 
-    if (req.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
-    }
+      if (req.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      }
 
-    if (path === '/health' || path === '/') {
-      return jsonResponse({ ok: true, service: 'elistly-api' }, 200, origin);
-    }
+      if (path === '/health' || path === '/') {
+        return jsonResponse({ ok: true, service: 'elistly-api' }, 200, origin);
+      }
 
-    const authHeader = req.headers.get('Authorization');
+      const authHeader = req.headers.get('Authorization');
 
-    if (path === '/admin/me') {
-      const user = await getAuthUser(env, authHeader);
-      if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
-      const admin = await isAdmin(env, user.id);
-      return jsonResponse({ admin }, 200, origin);
-    }
+      if (path === '/admin/me') {
+        const user = await getAuthUser(env, authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const admin = await isAdmin(env, user.id);
+        return jsonResponse({ admin }, 200, origin);
+      }
 
     if (path === '/users/me' && req.method === 'DELETE') {
       const user = await getAuthUser(env, authHeader);
@@ -131,6 +132,13 @@ export default {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
-    return jsonResponse({ error: 'Not found' }, 404, origin);
+      return jsonResponse({ error: 'Not found' }, 404, origin);
+    } catch (e) {
+      return jsonResponse(
+        { error: 'Internal server error', detail: e && e.message ? e.message : String(e) },
+        500,
+        origin
+      );
+    }
   }
 };
