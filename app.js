@@ -181,7 +181,9 @@ const App = {
           settings: { defaultView: 'dashboard', materialIcons: MATERIAL_ICONS },
           categories: {},
           entityTypes: {},
-          entities: {}
+          entities: {},
+          workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } },
+          currentWorkspaceId: 'default'
         };
 
         if (!supabaseClient) {
@@ -272,10 +274,35 @@ const App = {
           try {
             const userData = stored;
             const storedVersion = userData.version || '1.0.0';
-            this.data.categories = { ...(userData.categories || {}) };
-            this.data.entities = { ...(userData.entities || {}) };
-            this.data.entityTypes = { ...(userData.entityTypes || {}) };
             this.data.settings = { ...this.data.settings, ...(userData.settings || {}) };
+            if (userData.workspaces && typeof userData.currentWorkspaceId === 'string') {
+              this.data.workspaces = userData.workspaces;
+              this.data.currentWorkspaceId = userData.currentWorkspaceId;
+              const w = this.data.workspaces[this.data.currentWorkspaceId];
+              if (w) {
+                this.data.categories = { ...(w.categories || {}) };
+                this.data.entityTypes = { ...(w.entityTypes || {}) };
+                this.data.entities = { ...(w.entities || {}) };
+              } else {
+                this.data.categories = {};
+                this.data.entityTypes = {};
+                this.data.entities = {};
+              }
+            } else {
+              this.data.categories = { ...(userData.categories || {}) };
+              this.data.entityTypes = { ...(userData.entityTypes || {}) };
+              this.data.entities = { ...(userData.entities || {}) };
+              this.data.workspaces = {
+                default: {
+                  name: 'Default',
+                  categories: { ...this.data.categories },
+                  entityTypes: { ...this.data.entityTypes },
+                  entities: { ...this.data.entities }
+                }
+              };
+              this.data.currentWorkspaceId = 'default';
+            }
+            this.normalizeEntityTypeCategories();
               const fontSize = this.data.settings.fontSize || 'normal';
               document.documentElement.setAttribute('data-font-size', ['small','normal','large','larger'].includes(fontSize) ? fontSize : 'normal');
 
@@ -862,6 +889,15 @@ const App = {
       },
       
       saveData() {
+        const cid = this.data.currentWorkspaceId;
+        if (this.data.workspaces && cid) {
+          this.data.workspaces[cid] = {
+            name: (this.data.workspaces[cid] && this.data.workspaces[cid].name) || (cid === 'default' ? 'Default' : 'Inventory'),
+            categories: { ...this.data.categories },
+            entityTypes: { ...this.data.entityTypes },
+            entities: { ...this.data.entities }
+          };
+        }
         const dataToSave = { ...this.data, version: this.data.version };
         if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
         Storage.setAppData(dataToSave);
@@ -923,22 +959,33 @@ const App = {
           Object.keys(preset.entityTypes || {}).forEach(id => {
             if (!this.data.entityTypes[id]) this.data.entityTypes[id] = JSON.parse(JSON.stringify(preset.entityTypes[id]));
           });
-          const idMap = {};
-          Object.keys(preset.entities || {}).forEach(oldId => {
-            const ent = preset.entities[oldId];
-            const newId = this.generateId();
-            idMap[oldId] = newId;
-            this.data.entities[newId] = { ...JSON.parse(JSON.stringify(ent)), id: newId };
-          });
+          this.normalizeEntityTypeCategories();
           this.saveData();
           this.renderSidebar();
           this.loadView('dashboard');
-          this.showNotification(`Added "${preset.label}" preset`, 'success');
+          this.showNotification(`Added "${preset.label}" preset (structure only; no sample items)`, 'success');
         }
       },
       
       generateId() {
         return 'id-' + Math.random().toString(36).substring(2,9);
+      },
+
+      normalizeEntityTypeCategories() {
+        Object.values(this.data.entityTypes || {}).forEach(type => {
+          if (Array.isArray(type.categories)) {
+            if (type.category) delete type.category;
+            return;
+          }
+          type.categories = type.category ? [type.category] : [];
+          if (type.category) delete type.category;
+        });
+      },
+
+      getEntityTypeCategoryIds(type) {
+        if (!type) return [];
+        if (Array.isArray(type.categories) && type.categories.length) return type.categories;
+        return type.category ? [type.category] : [];
       },
 
       showSampleDataPrompt(presetId) {
@@ -1575,9 +1622,179 @@ const App = {
         `).join('');
       },
       
+      getCurrentWorkspaceName() {
+        const w = this.data.workspaces && this.data.workspaces[this.data.currentWorkspaceId];
+        return (w && w.name) || (this.data.currentWorkspaceId === 'default' ? 'Default' : 'Inventory');
+      },
+
+      switchWorkspace(workspaceId) {
+        if (workspaceId === this.data.currentWorkspaceId) return;
+        this.saveData();
+        const w = this.data.workspaces && this.data.workspaces[workspaceId];
+        if (!w) return;
+        this.data.currentWorkspaceId = workspaceId;
+        this.data.categories = { ...(w.categories || {}) };
+        this.data.entityTypes = { ...(w.entityTypes || {}) };
+        this.data.entities = { ...(w.entities || {}) };
+        this.normalizeEntityTypeCategories();
+        this.saveData();
+        this.renderSidebar();
+        this.loadView('dashboard');
+        if (!this._switchWorkspaceSilent) this.showNotification(`Switched to "${this.getCurrentWorkspaceName()}"`, 'success');
+        this._switchWorkspaceSilent = false;
+      },
+
+      showAddInventoryPresetModal() {
+        const presetIcons = { blank: 'add_circle_outline', library: 'menu_book', it: 'devices', staff: 'group', property: 'apartment' };
+        const presets = SETUP_IDS.map(id => PRESETS[id]).filter(Boolean);
+        const html = `
+          <div class="modal onboarding-modal" id="addInventoryPresetModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('addInventoryPresetModal')"><span class="material-icons">close</span></button>
+              <div class="modal-header">
+                <h3>New inventory</h3>
+              </div>
+              <p class="onboarding-intro">Choose a setup for this inventory. You can change or remove anything later.</p>
+              <div class="onboarding-options">
+                ${presets.map(p => `
+                  <button type="button" class="onboarding-option" onclick="App.applyPresetToNewWorkspace('${p.id}'); App.closeModal('addInventoryPresetModal');">
+                    <span class="onboarding-option-icon"><span class="material-icons">${presetIcons[p.id] || 'folder'}</span></span>
+                    <div class="onboarding-option-body">
+                      <div class="onboarding-option-title">${p.label}</div>
+                      <p class="onboarding-option-desc">${p.description}</p>
+                    </div>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          </div>`;
+        const existing = document.getElementById('addInventoryPresetModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('addInventoryPresetModal');
+      },
+
+      applyPresetToNewWorkspace(presetId) {
+        const preset = PRESETS[presetId];
+        if (!preset) return;
+        const id = 'id-' + Math.random().toString(36).substring(2, 9);
+        const names = Object.values(this.data.workspaces || {}).map(w => w.name);
+        let name = preset.label || 'Inventory';
+        for (let n = 2; names.includes(name); n++) name = `${preset.label || 'Inventory'} ${n}`;
+        const entityTypes = JSON.parse(JSON.stringify(preset.entityTypes || {}));
+        Object.values(entityTypes).forEach(t => {
+          if (t.category && !Array.isArray(t.categories)) t.categories = [t.category];
+        });
+        this.data.workspaces[id] = {
+          name,
+          categories: JSON.parse(JSON.stringify(preset.categories || {})),
+          entityTypes,
+          entities: {}
+        };
+        this._switchWorkspaceSilent = true;
+        this.switchWorkspace(id);
+        this.showNotification(`Created "${name}"`, 'success');
+        const samples = (window.SAMPLE_ENTITIES || {})[presetId];
+        if (samples && samples.order && samples.order.some(t => Array.isArray(samples[t]) && samples[t].length > 0)) {
+          setTimeout(() => this.showSampleDataPrompt(presetId), 300);
+        }
+      },
+
+      addWorkspace() {
+        this.showAddInventoryPresetModal();
+      },
+
+      showRenameWorkspaceModal() {
+        const cid = this.data.currentWorkspaceId;
+        const w = this.data.workspaces && this.data.workspaces[cid];
+        const currentName = (w && w.name) || 'Inventory';
+        const html = `
+          <div class="modal" id="renameWorkspaceModal">
+            <div class="modal-content" style="max-width: 360px;">
+              <button class="modal-close" onclick="App.closeModal('renameWorkspaceModal')"><span class="material-icons">close</span></button>
+              <div class="modal-header"><h3>Rename inventory</h3></div>
+              <div class="modal-body">
+                <div class="form-group">
+                  <label for="renameWorkspaceInput">Name</label>
+                  <input type="text" id="renameWorkspaceInput" class="profile-input" value="${(currentName || '').replace(/"/g, '&quot;')}" placeholder="e.g. Business A">
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('renameWorkspaceModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="App.renameCurrentWorkspace()">Save</button>
+              </div>
+            </div>
+          </div>`;
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('renameWorkspaceModal');
+        const input = document.getElementById('renameWorkspaceInput');
+        if (input) { input.focus(); input.select(); }
+      },
+
+      renameCurrentWorkspace() {
+        const input = document.getElementById('renameWorkspaceInput');
+        const name = (input && input.value && input.value.trim()) ? input.value.trim() : '';
+        if (!name) return;
+        const cid = this.data.currentWorkspaceId;
+        if (this.data.workspaces && this.data.workspaces[cid]) {
+          this.data.workspaces[cid].name = name;
+          this.saveData();
+          this.closeModal('renameWorkspaceModal');
+          this.renderSidebar();
+          this.showNotification('Inventory renamed', 'success');
+        }
+      },
+
       renderSidebar() {
         const categoryList = document.getElementById('categoryList');
+        const workspaceWrap = document.getElementById('workspaceSwitcherWrap');
         if (!categoryList) return;
+        
+        if (workspaceWrap && this.data.workspaces && this.data.currentWorkspaceId) {
+          const currentName = this.getCurrentWorkspaceName();
+          const workspaces = Object.entries(this.data.workspaces).map(([id, w]) => ({ id, name: w.name || id }));
+          workspaceWrap.innerHTML = `
+            <div class="workspace-switcher" role="group" aria-label="Inventory">
+              <button type="button" class="workspace-switcher-btn" id="workspaceSwitcherBtn" aria-haspopup="true" aria-expanded="false">
+                <span class="material-icons">inventory_2</span>
+                <span class="workspace-switcher-label">${(currentName || '').replace(/</g, '&lt;')}</span>
+                <span class="material-icons workspace-switcher-chevron">expand_more</span>
+              </button>
+              <div class="workspace-switcher-dropdown" id="workspaceSwitcherDropdown" hidden>
+                ${workspaces.map(w => `
+                  <button type="button" class="workspace-switcher-option ${w.id === this.data.currentWorkspaceId ? 'active' : ''}" data-workspace-id="${w.id}">
+                    ${(w.name || w.id).replace(/</g, '&lt;')}
+                  </button>
+                `).join('')}
+                <button type="button" class="workspace-switcher-option workspace-switcher-add" id="workspaceAddBtn">
+                  <span class="material-icons">add</span> Add inventory
+                </button>
+              </div>
+            </div>`;
+          workspaceWrap.style.display = '';
+          const btn = document.getElementById('workspaceSwitcherBtn');
+          const dropdown = document.getElementById('workspaceSwitcherDropdown');
+          const close = () => { if (dropdown) dropdown.hidden = true; if (btn) btn.setAttribute('aria-expanded', 'false'); };
+          if (btn && dropdown) {
+            btn.onclick = () => {
+              const open = dropdown.hidden;
+              dropdown.hidden = !open;
+              btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            };
+            dropdown.querySelectorAll('.workspace-switcher-option[data-workspace-id]').forEach(opt => {
+              opt.onclick = () => { this.switchWorkspace(opt.dataset.workspaceId); close(); };
+            });
+            const addBtn = document.getElementById('workspaceAddBtn');
+            if (addBtn) addBtn.onclick = () => { this.addWorkspace(); close(); };
+          }
+        } else if (workspaceWrap) {
+          workspaceWrap.innerHTML = '';
+          workspaceWrap.style.display = 'none';
+        }
         
         // Get current URL parameters
         const url = new URL(window.location);
@@ -1885,7 +2102,7 @@ const App = {
             let html = '';
             visibleCategories.forEach(category => {
               const categoryEntities = allEntities.filter(
-                entity => this.data.entityTypes[entity.type]?.category === category.id
+                entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(category.id)
               );
               const emptyState = '<p class="empty-state">No items yet</p>';
               html += `
@@ -1984,7 +2201,7 @@ const App = {
         const cardsHtml = visibleCategories.map(category => {
           // All entities for this category
           const entities = Object.values(this.data.entities)
-            .filter(entity => this.data.entityTypes[entity.type]?.category === category.id);
+            .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(category.id));
 
           return `
             <div class="card">
@@ -2038,7 +2255,7 @@ const App = {
       
       renderEntityList(categoryId) {
         const entities = Object.values(this.data.entities)
-          .filter(entity => this.data.entityTypes[entity.type]?.category === categoryId)
+          .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId))
           .sort((a, b) => this.getEntityCardTitle(a).localeCompare(this.getEntityCardTitle(b)));
 
         if (entities.length === 0) {
@@ -2057,7 +2274,7 @@ const App = {
         
         // Get entity types for this category
         const categoryEntityTypes = Object.values(this.data.entityTypes)
-          .filter(type => type.category === categoryId);
+          .filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
         
         const html = `
           <div class="category-view">
@@ -2328,6 +2545,12 @@ const App = {
                           <span class="material-icons">add_circle_outline</span>
                           Add preset
                         </button>
+                        ${this.data.workspaces && Object.keys(this.data.workspaces).length ? `
+                        <button class="btn btn-secondary" onclick="App.showRenameWorkspaceModal()">
+                          <span class="material-icons">inventory_2</span>
+                          Inventory: ${(this.getCurrentWorkspaceName() || 'Default').replace(/</g, '&lt;')}
+                        </button>
+                        ` : ''}
                       </div>
                     </div>
                   </div>
@@ -3345,14 +3568,16 @@ const App = {
       
       confirmDelete(entityId) {
         const entity = this.data.entities[entityId];
-        const category = this.data.entityTypes[entity.type].category;
+        const type = this.data.entityTypes[entity.type];
+        const catIds = this.getEntityTypeCategoryIds(type);
+        const category = catIds.length ? catIds[0] : null;
         
         delete this.data.entities[entityId];
         this.saveData();
         
         document.getElementById('confirmDeleteModal').remove();
         this.closeEntityModal();
-        this.loadView(category);
+        this.loadView(category || 'dashboard');
         this.showNotification('Entity deleted successfully', 'success');
       },
       
@@ -3442,6 +3667,22 @@ const App = {
       showCategoryForm(categoryId = '') {
         const category = categoryId ? this.data.categories[categoryId] : null;
         const isEdit = !!category;
+        const entityTypes = Object.values(this.data.entityTypes || {});
+        const entityTypesSection = isEdit && entityTypes.length ? `
+                <div class="form-group modal-group carded-section">
+                  <h4>Entity types in this category</h4>
+                  <p class="profile-help" style="margin-top: 0;">Select which entity types appear under this category. You can also assign categories from each entity type's settings.</p>
+                  <div class="category-entity-types-checkboxes">
+                    ${entityTypes.map(t => {
+                      const checked = this.getEntityTypeCategoryIds(t).includes(categoryId);
+                      return `<label class="checkbox-label category-entity-type-option">
+                        <input type="checkbox" name="entityType_${t.id}" value="1" ${checked ? 'checked' : ''}>
+                        <span>${(t.label || t.id).replace(/</g, '&lt;')}</span>
+                      </label>`;
+                    }).join('')}
+                  </div>
+                </div>
+                ` : '';
         
         const modalHtml = `
           <div class="modal" id="categoryFormModal">
@@ -3474,7 +3715,7 @@ const App = {
                     <span>Show in Dashboard</span>
                         </label>
                 </div>
-                
+                ${entityTypesSection}
                 <div class="modal-actions">
                   <button type="button" class="btn btn-secondary" onclick="App.closeCategoryForm()">
                     Cancel
@@ -3509,20 +3750,21 @@ const App = {
           visibleInDashboard: formData.get('visibleInDashboard') === 'on'
         };
         
+        let resolvedCategoryId = categoryId;
         if (categoryId) {
-          // Update existing category
-          this.data.categories[categoryId] = {
-            ...this.data.categories[categoryId],
-            ...data
-          };
+          this.data.categories[categoryId] = { ...this.data.categories[categoryId], ...data };
         } else {
-          // Create new category
-          const newId = this.generateId();
-          this.data.categories[newId] = {
-            id: newId,
-            ...data
-          };
+          resolvedCategoryId = this.generateId();
+          this.data.categories[resolvedCategoryId] = { id: resolvedCategoryId, ...data };
         }
+        
+        Object.keys(this.data.entityTypes || {}).forEach(typeId => {
+          const type = this.data.entityTypes[typeId];
+          let cats = this.getEntityTypeCategoryIds(type);
+          const checked = formData.get(`entityType_${typeId}`) === '1';
+          if (checked && !cats.includes(resolvedCategoryId)) type.categories = [...cats, resolvedCategoryId];
+          else if (!checked && cats.includes(resolvedCategoryId)) type.categories = cats.filter(c => c !== resolvedCategoryId);
+        });
         
         this.saveData();
         this.closeCategoryForm();
@@ -3541,7 +3783,7 @@ const App = {
         if (!category) return;
         
         const hasEntities = Object.values(this.data.entities)
-          .some(entity => this.data.entityTypes[entity.type]?.category === categoryId);
+          .some(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId));
         
         const confirmModal = `
           <div class="modal" id="confirmDeleteCategoryModal">
@@ -3573,7 +3815,7 @@ const App = {
       confirmDeleteCategory(categoryId) {
         // Delete all entities in this category
         Object.entries(this.data.entities).forEach(([entityId, entity]) => {
-          if (this.data.entityTypes[entity.type]?.category === categoryId) {
+          if (this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId)) {
             delete this.data.entities[entityId];
           }
         });
@@ -4138,14 +4380,18 @@ const App = {
                           <input type="text" name="label" value="${type.label}" required>
                         </div>
                         <div class="form-group">
-                          <label for="category">Category *</label>
-                          <select name="category" required>
-                            ${Object.values(this.data.categories).map(cat => `
-                              <option value="${cat.id}" ${type.category === cat.id ? 'selected' : ''}>
-                                ${cat.label}
-                              </option>
-                            `).join('')}
-                          </select>
+                          <label>Categories</label>
+                          <p class="profile-help" style="margin-top: 0;">Choose one or more categories where this entity type appears. You can also assign entity types from each category's settings.</p>
+                          <div class="category-entity-types-checkboxes">
+                            ${Object.values(this.data.categories).map(cat => {
+                              const typeCatIds = this.getEntityTypeCategoryIds(type);
+                              const checked = typeCatIds.includes(cat.id);
+                              return `<label class="checkbox-label category-entity-type-option">
+                                <input type="checkbox" name="category_${cat.id}" value="1" ${checked ? 'checked' : ''}>
+                                <span>${(cat.label || cat.id).replace(/</g, '&lt;')}</span>
+                              </label>`;
+                            }).join('')}
+                          </div>
                         </div>
                         <div class="form-group">
                           <label for="icon">Icon</label>
@@ -4476,9 +4722,10 @@ const App = {
         const fields = this.processFieldsData(formData);
         const associations = this.processAssociationsData(formData);
         
+        const categories = Object.keys(this.data.categories || {}).filter(catId => formData.get(`category_${catId}`) === '1');
         const data = {
           label: formData.get('label'),
-          category: formData.get('category'),
+          categories: categories,
           icon: formData.get('icon'),
           enableNameGen: formData.get('enableNameGen') === 'on',
           useAutoNameAsTitle: formData.get('useAutoNameAsTitle') === 'on',
@@ -4564,7 +4811,7 @@ const App = {
             ...data
           };
         }
-        
+        this.normalizeEntityTypeCategories();
         this.saveData();
         this.closeEntityTypeForm();
         this.closeEntityTypeManager();
