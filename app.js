@@ -5605,6 +5605,43 @@ const App = {
         this.showModal('faqModal');
       },
 
+      showLegalModal() {
+        const modalHtml = `
+          <div class="modal" id="legalModal">
+            <div class="modal-content legal-modal-content">
+              <button class="modal-close" onclick="App.closeModal('legalModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Legal &amp; policies</h3>
+              </div>
+              <div class="legal-modal-body">
+                <section class="legal-section">
+                  <h4>Disclaimer</h4>
+                  <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. The author and hoozter do not guarantee availability, correctness, or fitness for any purpose.</p>
+                  <p>You use the service and store data at your own risk. We are not responsible for any data you store, any loss of data, or how you use the application. Do not rely on it as the only copy of important information.</p>
+                </section>
+                <section class="legal-section">
+                  <h4>Data &amp; privacy</h4>
+                  <p><strong>What we store:</strong> When you use an account (e.g. via Supabase), we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure you or your host configure (e.g. Supabase).</p>
+                  <p><strong>Why:</strong> To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
+                  <p><strong>Your rights:</strong> You can <strong>export</strong> your data (Settings → Data → Export, or Profile → Export all data) and <strong>delete your account</strong> (Profile → Delete account), which removes your account and associated data. If you use a third-party auth or database provider, their terms also apply.</p>
+                </section>
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('legalModal')">Close</button>
+              </div>
+            </div>
+          </div>
+        `;
+        const existing = document.getElementById('legalModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('legalModal');
+      },
+
       toggleNameLock(button) {
         const input = document.getElementById('nameInput');
         const isLocked = button.querySelector('.material-icons').textContent === 'lock';

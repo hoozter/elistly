@@ -96,10 +96,10 @@ html, body { max-width: 100vw; overflow-x: hidden; }
 /* Layout */
 .app-container {
   display: grid;
-  grid-template-areas: "header header" "sidebar main";
-  grid-template-rows: 60px 1fr;
+  grid-template-areas: "header header" "sidebar main" "footer footer";
+  grid-template-rows: 60px 1fr auto;
   grid-template-columns: 250px 1fr;
-  height: 100%;
+  min-height: 100%;
 }
 
 /* Header: left group (menu, logo, search) and right actions */
@@ -400,6 +400,38 @@ aside a.active {
   color: var(--text-primary);
   margin: 0 0 0.5rem 0;
 }
+
+/* Footer */
+.app-footer {
+  grid-area: footer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+.app-footer-copy a,
+.app-footer-legal {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+.app-footer-copy a:hover,
+.app-footer-legal:hover {
+  text-decoration: underline;
+}
+
+.legal-modal-content { max-width: 560px; }
+.legal-modal-body { padding: 0 0 1rem; }
+.legal-section { margin-bottom: 1.25rem; }
+.legal-section:last-child { margin-bottom: 0; }
+.legal-section h4 { font-size: 1rem; margin: 0 0 0.5rem; color: var(--text-primary); }
+.legal-section p { margin: 0 0 0.5rem; font-size: 0.95rem; line-height: 1.5; color: var(--text-secondary); }
+.legal-section p:last-child { margin-bottom: 0; }
 
 /* Dashboard views */
 .dashboard-grid {

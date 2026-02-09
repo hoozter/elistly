@@ -82,6 +82,13 @@
     <div class="main-content" id="mainContent">
       <!-- Dynamic content loads here -->
     </div>
+
+    <!-- FOOTER -->
+    <footer class="app-footer">
+      <span class="app-footer-copy">© <span id="copyright-year"></span> <a href="https://hoozter.com" target="_blank" rel="noopener noreferrer">hoozter</a>. Built with care in Sweden.</span>
+      <a href="#" class="app-footer-legal" onclick="if(window.App){App.showLegalModal(); return false;}">Legal &amp; policies</a>
+    </footer>
+    <script>document.getElementById('copyright-year').textContent = new Date().getFullYear();</script>
   </div>
   
   <!-- SNACKBAR -->
