@@ -41,13 +41,7 @@ You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** 
    - **Build command:** `npm install`  
      (so `npx wrangler deploy` can run; leave empty if deploy works without it).
    - **Deploy command:** `npx wrangler deploy`
-4. **Variables and Secrets:** The Worker needs `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`. **If the Worker gets `undefined` for these (e.g. 500 “undefined/auth/v1/user”), set them via the Wrangler CLI so they’re bound to the Worker:**
-   - From your machine, in the repo: `cd worker`
-   - Run: `npx wrangler secret put SUPABASE_URL` and paste the Supabase project URL when prompted.
-   - Run: `npx wrangler secret put SUPABASE_ANON_KEY` and paste the anon key.
-   - Run: `npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY` and paste the service role key.
-   - Then trigger a new Worker deploy (push a commit or Deployments → Create deployment). CLI-set secrets are attached to the Worker and are used on every deploy; dashboard-only vars can sometimes not apply to Git-triggered deploys.
-   - Alternatively you can set them in the Worker’s **Settings** → **Variables and Secrets** in the dashboard; if you still see `undefined` in the Worker, use the CLI method above.
+4. **Variables and Secrets:** In the Worker → **Settings** → **Variables and Secrets**, add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` as **Secret** (encrypted), not Variable (plaintext). Secrets persist across deploys.
 5. Save and deploy (or push a commit so the Worker rebuilds from `worker/`).
 
 The Worker implements: `GET /` and `GET /health`; `GET /admin/me` (returns `{ admin: true/false }`); `GET /admin/users` (list users, admin only); `DELETE /admin/users/:id` (delete user, admin only); `DELETE /users/me` (delete own account).

@@ -34,6 +34,25 @@ create policy "app_data_delete_own"
   for delete
   using (auth.uid() = user_id);
 
+-- Profile display name (persists reliably; auth.user_metadata is not always persisted).
+-- Drop table first so we get the correct columns (user_id); any existing profiles data will be lost.
+drop table if exists public.profiles;
+
+create table public.profiles (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  display_name text,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+
+create policy "profiles_select_own"
+  on public.profiles for select using (auth.uid() = user_id);
+create policy "profiles_insert_own"
+  on public.profiles for insert with check (auth.uid() = user_id);
+create policy "profiles_update_own"
+  on public.profiles for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 -- Admins: list is used by the API Worker (service role) to allow admin routes.
 -- Add your user: insert into public.admin_users (user_id) values ('your-auth-user-uuid');
 create table if not exists public.admin_users (

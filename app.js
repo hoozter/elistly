@@ -244,7 +244,7 @@ const App = {
               }
             }
           }
-          this.initProfileDropdown(session.user);
+          await this.initProfileDropdown(session.user);
           const params = new URLSearchParams(window.location.search);
           if (params.get('type') === 'verify_secondary_email' && params.get('token')) {
             await this.confirmSecondaryEmailVerification(params.get('token'));
@@ -651,13 +651,24 @@ const App = {
         this.showModal('authConfirmEmailModal');
       },
 
-      initProfileDropdown(user) {
+      async getDisplayName(userId) {
+        if (!supabaseClient || !userId) return null;
+        try {
+          const { data } = await supabaseClient.from('profiles').select('display_name').eq('user_id', userId).maybeSingle();
+          return (data && data.display_name && data.display_name.trim()) ? data.display_name.trim() : null;
+        } catch (_) {
+          return null;
+        }
+      },
+
+      async initProfileDropdown(user) {
         const wrap = document.getElementById('profileDropdownWrap');
         const menu = document.getElementById('profileMenu');
         const btn = document.getElementById('profileBtn');
         if (!wrap || !menu || !btn) return;
         wrap.style.display = '';
-        var rawDisplay = (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
+        const fromProfile = await this.getDisplayName(user.id);
+        var rawDisplay = fromProfile || (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
         var displayName = (rawDisplay || '').replace(/</g, '&lt;').replace(/"/g, '&quot;') || 'Signed in';
         const adminLink = this.data.isAdmin ? `
             <a href="#" id="profileAdminLink"><span class="material-icons">admin_panel_settings</span>Admin</a>
@@ -2368,7 +2379,8 @@ const App = {
           if (f.data) factors = f.data;
         } catch (_) {}
         const meta = user.user_metadata || {};
-        const userName = meta.user_name || '';
+        const fromProfile = await this.getDisplayName(user.id);
+        const userName = fromProfile || meta.user_name || '';
         const hasTOTP = factors.totp && factors.totp.length > 0;
         const totpFactorId = hasTOTP ? factors.totp[0].id : null;
         let secondaryEmails = Array.isArray(meta.secondary_emails) ? meta.secondary_emails : [];
@@ -2612,21 +2624,22 @@ const App = {
         const userName = (document.getElementById('profileUserName') && document.getElementById('profileUserName').value) || '';
         const trimmedName = userName.trim();
         const { data: { user } } = await supabaseClient.auth.getUser();
-        const meta = { ...(user.user_metadata || {}), user_name: trimmedName };
-        const { data: updateData, error } = await supabaseClient.auth.updateUser({ data: { user_metadata: meta } });
-        if (error) {
-          this.showSnackbar(error.message || 'Failed to save profile', true);
+        if (!user) return;
+        const { error: profileError } = await supabaseClient.from('profiles').upsert(
+          { user_id: user.id, display_name: trimmedName || null, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id' }
+        );
+        if (profileError) {
+          this.showSnackbar(profileError.message || 'Failed to save display name', true);
           return;
         }
-        await supabaseClient.auth.refreshSession();
         this.showSnackbar('Profile saved.');
         this.closeModal('profileModal');
-        const u = updateData && updateData.user ? updateData.user : (await supabaseClient.auth.getUser()).data.user;
+        const display = trimmedName || (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
         const menu = document.getElementById('profileMenu');
         const userLine = menu && menu.querySelector('.profile-dropdown-user');
-        if (userLine && u) {
-          const display = (u.user_metadata && u.user_metadata.user_name) || u.email || 'Signed in';
-          userLine.innerHTML = '<span class="material-icons">person</span>' + (display || '').replace(/</g, '&lt;');
+        if (userLine) {
+          userLine.innerHTML = '<span class="material-icons">person</span>' + (display || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
         }
       },
 
