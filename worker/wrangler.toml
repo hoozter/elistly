@@ -1,5 +1,11 @@
 # Elistly API Worker – deploy from Cloudflare with root directory = worker
-# Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Workers → Settings → Variables and Secrets
+# Bindings must be set so env.SUPABASE_URL etc. are available. Use one of:
+#   (1) Wrangler CLI (recommended): from worker/ run:
+#       npx wrangler secret put SUPABASE_URL
+#       npx wrangler secret put SUPABASE_ANON_KEY
+#       npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#   (2) Dashboard: Workers & Pages → elistly-api → Settings → Variables and Secrets
+#       (If you use Git-triggered deploys, CLI-set secrets are more reliable.)
 name = "elistly-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
