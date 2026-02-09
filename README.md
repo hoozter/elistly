@@ -24,7 +24,7 @@ Elistly needs Supabase (your backend and database). Without it, the app shows a 
 1. Clone or download the repo.
 2. Copy `config.example.js` to `config.js`.
 3. In [Supabase](https://supabase.com): create a project, run the SQL in `supabase/schema.sql` (SQL Editor).
-4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `supabaseUrl` and `supabaseAnonKey`.
+4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 5. Open `index.html` in a browser. You’ll get the sign-in screen; after that, your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. for an installable web app on Android).
 
 ## Basic usage

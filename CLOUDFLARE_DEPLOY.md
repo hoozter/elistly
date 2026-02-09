@@ -56,7 +56,7 @@ The Worker implements: `GET /` and `GET /health`; `GET /admin/me` (returns `{ ad
 For **Delete account** (Profile) and **Admin** (profile dropdown → Admin), the frontend must know the Worker URL:
 
 1. In **Pages** → your project → **Settings** → **Environment variables**, add `ELISTLY_API_URL` = `https://elistly-api.xxxx.workers.dev` (your Worker URL).
-2. The build script `write-config.js` writes this into `config.js` as `window.ELISTLY_CONFIG.apiUrl`. If `ELISTLY_API_URL` is not set, the app still works but Delete account and Admin will be unavailable or show a message that the API is not configured.
+2. The build script reads env var **`ELISTLY_API_URL`** and writes it into `config.js` as **`window.ELISTLY_API_URL`** (same name as the env var). If `ELISTLY_API_URL` is not set, the app still works but Delete account and Admin will be unavailable or show a message that the API is not configured.
 
 ---
 

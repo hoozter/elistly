@@ -41,10 +41,11 @@ const MATERIAL_ICONS = [
 // Supabase client (when config present). Used by Storage and Auth.
 var supabaseClient = null;
 (function () {
-  var c = typeof window !== 'undefined' && window.ELISTLY_CONFIG;
-  if (c && c.supabaseUrl && c.supabaseAnonKey && typeof window.supabase !== 'undefined') {
+  var url = typeof window !== 'undefined' && window.SUPABASE_URL;
+  var anonKey = typeof window !== 'undefined' && window.SUPABASE_ANON_KEY;
+  if (url && anonKey && typeof window.supabase !== 'undefined') {
     try {
-      supabaseClient = window.supabase.createClient(c.supabaseUrl, c.supabaseAnonKey);
+      supabaseClient = window.supabase.createClient(url, anonKey);
     } catch (e) {
       console.warn('Elistly: Supabase client init failed', e);
     }
@@ -214,7 +215,7 @@ const App = {
             return;
           }
           this.data.isAdmin = false;
-          const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+          const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
           if (apiUrl && apiUrl.trim()) {
             try {
               const base = apiUrl.replace(/\/$/, '');
@@ -1713,12 +1714,12 @@ const App = {
       async renderAdminPage() {
         const mainContent = document.getElementById('mainContent');
         if (!mainContent) return;
-        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
         if (!apiUrl || !apiUrl.trim()) {
           mainContent.innerHTML = `
             <div class="card">
               <div class="card-header"><h2><span class="material-icons">admin_panel_settings</span> Admin</h2></div>
-              <p class="empty-state">API URL is not configured. Set <code>apiUrl</code> in config to use admin features.</p>
+              <p class="empty-state">API URL is not configured. Set <code>ELISTLY_API_URL</code> in config (or in Cloudflare Pages env) to use admin features.</p>
             </div>`;
           return;
         }
@@ -1792,7 +1793,7 @@ const App = {
 
       async confirmAdminDeleteUser(userId) {
         if (!userId) return;
-        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
         if (!apiUrl || !apiUrl.trim()) return;
         const { data: { session } } = await supabaseClient.auth.getSession();
         const token = session && session.access_token;
@@ -5539,9 +5540,9 @@ const App = {
 
       /** Delete account modal: type DELETE to confirm; calls API to remove account and all data. */
       showDeleteAccountModal() {
-        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
         if (!apiUrl || !apiUrl.trim()) {
-          this.showSnackbar('Delete account is not configured. Set the API URL (apiUrl) in config.', true);
+          this.showSnackbar('Delete account is not configured. Set ELISTLY_API_URL in config (or in Cloudflare Pages env).', true);
           return;
         }
         this.closeModal('profileModal');

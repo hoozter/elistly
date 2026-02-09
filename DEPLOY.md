@@ -9,7 +9,7 @@
 ## 2. Local config
 
 - Copy **`config.example.js`** to **`config.js`** (config.js is gitignored).
-- Set `supabaseUrl` and `supabaseAnonKey` in config.js (Project Settings → API: Project URL and **anon public** key, the long JWT).
+- Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in config.js (Project Settings → API: Project URL and **anon public** key, the long JWT). Optional: `ELISTLY_API_URL` for the Worker (delete account / admin).
 
 ## 3. Cloudflare (one push → Pages + Worker)
 

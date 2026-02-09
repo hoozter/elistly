@@ -224,7 +224,7 @@ After an **app version upgrade**, you may be prompted to **restore default entit
 
 ### Account required
 
-Elistly always runs with an account. You must configure Supabase (`config.js` with `supabaseUrl` and `supabaseAnonKey`). If config is missing, the app shows a “Setup required” message and does not load data. Once configured, you sign in and your data is stored in the database; the app syncs with it and is designed to work offline and sync when back online (e.g. installable web app on Android).
+Elistly always runs with an account. You must configure Supabase (`config.js` with `SUPABASE_URL` and `SUPABASE_ANON_KEY`). If config is missing, the app shows a “Setup required” message and does not load data. Once configured, you sign in and your data is stored in the database; the app syncs with it and is designed to work offline and sync when back online (e.g. installable web app on Android).
 
 ### What Supabase does
 
@@ -246,7 +246,7 @@ Profile (header → profile icon → Profile) opens the **profile modal**:
 - **Data & account**:
   - **Export all data** — Downloads a single JSON file with **everything**: user id/email/metadata, theme, and full app data (categories, entity types, entities, settings). Use for a complete backup or portability. This is separate from Settings → Export, which is inventory-only.
   - **Reset data** — Permanently clears all app data (categories, entity types, entities, settings) from the database and this device. You type **RESET** to confirm. Your account stays; you can sign in again and start from scratch.
-  - **Delete account** — Permanently deletes your account and all your data. You type **DELETE** to confirm. This uses the API (Worker); if `apiUrl` is not configured, the app will tell you. After deletion you are signed out and cannot use that account again.
+  - **Delete account** — Permanently deletes your account and all your data. You type **DELETE** to confirm. This uses the API (Worker); if `ELISTLY_API_URL` is not set in config (or in Cloudflare Pages env), the app will tell you. After deletion you are signed out and cannot use that account again.
 
 ### 2FA / TOTP
 
@@ -261,7 +261,7 @@ Admin features let designated users list and delete accounts. They require the *
 ### How it works
 
 - The Worker exposes: **`GET /admin/me`** (returns `{ admin: true }` if the current user is in `admin_users`), **`GET /admin/users`** (list all auth users, admin only), **`DELETE /admin/users/:id`** (delete a user and their app data, admin only), and **`DELETE /users/me`** (delete your own account).
-- The app calls **`/admin/me`** on load (when signed in and when `apiUrl` is set). If the response says `admin: true`, the profile dropdown shows an **Admin** link.
+- The app calls **`/admin/me`** on load (when signed in and when `ELISTLY_API_URL` is set). If the response says `admin: true`, the profile dropdown shows an **Admin** link.
 - Clicking **Admin** opens the **Admin page**: a table of accounts (email, user id, created) with a **Delete** button per row. Deleting an account removes the user from Supabase Auth and their row in `app_data`; it cannot be undone.
 
 ### Adding an admin
@@ -272,7 +272,7 @@ Admin features let designated users list and delete accounts. They require the *
    insert into public.admin_users (user_id) values ('your-auth-user-uuid');
    ```
    Replace `'your-auth-user-uuid'` with the user’s **id** from Supabase → **Authentication** → **Users** (the UUID, not the email).
-3. Ensure the app has **`apiUrl`** set in config (e.g. your Worker URL). On Cloudflare Pages, set **`ELISTLY_API_URL`** so the build writes it into `config.js`.
+3. Ensure the app has **`ELISTLY_API_URL`** set in config (your Worker URL). On Cloudflare Pages, add env var **`ELISTLY_API_URL`**; the build script writes it into `config.js` as `window.ELISTLY_API_URL`.
 4. The user signs in (or refreshes). The app fetches `/admin/me`; if their id is in `admin_users`, they see **Admin** in the profile dropdown and can open the Admin page.
 
 ### Worker environment
@@ -318,7 +318,7 @@ The app is **responsive**:
 
 ### Local / static
 
-- The app must have Supabase configured (see README). Run it by opening **index.html** (or serving the folder). Copy `config.example.js` to `config.js` and set `supabaseUrl` and `supabaseAnonKey`.
+- The app must have Supabase configured (see README). Run it by opening **index.html** (or serving the folder). Copy `config.example.js` to `config.js` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 
 ### Supabase backend
 
@@ -336,7 +336,7 @@ See **`DEPLOY.md`** for a concise checklist.
 
 ### Cloudflare Worker (API)
 
-- Used for **delete account** and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, **`SUPABASE_SERVICE_ROLE_KEY`**. The app needs **`apiUrl`** in config (e.g. from **`ELISTLY_API_URL`** in Pages) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
+- Used for **delete account** and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, **`SUPABASE_SERVICE_ROLE_KEY`**. The app needs **`ELISTLY_API_URL`** in config (set in Pages as the env var **`ELISTLY_API_URL`**) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
 
 ### Supabase Edge Functions
 
@@ -351,8 +351,8 @@ See **`DEPLOY.md`** for a concise checklist.
 | `index.html` | Single-page app shell; header, sidebar, main content, modals. |
 | `app.js` | Main application logic: data, UI, auth, export/import, entity types, categories. |
 | `styles.css` | All styles; theme variables, layout, responsive rules. |
-| `config.example.js` | Template for config; copy to `config.js` (gitignored) and add Supabase keys. |
-| `config.js` | Supabase URL and anon key (gitignored; created at build or by hand). |
+| `config.example.js` | Template for config; copy to `config.js` (gitignored) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, optional `ELISTLY_API_URL`. |
+| `config.js` | `window.SUPABASE_URL`, `window.SUPABASE_ANON_KEY`, `window.ELISTLY_API_URL` (gitignored; created at build or by hand). |
 | `setup-blank.js`, `setup-library.js`, etc. | Starter presets; register in `window.ELISTLY_PRESETS`. |
 | `sample-data.js` | Optional sample entities per preset; used for “Load sample data?”. |
 | `faq.js` | In-app FAQ content (`window.ELISTLY_FAQ`); used by the Help modal. |
