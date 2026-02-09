@@ -15,6 +15,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Search** — Find items by name from the header.
 - **Account and database** — You always sign in; your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. installable web app on Android).
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
+- **Profile** — Export all data (full backup), reset data (clear app data, keep account), or delete account. Optional **Admin** (with API/Worker): list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
 
 ## Quick install
 
@@ -31,8 +32,9 @@ Elistly needs Supabase (your backend and database). Without it, the app shows a 
 1. **First run** — Choose a preset (Blank, Library, IT, Staff, Property) or start empty.
 2. **Sidebar** — Open Dashboard, optional “Due & overdue,” and your categories.
 3. **Add items** — Use the + on a category card or open a category and add there. Edit by clicking an item.
-4. **Settings** (gear icon) — Appearance, dashboard layout, and **Data**: manage entity types/categories, export, import, add another preset, or reset the app.
-5. **Help** — Settings → About → **Help**, or (when signed in) profile menu → **Help**.
+4. **Settings** (gear icon) — Appearance, dashboard layout, and **Data**: manage entity types/categories, export, import, add another preset.
+5. **Profile** (header → profile icon) — Display name, emails, 2FA; **Export all data**, **Reset data**, **Delete account**. If you’re an admin (see DOCS), the dropdown also has **Admin** to list/delete accounts.
+6. **Help** — Settings → About → **Help**, or (when signed in) profile menu → **Help**.
 
 ## Screenshot
 
@@ -46,7 +48,7 @@ For a complete reference—concepts, all features, deployment, and project struc
 
 - **Static host** — Upload the repo (after building if you use `scripts/write-config.js` for config). Supabase provides the backend and database.
 - **Supabase** — Run `supabase/schema.sql`; set `config.js` (or inject config in build). See [DOCS.md](DOCS.md) and `DEPLOY.md`.
-- **Cloudflare Pages + Worker** — See `CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md` for one-repo deploy.
+- **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps (Pages + Worker, env vars, optional admin). One-repo flow: `CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md`.
 
 ## License
 

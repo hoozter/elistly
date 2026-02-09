@@ -16,11 +16,12 @@ This is the complete reference for Elistly: concepts, features, deployment, and 
 6. [Categories](#6-categories)
 7. [Data: export, import, presets, reset](#7-data-export-import-presets-reset)
 8. [Account and Supabase](#8-account-and-supabase)
-9. [Appearance and accessibility](#9-appearance-and-accessibility)
-10. [Mobile](#10-mobile)
-11. [Deployment](#11-deployment)
-12. [Project structure](#12-project-structure)
-13. [In-app help and changelog](#13-in-app-help-and-changelog)
+9. [Admin (optional)](#9-admin-optional)
+10. [Appearance and accessibility](#10-appearance-and-accessibility)
+11. [Mobile](#11-mobile)
+12. [Deployment](#12-deployment)
+13. [Project structure](#13-project-structure)
+14. [In-app help and changelog](#14-in-app-help-and-changelog)
 
 ---
 
@@ -77,7 +78,7 @@ After you choose a non-blank preset, the app may offer to **load sample data** (
 
 ### Clearing local data
 
-**`refresh.html`** clears the app’s localStorage key in this browser and shows a link back to the app. It does **not** delete your data in the database. When you open the app again and sign in, your data will load from the database. To permanently delete all your data (including from the database), use Settings → Data → **Reset app** (see [Data: export, import, presets, reset](#7-data-export-import-presets-reset)).
+**`refresh.html`** clears the app’s localStorage key in this browser and shows a link back to the app. It does **not** delete your data in the database. When you open the app again and sign in, your data will load from the database. To permanently delete all your app data (keep account) use **Profile → Reset data**; to delete your account and all data use **Profile → Delete account** (see [Account and Supabase](#8-account-and-supabase)).
 
 ---
 
@@ -190,7 +191,7 @@ In the category manager, you can **drag** categories to reorder. That order is u
 
 ## 7. Data: export, import, presets, reset
 
-### Export
+### Export (inventory)
 
 Settings → Data → **Export**. Choose:
 
@@ -199,7 +200,7 @@ Settings → Data → **Export**. Choose:
 - Which **entities** (actual items).
 - Whether to include **settings**.
 
-A JSON file is downloaded. Use it as a backup or to move data to another browser/account.
+A JSON file is downloaded. This is **inventory-only** (categories, entity types, entities, optional settings). Use it as a backup or to move data to another browser/account. For a **full backup** including user info and theme, use **Profile → Export all data** (see [Account and Supabase](#8-account-and-supabase)).
 
 ### Import
 
@@ -209,9 +210,9 @@ Settings → Data → **Import**. Select a JSON file (from a previous export or 
 
 Settings → Data → **Add preset**. Adds the categories and entity types from a chosen template (Library, IT, Staff, Property) **without** deleting your current data. Your existing categories and entity types are kept; the preset’s are added. Useful to add, for example, Library on top of an existing setup.
 
-### Reset app
+### Reset data (Profile)
 
-Settings → Data → **Reset app**. This **permanently deletes all your data**—categories, entity types, entities, and settings—from this device and from your account in the database. It cannot be undone. The app asks you to type **DELETE** to confirm. After reset, the page reloads and you’ll see the first-run welcome screen again.
+**Profile → Reset data**. This **permanently deletes all your app data**—categories, entity types, entities, and settings—from this device and from your account in the database. Your **account** remains; you can sign in again and start fresh. The app asks you to type **RESET** to confirm. After reset, the page reloads and you’ll see the first-run welcome screen again. This cannot be undone.
 
 ### Restore defaults
 
@@ -242,6 +243,10 @@ Profile (header → profile icon → Profile) opens the **profile modal**:
 - **Display name** (if supported by your Supabase setup).
 - **Emails** — Primary and secondary emails; add, verify, remove. You can change which email is primary.
 - **Two-factor authentication (2FA)** — Enable or disable TOTP. When enabled, you’ll enter a code from an authenticator app after signing in.
+- **Data & account**:
+  - **Export all data** — Downloads a single JSON file with **everything**: user id/email/metadata, theme, and full app data (categories, entity types, entities, settings). Use for a complete backup or portability. This is separate from Settings → Export, which is inventory-only.
+  - **Reset data** — Permanently clears all app data (categories, entity types, entities, settings) from the database and this device. You type **RESET** to confirm. Your account stays; you can sign in again and start from scratch.
+  - **Delete account** — Permanently deletes your account and all your data. You type **DELETE** to confirm. This uses the API (Worker); if `apiUrl` is not configured, the app will tell you. After deletion you are signed out and cannot use that account again.
 
 ### 2FA / TOTP
 
@@ -249,7 +254,34 @@ In Profile you can enable **TOTP** (e.g. Google Authenticator). The app shows a 
 
 ---
 
-## 9. Appearance and accessibility
+## 9. Admin (optional)
+
+Admin features let designated users list and delete accounts. They require the **API (Cloudflare Worker)** and the **`admin_users`** table in Supabase.
+
+### How it works
+
+- The Worker exposes: **`GET /admin/me`** (returns `{ admin: true }` if the current user is in `admin_users`), **`GET /admin/users`** (list all auth users, admin only), **`DELETE /admin/users/:id`** (delete a user and their app data, admin only), and **`DELETE /users/me`** (delete your own account).
+- The app calls **`/admin/me`** on load (when signed in and when `apiUrl` is set). If the response says `admin: true`, the profile dropdown shows an **Admin** link.
+- Clicking **Admin** opens the **Admin page**: a table of accounts (email, user id, created) with a **Delete** button per row. Deleting an account removes the user from Supabase Auth and their row in `app_data`; it cannot be undone.
+
+### Adding an admin
+
+1. Run the schema so the **`admin_users`** table exists (it’s in **`supabase/schema.sql`**).
+2. In the **Supabase SQL Editor**, run:
+   ```sql
+   insert into public.admin_users (user_id) values ('your-auth-user-uuid');
+   ```
+   Replace `'your-auth-user-uuid'` with the user’s **id** from Supabase → **Authentication** → **Users** (the UUID, not the email).
+3. Ensure the app has **`apiUrl`** set in config (e.g. your Worker URL). On Cloudflare Pages, set **`ELISTLY_API_URL`** so the build writes it into `config.js`.
+4. The user signs in (or refreshes). The app fetches `/admin/me`; if their id is in `admin_users`, they see **Admin** in the profile dropdown and can open the Admin page.
+
+### Worker environment
+
+The Worker needs **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`** (to verify user JWTs), and **`SUPABASE_SERVICE_ROLE_KEY`**. See **`CLOUDFLARE_DEPLOY.md`** for full deploy steps.
+
+---
+
+## 10. Appearance and accessibility
 
 ### Theme and colors
 
@@ -270,7 +302,7 @@ Settings → About → **Help**, or (when signed in) profile menu → **Help**. 
 
 ---
 
-## 10. Mobile
+## 11. Mobile
 
 The app is **responsive**:
 
@@ -282,7 +314,7 @@ The app is **responsive**:
 
 ---
 
-## 11. Deployment
+## 12. Deployment
 
 ### Local / static
 
@@ -304,9 +336,7 @@ See **`DEPLOY.md`** for a concise checklist.
 
 ### Cloudflare Worker (API)
 
-- Optional. If you use a Worker (e.g. for extra API routes), put it in **`worker/`** and connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`**. Secrets (e.g. Supabase service role key) go in the Worker’s Variables and Secrets in the dashboard.
-
-Full flow: **`CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md`**.
+- Used for **delete account** and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, **`SUPABASE_SERVICE_ROLE_KEY`**. The app needs **`apiUrl`** in config (e.g. from **`ELISTLY_API_URL`** in Pages) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
 
 ### Supabase Edge Functions
 
@@ -314,7 +344,7 @@ Full flow: **`CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md`**.
 
 ---
 
-## 12. Project structure
+## 13. Project structure
 
 | Path | Purpose |
 |------|--------|
@@ -329,13 +359,13 @@ Full flow: **`CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md`**.
 | `version-history.js` | Changelog entries (`window.VERSION_CHANGES`); used by Changelog and What’s New. |
 | `refresh.html` | Utility page that clears localStorage and links back to the app. |
 | `scripts/write-config.js` | Build script: writes `config.js` from env vars (e.g. `SUPABASE_URL`, `SUPABASE_ANON_KEY`). |
-| `supabase/schema.sql` | Table `app_data` and RLS policies for Supabase. |
+| `supabase/schema.sql` | Tables `app_data` and `admin_users`; RLS for `app_data`. Admins: add user id to `admin_users`. |
 | `supabase/functions/` | Optional Edge Functions (e.g. health). |
-| `worker/` | Optional Cloudflare Worker (e.g. API); `wrangler.toml`, `src/index.js`. |
+| `worker/` | Cloudflare Worker for delete-account and admin API; `wrangler.toml`, `src/index.js`. |
 
 ---
 
-## 13. In-app help and changelog
+## 14. In-app help and changelog
 
 ### Help (FAQ)
 

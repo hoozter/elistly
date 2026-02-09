@@ -213,6 +213,16 @@ const App = {
             this.showSignInModal();
             return;
           }
+          this.data.isAdmin = false;
+          const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+          if (apiUrl && apiUrl.trim()) {
+            try {
+              const base = apiUrl.replace(/\/$/, '');
+              const r = await fetch(`${base}/admin/me`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+              const b = await r.json();
+              this.data.isAdmin = !!b.admin;
+            } catch (_) {}
+          }
           this.initProfileDropdown(session.user);
           const params = new URLSearchParams(window.location.search);
           if (params.get('type') === 'verify_secondary_email' && params.get('token')) {
@@ -627,6 +637,9 @@ const App = {
         if (!wrap || !menu || !btn) return;
         wrap.style.display = '';
         var displayName = (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
+        const adminLink = this.data.isAdmin ? `
+            <a href="#" id="profileAdminLink"><span class="material-icons">admin_panel_settings</span>Admin</a>
+          ` : '';
         menu.innerHTML = `
           <div class="profile-dropdown-user">
             <span class="material-icons">person</span>${displayName}
@@ -634,6 +647,7 @@ const App = {
           <div class="profile-dropdown-actions">
             <a href="#" id="profileModalLink"><span class="material-icons">manage_accounts</span>Profile</a>
             <a href="#" id="profileFaqLink"><span class="material-icons">help</span>Help</a>
+            ${adminLink}
           </div>
           <div class="profile-dropdown-signout">
             <a href="#" id="profileSignOutLink"><span class="material-icons">logout</span>Sign out</a>
@@ -657,6 +671,13 @@ const App = {
         menu.querySelector('#profileSignOutLink').addEventListener('click', (e) => {
           e.preventDefault();
           this.handleSignOut();
+        });
+        const adminLinkEl = menu.querySelector('#profileAdminLink');
+        if (adminLinkEl) adminLinkEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.closeProfileDropdown();
+          this.updateURL({ view: 'admin' });
+          this.loadView('admin');
         });
         menu.style.display = 'none';
       },
@@ -1566,6 +1587,17 @@ const App = {
       
       loadView(view) {
         this.closeSidebar();
+        if (view === 'admin') {
+          if (!this.data.isAdmin) {
+            this.loadView('dashboard');
+            return;
+          }
+          this.updateURL({ view: 'admin', category: null });
+          const mainContent = document.getElementById('mainContent');
+          if (mainContent) this.renderAdminPage();
+          this.renderSidebar();
+          return;
+        }
         if (view === 'overdue' && !this.hasDueDateTypes()) view = 'dashboard';
         this.updateURL({ view: view === 'dashboard' ? null : view, category: view === 'dashboard' ? null : view });
         const mainContent = document.getElementById('mainContent');
@@ -1676,7 +1708,117 @@ const App = {
           </div>`;
         mainContent.innerHTML = html;
       },
-      
+
+      /** Admin page: list accounts and delete. Requires this.data.isAdmin and apiUrl. */
+      async renderAdminPage() {
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        if (!apiUrl || !apiUrl.trim()) {
+          mainContent.innerHTML = `
+            <div class="card">
+              <div class="card-header"><h2><span class="material-icons">admin_panel_settings</span> Admin</h2></div>
+              <p class="empty-state">API URL is not configured. Set <code>apiUrl</code> in config to use admin features.</p>
+            </div>`;
+          return;
+        }
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        const token = session && session.access_token;
+        if (!token) {
+          mainContent.innerHTML = `
+            <div class="card">
+              <div class="card-header"><h2><span class="material-icons">admin_panel_settings</span> Admin</h2></div>
+              <p class="empty-state">Not signed in.</p>
+            </div>`;
+          return;
+        }
+        mainContent.innerHTML = `
+          <div class="card">
+            <div class="card-header">
+              <h2><span class="material-icons">admin_panel_settings</span> Admin – Accounts</h2>
+              <button type="button" class="btn btn-secondary" onclick="App.loadView('admin')">
+                <span class="material-icons">refresh</span> Refresh
+              </button>
+            </div>
+            <div class="card-body">
+              <p class="profile-help" style="margin-bottom: 1rem;">List of user accounts. Deleting an account removes their auth user and app data permanently.</p>
+              <div id="adminUsersList"><p class="empty-state">Loading…</p></div>
+            </div>
+          </div>`;
+        const base = apiUrl.replace(/\/$/, '');
+        try {
+          const r = await fetch(`${base}/admin/users`, { headers: { Authorization: `Bearer ${token}` } });
+          const body = await r.json();
+          const listEl = document.getElementById('adminUsersList');
+          if (!listEl) return;
+          if (!r.ok) {
+            listEl.innerHTML = `<p class="empty-state" style="color: var(--danger-color);">${body.error || 'Failed to load users'}</p>`;
+            return;
+          }
+          const users = body.users || [];
+          if (users.length === 0) {
+            listEl.innerHTML = '<p class="empty-state">No accounts yet.</p>';
+            return;
+          }
+          const formatDate = (s) => s ? new Date(s).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—';
+          listEl.innerHTML = `
+            <div class="admin-users-table-wrap">
+              <table class="admin-users-table">
+                <thead>
+                  <tr><th>Email</th><th>User ID</th><th>Created</th><th></th></tr>
+                </thead>
+                <tbody>
+                  ${users.map(u => `
+                    <tr>
+                      <td>${(u.email || '').replace(/</g, '&lt;') || '—'}</td>
+                      <td><code class="admin-user-id">${(u.id || '').slice(0, 8)}…</code></td>
+                      <td>${formatDate(u.created_at)}</td>
+                      <td>
+                        <button type="button" class="btn btn-danger btn-sm" data-user-id="${(u.id || '').replace(/"/g, '&quot;')}" data-admin-delete>Delete</button>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>`;
+          listEl.querySelectorAll('[data-admin-delete]').forEach(btn => {
+            btn.addEventListener('click', () => this.confirmAdminDeleteUser(btn.dataset.userId));
+          });
+        } catch (e) {
+          const listEl = document.getElementById('adminUsersList');
+          if (listEl) listEl.innerHTML = `<p class="empty-state" style="color: var(--danger-color);">${e.message || 'Request failed'}</p>`;
+        }
+      },
+
+      async confirmAdminDeleteUser(userId) {
+        if (!userId) return;
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        if (!apiUrl || !apiUrl.trim()) return;
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        const token = session && session.access_token;
+        if (!token) return;
+        this.showConfirmModal({
+          title: 'Delete this account?',
+          message: 'This will permanently remove the user and all their data. This cannot be undone.',
+          confirmLabel: 'Delete account',
+          confirmVariant: 'danger',
+          onConfirm: async () => {
+            const base = apiUrl.replace(/\/$/, '');
+            const res = await fetch(`${base}/admin/users/${userId}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              this.showSnackbar(body.error || 'Failed to delete user', true);
+              return;
+            }
+            this.showSnackbar('Account deleted.');
+            this.renderAdminPage();
+          }
+        });
+      },
+
       renderDashboard() {
         const mainContent = document.getElementById('mainContent');
         if (!mainContent) return;
@@ -2153,10 +2295,6 @@ const App = {
                           <span class="material-icons">add_circle_outline</span>
                           Add preset
                         </button>
-                        <button class="btn btn-secondary" onclick="App.resetApp()" title="Permanently delete all data from this device and your account">
-                          <span class="material-icons">refresh</span>
-                          Reset app
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -2298,6 +2436,21 @@ const App = {
                     <button type="button" class="btn btn-primary" id="profileEnable2FABtn">Enable two-factor authentication</button>
                   `}
                 </section>
+                <section class="profile-section profile-section-data">
+                  <h4 class="profile-section-heading">Data &amp; account</h4>
+                  <p class="profile-help">Export all your data (inventory, settings, theme). Reset clears only app data. Delete account removes your account and all data permanently.</p>
+                  <div class="profile-inline-actions profile-data-actions">
+                    <button type="button" class="btn btn-secondary" id="profileExportAllBtn">
+                      <span class="material-icons">download</span> Export all data
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="profileResetDataBtn">
+                      <span class="material-icons">refresh</span> Reset data
+                    </button>
+                    <button type="button" class="btn btn-danger" id="profileDeleteAccountBtn">
+                      <span class="material-icons">person_remove</span> Delete account
+                    </button>
+                  </div>
+                </section>
               </div>
               <div class="modal-actions">
                 <button type="button" class="btn btn-primary" id="profileSaveBtn">Save</button>
@@ -2405,6 +2558,12 @@ const App = {
         if (enable2FABtn) enable2FABtn.addEventListener('click', () => this.showTwoFAModal());
 
         if (saveBtn) saveBtn.addEventListener('click', () => this.saveProfile());
+        const exportAllBtn = document.getElementById('profileExportAllBtn');
+        const resetDataBtn = document.getElementById('profileResetDataBtn');
+        const deleteAccountBtn = document.getElementById('profileDeleteAccountBtn');
+        if (exportAllBtn) exportAllBtn.addEventListener('click', () => this.exportAllData());
+        if (resetDataBtn) resetDataBtn.addEventListener('click', () => this.showResetDataModal());
+        if (deleteAccountBtn) deleteAccountBtn.addEventListener('click', () => this.showDeleteAccountModal());
         if (disableTOTPBtn && totpFactorId) {
           disableTOTPBtn.addEventListener('click', () => {
             this.showConfirmModal({
@@ -5297,36 +5456,65 @@ const App = {
           });
         });
       },
-      resetApp() {
-        this.closeModal('settingsModal');
-        const existing = document.getElementById('resetAppModal');
+      /** Export full account data: user info, app data, theme. For backup or portability. */
+      async exportAllData() {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        const theme = typeof localStorage !== 'undefined' ? localStorage.getItem('theme') : null;
+        const payload = {
+          version: this.data.version,
+          exportedAt: new Date().toISOString(),
+          user: user ? { id: user.id, email: user.email, user_metadata: user.user_metadata } : null,
+          theme: theme || undefined,
+          appData: {
+            categories: this.data.categories,
+            entityTypes: this.data.entityTypes,
+            entities: this.data.entities,
+            settings: this.data.settings
+          }
+        };
+        const data = JSON.stringify(payload, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `elistly-full-export-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        this.showSnackbar('Export downloaded.');
+      },
+
+      /** Reset data modal: type RESET to clear all app data (categories, entities, settings). */
+      showResetDataModal() {
+        this.closeModal('profileModal');
+        const existing = document.getElementById('resetDataModal');
         if (existing) existing.remove();
         const modalHtml = `
-          <div class="modal" id="resetAppModal" data-persistent>
+          <div class="modal" id="resetDataModal" data-persistent>
             <div class="modal-content" style="max-width: 440px;">
-              <button class="modal-close" onclick="document.getElementById('resetAppModal').remove()">
+              <button class="modal-close" onclick="document.getElementById('resetDataModal').remove()">
                 <span class="material-icons">close</span>
               </button>
               <div class="modal-header">
-                <h3>Reset app</h3>
+                <h3>Reset data</h3>
               </div>
               <div class="modal-body">
-                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete all your data</strong>—categories, entity types, entities, and settings—from this device and from your account in the database. This cannot be undone.</p>
-                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>DELETE</strong> below.</p>
-                <input type="text" id="resetAppConfirmInput" class="reset-confirm-input" placeholder="Type DELETE to confirm" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
+                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete all your app data</strong>—categories, entity types, entities, and settings—from this device and from your account in the database. Your account will remain. This cannot be undone.</p>
+                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>RESET</strong> below.</p>
+                <input type="text" id="resetDataConfirmInput" class="reset-confirm-input" placeholder="Type RESET to reset your data" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
               </div>
               <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" onclick="document.getElementById('resetAppModal').remove()">Cancel</button>
-                <button type="button" class="btn btn-danger" id="resetAppConfirmBtn" disabled>Reset app</button>
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('resetDataModal').remove()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="resetDataConfirmBtn" disabled>Reset data</button>
               </div>
             </div>
           </div>`;
         const div = document.createElement('div');
         div.innerHTML = modalHtml.trim();
         document.body.appendChild(div.firstElementChild);
-        const modal = document.getElementById('resetAppModal');
-        const input = document.getElementById('resetAppConfirmInput');
-        const btn = document.getElementById('resetAppConfirmBtn');
+        const input = document.getElementById('resetDataConfirmInput');
+        const btn = document.getElementById('resetDataConfirmBtn');
         const doReset = async () => {
           if (supabaseClient) {
             const { data: { user } } = await supabaseClient.auth.getUser();
@@ -5339,14 +5527,91 @@ const App = {
           location.reload();
         };
         input.addEventListener('input', () => {
+          btn.disabled = input.value.trim() !== 'RESET';
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && input.value.trim() === 'RESET') doReset();
+        });
+        btn.addEventListener('click', doReset);
+        this.showModal('resetDataModal');
+        setTimeout(() => input.focus(), 100);
+      },
+
+      /** Delete account modal: type DELETE to confirm; calls API to remove account and all data. */
+      showDeleteAccountModal() {
+        const apiUrl = typeof window !== 'undefined' && window.ELISTLY_CONFIG && window.ELISTLY_CONFIG.apiUrl;
+        if (!apiUrl || !apiUrl.trim()) {
+          this.showSnackbar('Delete account is not configured. Set the API URL (apiUrl) in config.', true);
+          return;
+        }
+        this.closeModal('profileModal');
+        const existing = document.getElementById('deleteAccountModal');
+        if (existing) existing.remove();
+        const modalHtml = `
+          <div class="modal" id="deleteAccountModal" data-persistent>
+            <div class="modal-content" style="max-width: 440px;">
+              <button class="modal-close" onclick="document.getElementById('deleteAccountModal').remove()">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Delete account</h3>
+              </div>
+              <div class="modal-body">
+                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete your account</strong> and all your data. You will not be able to sign in again. This cannot be undone.</p>
+                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>DELETE</strong> below.</p>
+                <input type="text" id="deleteAccountConfirmInput" class="reset-confirm-input" placeholder="Type DELETE to confirm" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('deleteAccountModal').remove()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="deleteAccountConfirmBtn" disabled>Delete account</button>
+              </div>
+            </div>
+          </div>`;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml.trim();
+        document.body.appendChild(div.firstElementChild);
+        const input = document.getElementById('deleteAccountConfirmInput');
+        const btn = document.getElementById('deleteAccountConfirmBtn');
+        const doDelete = async () => {
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          const token = session && session.access_token;
+          if (!token) {
+            this.showSnackbar('Session expired. Please sign in again.', true);
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const base = apiUrl.replace(/\/$/, '');
+            const res = await fetch(`${base}/users/me`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              this.showSnackbar(body.error || 'Failed to delete account', true);
+              btn.disabled = false;
+              return;
+            }
+            await supabaseClient.auth.signOut();
+            window.location.href = window.location.origin + (window.location.pathname || '/');
+          } catch (e) {
+            this.showSnackbar(e.message || 'Request failed', true);
+            btn.disabled = false;
+          }
+        };
+        input.addEventListener('input', () => {
           btn.disabled = input.value.trim() !== 'DELETE';
         });
         input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && input.value.trim() === 'DELETE') doReset();
+          if (e.key === 'Enter' && input.value.trim() === 'DELETE') doDelete();
         });
-        btn.addEventListener('click', doReset);
-        this.showModal('resetAppModal');
+        btn.addEventListener('click', doDelete);
+        this.showModal('deleteAccountModal');
         setTimeout(() => input.focus(), 100);
+      },
+
+      resetApp() {
+        this.showResetDataModal();
       },
 
       showAddPresetModal() {

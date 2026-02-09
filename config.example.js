@@ -8,6 +8,7 @@
   'use strict';
   window.ELISTLY_CONFIG = {
     supabaseUrl: 'https://your-project.supabase.co',
-    supabaseAnonKey: 'your-anon-public-key'
+    supabaseAnonKey: 'your-anon-public-key',
+    apiUrl: '' // optional: Worker URL for delete account and admin (e.g. https://elistly-api.xxx.workers.dev)
   };
 })();

@@ -1,8 +1,8 @@
 # Deploy Elistly to Cloudflare
 
-You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** for the API (right now just a health check; admin routes can be added later). Both can be connected to the same GitHub repo so one push deploys both.
+You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** for the API (health, delete-account, admin list/delete users). Both can be connected to the same GitHub repo so one push deploys both.
 
-**Admin note:** No admin features are implemented yet. The Worker only exposes a `/health` endpoint. The frontend talks to Supabase directly from the browser. The Worker is there so you can add admin or server-side routes (e.g. delete user, reports) later without changing where the app is hosted.
+**Admin:** The Worker exposes `/admin/me`, `/admin/users`, `DELETE /admin/users/:id`, and `DELETE /users/me`. To add yourself as admin: in Supabase run `insert into public.admin_users (user_id) values ('your-auth-user-uuid');` (get your UUID from Supabase → Authentication → Users). Then the Admin link appears in the profile dropdown and you can list/delete accounts. The frontend still talks to Supabase directly for normal app data; the Worker is used only for delete-account and admin.
 
 ---
 
@@ -22,9 +22,10 @@ You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** 
    - **Framework preset:** None.
    - **Build command:** `node scripts/write-config.js`
    - **Build output directory:** `/`
-4. **Environment variables** (Settings → Environment variables): add these for **Production** (and optionally Preview):
+4. **Environment variables** (Settings → Environment variables): add for **Production** (and optionally Preview):
    - `SUPABASE_URL` = your Supabase project URL (e.g. `https://xxxx.supabase.co`)
    - `SUPABASE_ANON_KEY` = your Supabase anon public key (long JWT)
+   - `ELISTLY_API_URL` = your Worker URL (e.g. `https://elistly-api.xxxx.workers.dev`) — optional; needed for Delete account and Admin.
 5. Save and deploy. The build runs `write-config.js`, which creates `config.js` from those env vars so the app can connect to Supabase. No secrets are stored in the repo.
 6. After the first deploy you get a URL like `https://your-project.pages.dev`. Open it; you should see the Elistly sign-in screen.
 
@@ -42,19 +43,20 @@ You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** 
    - **Deploy command:** `npx wrangler deploy`
 4. **Variables and Secrets:** In the Worker’s **Settings** → **Variables and Secrets**, add:
    - `SUPABASE_URL` = your Supabase project URL
+   - `SUPABASE_ANON_KEY` = your Supabase anon public key (used to verify user JWTs for `/admin/me` and delete-account)
    - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase service role key (from Supabase → Project Settings → API; **never** put this in the repo or in the frontend)
 5. Save and deploy (or push a commit so the Worker rebuilds from `worker/`).
 
-The Worker currently only responds to `GET /` and `GET /health` with `{ "ok": true, "service": "elistly-api" }`. You can add admin routes later in `worker/src/index.js` and use `env.SUPABASE_URL` and `env.SUPABASE_SERVICE_ROLE_KEY` there.
+The Worker implements: `GET /` and `GET /health`; `GET /admin/me` (returns `{ admin: true/false }`); `GET /admin/users` (list users, admin only); `DELETE /admin/users/:id` (delete user, admin only); `DELETE /users/me` (delete own account).
 
 ---
 
-## 4. Optional: point the app at the Worker
+## 4. Point the app at the Worker (for Delete account and Admin)
 
-The Elistly frontend does **not** call the Worker today; it talks to Supabase from the browser. When you add admin or other API features that the frontend should call:
+For **Delete account** (Profile) and **Admin** (profile dropdown → Admin), the frontend must know the Worker URL:
 
-1. In **Pages** → your project → **Settings** → **Environment variables**, add e.g. `API_URL` = `https://elistly-api.xxxx.workers.dev`.
-2. In your build or frontend code, use that env var as the base URL for API requests (e.g. `fetch(API_URL + '/admin/...')`). For build-time injection you’d need to expose it in `write-config.js` (e.g. `window.ELISTLY_CONFIG.apiUrl`) if the app needs it at runtime.
+1. In **Pages** → your project → **Settings** → **Environment variables**, add `ELISTLY_API_URL` = `https://elistly-api.xxxx.workers.dev` (your Worker URL).
+2. The build script `write-config.js` writes this into `config.js` as `window.ELISTLY_CONFIG.apiUrl`. If `ELISTLY_API_URL` is not set, the app still works but Delete account and Admin will be unavailable or show a message that the API is not configured.
 
 ---
 

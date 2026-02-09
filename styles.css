@@ -2756,3 +2756,36 @@ select option:hover {
   display: inline-block;
   flex-shrink: 0;
 }
+
+/* Admin page – accounts table */
+.admin-users-table-wrap {
+  overflow-x: auto;
+}
+.admin-users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-base);
+}
+.admin-users-table th,
+.admin-users-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+.admin-users-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.admin-user-id {
+  font-size: 0.85em;
+  background: var(--input-bg);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius);
+}
+.profile-data-actions {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.profile-section-data .profile-help {
+  margin-bottom: 0.75rem;
+}
