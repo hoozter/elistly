@@ -224,7 +224,16 @@ const App = {
             try {
               const base = apiUrl.replace(/\/$/, '');
               const r = await fetch(`${base}/admin/me`, { headers: { Authorization: `Bearer ${session.access_token}` } });
-              const b = await r.json();
+              const text = await r.text();
+              let b = {};
+              try {
+                b = text ? JSON.parse(text) : {};
+              } catch (_) {
+                if (typeof console !== 'undefined' && console.warn) {
+                  console.warn('Elistly: /admin/me response was not JSON (got HTML or empty). Check Worker URL and that the Worker is deployed. Response starts with:', text.slice(0, 80));
+                }
+                return;
+              }
               this.data.isAdmin = !!b.admin;
               if (!this.data.isAdmin && typeof console !== 'undefined' && console.warn) {
                 console.warn('Elistly: /admin/me returned admin: false or error.', r.status, b);
