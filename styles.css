@@ -453,7 +453,7 @@ h3 {
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  padding: 1rem 1rem 3.5rem 1rem;
+  padding: 1rem;
   margin-bottom: var(--gap);
   box-shadow: 0 2px 4px var(--shadow-color);
   transition: box-shadow 0.3s;

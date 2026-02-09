@@ -12,6 +12,7 @@
       devices: { id: 'devices', label: 'Devices', icon: 'devices', visibleInDashboard: true },
       networks: { id: 'networks', label: 'Networks', icon: 'router', visibleInDashboard: true },
       people: { id: 'people', label: 'People', icon: 'group', visibleInDashboard: true },
+      teams: { id: 'teams', label: 'Teams', icon: 'group', visibleInDashboard: true },
       locations: { id: 'locations', label: 'Locations', icon: 'business', visibleInDashboard: true }
     },
     entityTypes: {
@@ -84,9 +85,9 @@
           { name: 'workTitle', label: 'Work Title', type: 'text', required: false, visibleInCard: true, partOfName: false },
           { name: 'notes', label: 'Notes', type: 'textarea', required: false, visibleInCard: false, partOfName: false }
         ],
-        associations: [{ name: 'memberOf', label: 'Member Of', type: 'association', association: { kind: 'belongs_to', targetType: 'group' } }, { name: 'locatedAt', label: 'Located At', type: 'association', association: { kind: 'belongs_to', targetType: 'building' } }]
+        associations: [{ name: 'memberOf', label: 'Member Of', type: 'association', association: { kind: 'belongs_to', targetType: 'team' } }, { name: 'locatedAt', label: 'Located At', type: 'association', association: { kind: 'belongs_to', targetType: 'building' } }]
       },
-      group: { id: 'group', label: 'Group', category: 'people', icon: 'group', enableNameGen: false, nameGen: { prefix: '', partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] }, fields: [{ name: 'groupName', label: 'Group Name', type: 'text', required: true, visibleInCard: false, partOfName: false, useAsTitle: true }], associations: [] },
+      team: { id: 'team', label: 'Team', category: 'teams', icon: 'group', enableNameGen: false, nameGen: { prefix: '', partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] }, fields: [{ name: 'name', label: 'Team Name', type: 'text', required: true, visibleInCard: false, partOfName: false, useAsTitle: true }], associations: [] },
       building: { id: 'building', label: 'Building', category: 'locations', icon: 'business', enableNameGen: false, nameGen: { prefix: '', partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] }, fields: [{ name: 'name', label: 'Name', type: 'text', required: true, visibleInCard: false, partOfName: false, useAsTitle: true }, { name: 'address', label: 'Address', type: 'text', required: true, visibleInCard: true, partOfName: false }, { name: 'phone', label: 'Phone Number', type: 'text', required: false, visibleInCard: true, partOfName: false }, { name: 'notes', label: 'Notes', type: 'textarea', required: false, visibleInCard: false, partOfName: false }], associations: [] }
     },
     entities: {
@@ -94,7 +95,7 @@
       phone1: { id: 'phone1', type: 'phone', model: 'Galaxy S21' },
       netdev1: { id: 'netdev1', type: 'networkDevice', deviceType: 'router' },
       person1: { id: 'person1', type: 'person', firstName: 'John', lastName: 'Doe' },
-      group1: { id: 'group1', type: 'group', groupName: 'Admins', name: 'Admins' },
+      team1: { id: 'team1', type: 'team', name: 'Admins' },
       building1: { id: 'building1', type: 'building', name: 'Main Office', address: '123 Main St', phone: '555-1234', notes: 'Main office' }
     }
   };
