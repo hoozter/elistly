@@ -2,11 +2,11 @@
 
 **Modular inventory. Endlessly flexible.**
 
-Track anything—books, devices, people, locations—in one place. Define your own categories and fields, then add and edit items. **Elistly requires an account:** you sign in and your data is stored in the database. The app is designed to work offline (e.g. as an installable web app on Android) and sync when back online.
+Elistly is a modular inventory app for tracking things: devices, books, people, locations, and the like. You define categories and entity types with custom fields, then add and edit items. It started as an IT inventory tool and grew into a flexible system that can model different kinds of “things.” **It requires an account:** you sign in and your data is stored in the database. The app is designed to work offline (e.g. as an installable web app on Android) and sync when back online.
 
-## What problem it solves
+## What it’s for
 
-You need a simple way to keep lists of things (inventory, contacts, assets, loans) without a heavy app or database. Elistly lets you shape the data yourself: categories, custom fields, and how items appear. Sign in once and your data is in the database; use it anywhere, including offline, and it syncs when you’re back online.
+You need a simple way to keep lists of tangible stuff—inventory, assets, contacts, equipment—without a heavy app or database. Elistly lets you shape the data yourself: categories, custom fields, and how items appear on the dashboard. Good fits include IT inventory, books and media, people or teams, properties or locations, or anything else you want to track as a list with your own structure. Sign in once and your data is in the database; use it anywhere, including offline, and it syncs when you’re back online.
 
 ## Key features
 
@@ -50,4 +50,4 @@ For a complete reference—concepts, all features, deployment, and project struc
 
 ## License
 
-See the repository for license information.
+Copyright and use terms are in **[LICENSE](LICENSE)**. Free to use in its current form; you may not redistribute or sell the software or derivative works. Subscription tiers (free, pro, team, business, enterprise) may be introduced later.
