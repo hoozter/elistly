@@ -235,8 +235,8 @@ const App = {
                 return;
               }
               this.data.isAdmin = !!b.admin;
-              if (!this.data.isAdmin && typeof console !== 'undefined' && console.warn) {
-                console.warn('Elistly: /admin/me returned admin: false or error.', r.status, b);
+              if (r.status !== 200 && typeof console !== 'undefined' && console.warn) {
+                console.warn('Elistly: /admin/me returned non-200.', r.status, b);
               }
             } catch (e) {
               if (typeof console !== 'undefined' && console.warn) {
@@ -478,10 +478,10 @@ const App = {
       <h2 class="auth-modal-title">Create account</h2>
       <p class="auth-modal-tagline">Modular inventory. Endlessly flexible.</p>
     </div>
-    <form id="authSignUpForm" class="auth-form" onsubmit="event.preventDefault(); App.handleSignUp(document.getElementById('authSignUpUsername').value, document.getElementById('authSignUpEmail').value, document.getElementById('authSignUpPassword').value, document.getElementById('authSignUpConfirm').value);">
+    <form id="authSignUpForm" class="auth-form" onsubmit="event.preventDefault(); App.handleSignUp(document.getElementById('authSignUpDisplayName').value, document.getElementById('authSignUpEmail').value, document.getElementById('authSignUpPassword').value, document.getElementById('authSignUpConfirm').value);">
       <div class="form-group">
-        <label for="authSignUpUsername">Username</label>
-        <input type="text" id="authSignUpUsername" class="auth-input" required placeholder="Your name" autocomplete="username">
+        <label for="authSignUpDisplayName">Display name</label>
+        <input type="text" id="authSignUpDisplayName" class="auth-input" required placeholder="Your name (shown in the app)" autocomplete="name">
       </div>
       <div class="form-group">
         <label for="authSignUpEmail">Email</label>
@@ -612,7 +612,7 @@ const App = {
         const { data, error } = await supabaseClient.auth.signUp({
           email,
           password,
-          options: { data: { username: username || email.split('@')[0] } }
+          options: { data: { user_name: (username && username.trim()) || email.split('@')[0] } }
         });
         if (btn) { btn.disabled = false; btn.textContent = 'Create account'; }
         if (error) {
@@ -657,7 +657,8 @@ const App = {
         const btn = document.getElementById('profileBtn');
         if (!wrap || !menu || !btn) return;
         wrap.style.display = '';
-        var displayName = (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
+        var rawDisplay = (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
+        var displayName = (rawDisplay || '').replace(/</g, '&lt;').replace(/"/g, '&quot;') || 'Signed in';
         const adminLink = this.data.isAdmin ? `
             <a href="#" id="profileAdminLink"><span class="material-icons">admin_panel_settings</span>Admin</a>
           ` : '';
@@ -2609,21 +2610,23 @@ const App = {
 
       async saveProfile() {
         const userName = (document.getElementById('profileUserName') && document.getElementById('profileUserName').value) || '';
+        const trimmedName = userName.trim();
         const { data: { user } } = await supabaseClient.auth.getUser();
-        const meta = { ...(user.user_metadata || {}), user_name: userName };
-        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: meta } });
+        const meta = { ...(user.user_metadata || {}), user_name: trimmedName };
+        const { data: updateData, error } = await supabaseClient.auth.updateUser({ data: { user_metadata: meta } });
         if (error) {
           this.showSnackbar(error.message || 'Failed to save profile', true);
           return;
         }
+        await supabaseClient.auth.refreshSession();
         this.showSnackbar('Profile saved.');
         this.closeModal('profileModal');
-        const { data: { user: u } } = await supabaseClient.auth.getUser();
+        const u = updateData && updateData.user ? updateData.user : (await supabaseClient.auth.getUser()).data.user;
         const menu = document.getElementById('profileMenu');
         const userLine = menu && menu.querySelector('.profile-dropdown-user');
         if (userLine && u) {
           const display = (u.user_metadata && u.user_metadata.user_name) || u.email || 'Signed in';
-          userLine.innerHTML = '<span class="material-icons">person</span>' + display;
+          userLine.innerHTML = '<span class="material-icons">person</span>' + (display || '').replace(/</g, '&lt;');
         }
       },
 
