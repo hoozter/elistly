@@ -49,7 +49,7 @@ Secrets (API keys, etc.) are **not** in the repo. They are set in the **Worker�
 
 - **Workers & Pages** → **Create** → **Pages** → **Connect to Git** → select the repo and branch.
 - **Build:** set **Build command** (e.g. `node scripts/write-config.js` or `npm run build`) and **Build output directory** (e.g. `/` or `dist`).
-- **Environment variables:** add any vars the *site* needs at build or runtime (e.g. `SUPABASE_URL`, `DELETE_ACCOUNT_URL`). The Worker URL can be added here after the Worker is created.
+- **Environment variables:** add any vars the *site* needs at build or runtime (e.g. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `ELISTLY_API_URL` for the Worker URL). See `CLOUDFLARE_DEPLOY.md` for this project’s exact names.
 
 ### 3. Cloudflare Worker (API)
 
@@ -64,7 +64,7 @@ Secrets (API keys, etc.) are **not** in the repo. They are set in the **Worker�
 
 ### 4. Tie them together
 
-- In the **Pages** project, add an env var (e.g. `DELETE_ACCOUNT_URL` or `API_URL`) whose value is the Worker URL (e.g. `https://your-worker.xxxx.workers.dev` or `https://your-worker.xxxx.workers.dev/some-path`). The static site uses this to call the Worker.
+- In the **Pages** project, add env var **`ELISTLY_API_URL`** with value the Worker URL (e.g. `https://elistly-api.xxxx.workers.dev`). The build script writes it into `config.js`; the app uses it for Admin and Delete account.
 - Redeploy Pages (or push) so the site gets that env var.
 
 ---

@@ -42,7 +42,8 @@ function corsHeaders(origin) {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': o,
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Cache-Control': 'no-store, no-cache'
   };
 }
 
@@ -66,6 +67,11 @@ export default {
 
       if (path === '/health' || path === '/') {
         return jsonResponse({ ok: true, service: 'elistly-api' }, 200, origin);
+      }
+
+      if (path === '/debug-env') {
+        const keys = typeof env === 'object' && env !== null ? Object.keys(env) : [];
+        return jsonResponse({ envKeys: keys, hasSupabaseUrl: !!env.SUPABASE_URL }, 200, origin);
       }
 
       const authHeader = req.headers.get('Authorization');
