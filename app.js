@@ -5618,14 +5618,25 @@ const App = {
               <div class="legal-modal-body">
                 <section class="legal-section">
                   <h4>Disclaimer</h4>
-                  <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. The author and hoozter do not guarantee availability, correctness, or fitness for any purpose.</p>
+                  <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. We do not guarantee availability, correctness, or fitness for any purpose.</p>
                   <p>You use the service and store data at your own risk. We are not responsible for any data you store, any loss of data, or how you use the application. Do not rely on it as the only copy of important information.</p>
                 </section>
                 <section class="legal-section">
                   <h4>Data &amp; privacy</h4>
-                  <p><strong>What we store:</strong> When you use an account (e.g. via Supabase), we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure you or your host configure (e.g. Supabase).</p>
-                  <p><strong>Why:</strong> To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
-                  <p><strong>Your rights:</strong> You can <strong>export</strong> your data (Settings → Data → Export, or Profile → Export all data) and <strong>delete your account</strong> (Profile → Delete account), which removes your account and associated data. If you use a third-party auth or database provider, their terms also apply.</p>
+                  <p><strong>What we store</strong></p>
+                  <p>When you use an account (e.g. via Supabase), we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app (e.g. Supabase).</p>
+                  <p><strong>Why</strong></p>
+                  <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
+                  <p><strong>Your rights</strong></p>
+                  <ul class="legal-list">
+                    <li><strong>Export</strong> your data: Settings → Data → Export, or Profile → Export all data.</li>
+                    <li><strong>Delete your account</strong>: Profile → Delete account. This removes your account and associated data.</li>
+                  </ul>
+                  <p>If you use a third-party auth or database provider, their terms also apply.</p>
+                </section>
+                <section class="legal-section">
+                  <h4>Source code</h4>
+                  <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
                 </section>
               </div>
               <div class="modal-actions">

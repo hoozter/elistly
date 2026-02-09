@@ -416,22 +416,160 @@ aside a.active {
   border-top: 1px solid var(--border-color);
 }
 .app-footer-copy a,
-.app-footer-legal {
+.app-footer-legal,
+.app-footer-link {
   color: var(--accent-color);
   text-decoration: none;
 }
 .app-footer-copy a:hover,
-.app-footer-legal:hover {
+.app-footer-legal:hover,
+.app-footer-link:hover {
   text-decoration: underline;
 }
 
 .legal-modal-content { max-width: 560px; }
-.legal-modal-body { padding: 0 0 1rem; }
-.legal-section { margin-bottom: 1.25rem; }
+.legal-modal-body { padding: 1.25rem 1.5rem 1rem; }
+.legal-section { margin-bottom: 1.5rem; }
 .legal-section:last-child { margin-bottom: 0; }
-.legal-section h4 { font-size: 1rem; margin: 0 0 0.5rem; color: var(--text-primary); }
-.legal-section p { margin: 0 0 0.5rem; font-size: 0.95rem; line-height: 1.5; color: var(--text-secondary); }
+.legal-section h4 { font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem; color: var(--text-primary); }
+.legal-section p { margin: 0 0 0.75rem; font-size: 0.95rem; line-height: 1.55; color: var(--text-secondary); }
 .legal-section p:last-child { margin-bottom: 0; }
+.legal-list { margin: 0 0 0.75rem; padding-left: 1.25rem; font-size: 0.95rem; line-height: 1.55; color: var(--text-secondary); }
+.legal-list li { margin-bottom: 0.35rem; }
+.legal-list li:last-child { margin-bottom: 0; }
+.legal-section a { color: var(--accent-color); text-decoration: none; }
+.legal-section a:hover { text-decoration: underline; }
+
+/* Footer link with icon (e.g. GitHub) */
+.app-footer-github { display: inline-flex; align-items: center; gap: 0.35rem; }
+.app-footer-github svg { width: 18px; height: 18px; fill: currentColor; flex-shrink: 0; }
+
+/* Landing page – hero, headline, CTA, screenshot */
+body.landing-page {
+  overflow: auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+.landing-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 3rem var(--gap) 3rem;
+  width: 100%;
+  text-align: center;
+}
+.landing-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.landing-hero {
+  margin-bottom: 2rem;
+}
+.landing-logo {
+  height: 64px;
+  width: auto;
+  display: block;
+  margin: 0 auto 0.625rem;
+}
+.landing-tagline {
+  font-size: 1.0625rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+.landing-headline {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 1rem;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  max-width: 22ch;
+}
+.landing-desc {
+  color: var(--text-secondary);
+  margin: 0 0 1.75rem;
+  line-height: 1.55;
+  font-size: 1.0625rem;
+  max-width: 42ch;
+}
+.landing-actions {
+  margin: 0 0 3.5rem;
+}
+.landing-actions .btn {
+  text-decoration: none;
+  min-width: 180px;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 500;
+  border-radius: 10px;
+  background: var(--accent-color);
+  color: var(--button-primary-text);
+}
+.landing-actions .btn:hover {
+  text-decoration: none;
+  opacity: 0.92;
+}
+.landing-screenshot {
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  box-shadow: 0 8px 40px var(--shadow-color), 0 0 0 1px var(--border-color);
+  border: 1px solid var(--border-color);
+}
+.landing-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.landing-screenshot-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 280px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+.landing-screenshot-placeholder .material-icons {
+  font-size: 56px;
+  opacity: 0.5;
+}
+.landing-page .app-footer.landing-footer,
+.landing-page .landing-footer {
+  margin-top: auto;
+  padding: 1.5rem var(--gap);
+  justify-content: center;
+  border-top: none;
+  background: transparent;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.landing-page .landing-footer a {
+  text-decoration: none;
+  color: var(--accent-color);
+}
+.landing-page .landing-footer a:hover {
+  text-decoration: none;
+  opacity: 0.9;
+}
+
+@media (max-width: 560px) {
+  .landing-container { padding: 2rem var(--gap) 2.5rem; }
+  .landing-logo { height: 52px; margin-bottom: 0.5rem; }
+  .landing-headline { font-size: 1.75rem; max-width: none; }
+  .landing-actions { margin-bottom: 2.5rem; }
+  .landing-screenshot { border-radius: 12px; }
+}
 
 /* Dashboard views */
 .dashboard-grid {

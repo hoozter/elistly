@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>elistly</title>
+  <title>Elistly – Modular inventory and entity management</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Track what matters—devices, people, books, properties—in one place. Flexible categories, multiple workspaces, export and sync.">
   <script>
   (function() {
     var theme = localStorage.getItem('theme');
@@ -11,130 +12,100 @@
       theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
     document.documentElement.setAttribute('data-theme', theme);
-    var headerColor = localStorage.getItem('headerColor') || '#1a1b1e';
-    var accentColor = localStorage.getItem('accentColor') || '#2a7ebf';
-    document.documentElement.style.setProperty('--header-bg', headerColor);
-    var h = headerColor.replace('#', '');
-    var r = parseInt(h.substr(0, 2), 16), g = parseInt(h.substr(2, 2), 16), b = parseInt(h.substr(4, 2), 16);
-    document.documentElement.style.setProperty('--header-text', (r * 0.299 + g * 0.587 + b * 0.114) > 186 ? '#202124' : '#ffffff');
-    document.documentElement.style.setProperty('--accent-color', accentColor);
-    var ar = parseInt(accentColor.replace('#', '').substr(0, 2), 16), ag = parseInt(accentColor.replace('#', '').substr(2, 2), 16), ab = parseInt(accentColor.replace('#', '').substr(4, 2), 16);
-    document.documentElement.style.setProperty('--accent-color-rgb', ar + ', ' + ag + ', ' + ab);
-    var logoStyle = localStorage.getItem('logoStyle') || 'color';
-    document.documentElement.setAttribute('data-logo-style', logoStyle);
   })();
   </script>
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" href="https://fonts.gstatic.com/s/materialicons/v145/flUhRq6tzZclQEJ-Vdg-IuiaDsNc.woff2" as="font" type="font/woff2" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css?v=14" />
 </head>
-<body>
-  <div class="app-container">
-    <!-- Sidebar overlay (mobile) -->
-    <div id="sidebarOverlay" class="sidebar-overlay" aria-hidden="true"></div>
-
-    <!-- HEADER -->
-    <header>
-      <div class="header-left">
-        <button type="button" class="header-icon-btn sidebar-toggle" id="sidebarToggle" aria-label="Open menu" aria-expanded="false">
-          <span class="material-icons">menu</span>
-        </button>
-        <img id="appLogo" src="img/elistly-logo.svg" alt="elistly" class="app-logo" />
-        <div class="search-container">
-          <input type="text" id="searchInput" placeholder="Search entities..." aria-label="Search entities">
-          <span class="material-icons search-icon">search</span>
-        </div>
-        <button type="button" class="header-icon-btn search-toggle" id="searchToggle" aria-label="Search">
-          <span class="material-icons">search</span>
-        </button>
+<body class="landing-page">
+  <div class="landing-container">
+    <main class="landing-main">
+      <div class="landing-hero">
+        <img id="landingLogo" src="img/elistly-logo.svg" alt="Elistly" class="landing-logo" />
+        <script>
+        (function() {
+          var s = document.documentElement.getAttribute('data-logo-style') || localStorage.getItem('logoStyle') || 'color';
+          var img = document.getElementById('landingLogo');
+          if (img && s !== 'color') img.src = 'img/elistly-logo-' + s + '.svg';
+        })();
+        </script>
+        <p class="landing-tagline">Modular inventory. Endlessly flexible.</p>
       </div>
-      <div class="header-actions">
-        <div class="dropdown" id="profileDropdownWrap" style="display: none;">
-          <button type="button" class="header-icon-btn" id="profileBtn" aria-label="Profile" aria-haspopup="true" aria-expanded="false">
-            <span class="material-icons">person</span>
-          </button>
-          <div class="dropdown-menu" id="profileMenu"></div>
-        </div>
-        <button type="button" class="header-icon-btn" id="settingsBtn" aria-label="Settings" onclick="if(window.App) App.showSettingsModal();">
-          <span class="material-icons">settings</span>
-        </button>
+      <h1 class="landing-headline">Track anything. Structure everything.</h1>
+      <p class="landing-desc">Track IT equipment, tools, books, spaces, or people in a system designed to adapt to your needs.</p>
+      <div class="landing-actions">
+        <a href="app.html" class="btn btn-primary landing-cta">Start using Elistly</a>
       </div>
-    </header>
-    <script>
-    (function() {
-      var s = document.documentElement.getAttribute('data-logo-style') || 'color';
-      var img = document.getElementById('appLogo');
-      if (img && s !== 'color') img.src = 'img/elistly-logo-' + s + '.svg';
-    })();
-    </script>
-    
-    <!-- SIDEBAR -->
-    <aside>
-      <div id="workspaceSwitcherWrap" class="workspace-switcher-wrap"></div>
-      <ul id="categoryList"></ul>
-    </aside>
-    
-    <!-- MAIN CONTENT -->
-    <div class="main-content" id="mainContent">
-      <!-- Dynamic content loads here -->
-    </div>
+      <div class="landing-screenshot">
+        <img src="img/elistly-app.png" alt="Elistly app" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+        <div class="landing-screenshot-placeholder" style="display: none;" aria-hidden="true">
+          <span class="material-icons">dashboard</span>
+          <span>App screenshot</span>
+        </div>
+      </div>
+    </main>
 
-    <!-- FOOTER -->
-    <footer class="app-footer">
+    <footer class="app-footer landing-footer">
       <span class="app-footer-copy">© <span id="copyright-year"></span> <a href="https://hoozter.com" target="_blank" rel="noopener noreferrer">hoozter</a>. Built with care in Sweden.</span>
-      <a href="#" class="app-footer-legal" onclick="if(window.App){App.showLegalModal(); return false;}">Legal &amp; policies</a>
+      <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer" class="app-footer-link app-footer-github"><svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg> Source code</a>
+      <a href="#" class="app-footer-legal" id="landingLegalLink">Legal &amp; policies</a>
     </footer>
     <script>document.getElementById('copyright-year').textContent = new Date().getFullYear();</script>
   </div>
-  
-  <!-- SNACKBAR -->
-  <div id="snackbar" class="snackbar"></div>
-  
-  <!-- ICON PICKER MODAL -->
-  <div id="iconPickerModal" class="modal" style="display:none;">
-    <div class="modal-content">
-      <h3>Select an Icon</h3>
-      <div class="icon-grid" id="iconGrid"></div>
-      <button class="btn" onclick="App.closeIconPicker()">Close</button>
-    </div>
-  </div>
-  
-  <!-- CONFIRMATION MODAL -->
-  <div id="confirmModal" class="modal" style="display:none;" data-persistent>
-    <div class="modal-content">
+
+  <!-- Legal modal (landing) -->
+  <div class="modal" id="landingLegalModal" style="display: none;" aria-hidden="true">
+    <div class="modal-content legal-modal-content">
+      <button type="button" class="modal-close" id="landingLegalClose" aria-label="Close">
+        <span class="material-icons">close</span>
+      </button>
       <div class="modal-header">
-        <h3 id="confirmTitle">Confirm Action</h3>
+        <h3>Legal &amp; policies</h3>
       </div>
-      <div class="modal-body">
-        <p id="confirmMessage"></p>
+      <div class="legal-modal-body">
+        <section class="legal-section">
+          <h4>Disclaimer</h4>
+          <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. We do not guarantee availability, correctness, or fitness for any purpose.</p>
+          <p>You use the service and store data at your own risk. We are not responsible for any data you store, any loss of data, or how you use the application. Do not rely on it as the only copy of important information.</p>
+        </section>
+        <section class="legal-section">
+          <h4>Data &amp; privacy</h4>
+          <p><strong>What we store</strong></p>
+          <p>When you use an account (e.g. via Supabase), we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app (e.g. Supabase).</p>
+          <p><strong>Why</strong></p>
+          <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
+          <p><strong>Your rights</strong></p>
+          <ul class="legal-list">
+            <li><strong>Export</strong> your data: Settings → Data → Export, or Profile → Export all data.</li>
+            <li><strong>Delete your account</strong>: Profile → Delete account. This removes your account and associated data.</li>
+          </ul>
+          <p>If you use a third-party auth or database provider, their terms also apply.</p>
+        </section>
+        <section class="legal-section">
+          <h4>Source code</h4>
+          <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
+        </section>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="App.closeConfirmModal()">Cancel</button>
-        <button class="btn btn-danger" id="confirmButton">Confirm</button>
+        <button type="button" class="btn btn-secondary" id="landingLegalCloseBtn">Close</button>
       </div>
     </div>
   </div>
-  
-  <!-- (The Update Modal is dynamically created when needed) -->
-  
-  <!-- Config: set default so missing config.js does not break the app -->
-  <script>window.ELISTLY_CONFIG = window.ELISTLY_CONFIG || {};</script>
-  <script src="config.js"></script>
-  <!-- Supabase (only required when using config.js with Supabase keys) -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- SortableJS for drag-and-drop -->
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js"></script>
-  <script src="setup-blank.js"></script>
-  <script src="setup-library.js"></script>
-  <script src="setup-it.js"></script>
-  <script src="setup-staff.js"></script>
-  <script src="setup-property.js"></script>
-  <script src="sample-data.js"></script>
-  <script src="faq.js"></script>
-  <script src="app.js?v=14"></script>
+  <script>
+  (function() {
+    var link = document.getElementById('landingLegalLink');
+    var modal = document.getElementById('landingLegalModal');
+    var close1 = document.getElementById('landingLegalClose');
+    var close2 = document.getElementById('landingLegalCloseBtn');
+    function openLegal() { modal.style.display = 'flex'; modal.setAttribute('aria-hidden', 'false'); }
+    function closeLegal() { modal.style.display = 'none'; modal.setAttribute('aria-hidden', 'true'); }
+    if (link) link.addEventListener('click', function(e) { e.preventDefault(); openLegal(); });
+    if (close1) close1.addEventListener('click', closeLegal);
+    if (close2) close2.addEventListener('click', closeLegal);
+  })();
+  </script>
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 </body>
 </html>
