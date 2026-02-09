@@ -6,6 +6,18 @@
   'use strict';
   window.VERSION_CHANGES = [
     {
+      version: '1.11.0',
+      date: '2026-02-09',
+      changes: [
+        'Multiple inventories (workspaces): switch between separate inventories in one account; add inventory opens preset picker (Blank, Library, IT, Staff, Property) with optional sample data',
+        'Categories and entity types work both ways: assign multiple entity types per category (Edit Category) and multiple categories per entity type (Edit Entity Type)',
+        'Add preset from Settings adds structure only (no sample entities); sample data is only loaded when you choose "Yes, load samples" at first setup or when adding a new inventory',
+        'Display name stored in profiles table for reliable persistence across sessions',
+        'Settings Data: current inventory name shown (e.g. "Inventory: Default"); click to rename',
+        'Manage Categories styling and cache-busting for reliable updates after deploy'
+      ]
+    },
+    {
       version: '1.10.0',
       date: '2026-02-08',
       changes: [

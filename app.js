@@ -1,11 +1,11 @@
 /**
  * elistly Application
- * Version 1.10.0
+ * Version 1.11.0
  * A modular system for managing entities, categories, and their relationships
  */
 
 // Global version constant - update this value to trigger update checks
-const CURRENT_VERSION = '1.10.0';
+const CURRENT_VERSION = '1.11.0';
 
 // Load version history on demand (changelog / update modal). Sets window.VERSION_CHANGES.
 function loadVersionHistory() {
