@@ -98,7 +98,7 @@ For List and Gallery only. When on, items are grouped by category. When off (Lis
 
 ### Items per category
 
-How many items to show per category on the dashboard (3, 5, 10, or **Show all**). Does not apply to the single A–Z List view.
+How many items to show per category on the dashboard. One control: a slider (0–100) plus number field. **0 = show all** (default); 1–100 limits how many items per category. Does not apply to the single A–Z List view.
 
 ### Due & overdue
 
@@ -348,9 +348,11 @@ See **`DEPLOY.md`** for a concise checklist.
 
 | Path | Purpose |
 |------|--------|
-| `index.html` | Single-page app shell; header, sidebar, main content, modals. |
+| `index.html` | Landing page: hero, tagline, CTA to app, legal link. |
+| `app.html` | App shell: header, sidebar, main content, modals; loads app.js and setup/sample/faq scripts. |
 | `app.js` | Main application logic: data, UI, auth, export/import, entity types, categories. |
 | `styles.css` | All styles; theme variables, layout, responsive rules. |
+| `img/` | Logo variants (SVG/PNG), app screenshot (`elistly-app.png`) for landing page. |
 | `config.example.js` | Template for config; copy to `config.js` (gitignored) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, optional `ELISTLY_API_URL`. |
 | `config.js` | `window.SUPABASE_URL`, `window.SUPABASE_ANON_KEY`, `window.ELISTLY_API_URL` (gitignored; created at build or by hand). |
 | `setup-blank.js`, `setup-library.js`, etc. | Starter presets; register in `window.ELISTLY_PRESETS`. |

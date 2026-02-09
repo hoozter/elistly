@@ -27,7 +27,7 @@
       items: [
         {
           q: 'What are the dashboard view modes?',
-          a: 'Under Settings → Dashboard Layout you can choose: Category Cards (one card per category with item cards inside), List (rows grouped A–Z by name), or Gallery (card grid; optional “Group by category”). You can also set how many items per category to show (3, 5, 10, or Show all).'
+          a: 'Under Settings → Dashboard Layout you can choose: Category Cards (one card per category with item cards inside), List (rows grouped A–Z by name), or Gallery (card grid; optional “Group by category”). You can also set how many items per category to show: use the slider or number (0 = show all, 1–100 = limit).'
         },
         {
           q: 'What appears on each card?',

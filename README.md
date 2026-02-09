@@ -1,5 +1,9 @@
 # Elistly
 
+<p align="center">
+  <img src="img/elistly-logo.png" alt="Elistly" width="200" />
+</p>
+
 **Modular inventory. Endlessly flexible.**
 
 Elistly is a modular inventory app for tracking things: devices, books, people, locations, and the like. You define categories and entity types with custom fields, then add and edit items. It started as an IT inventory tool and grew into a flexible system that can model different kinds of “things.” **It requires an account:** you sign in and your data is stored in the database. The app is designed to work offline (e.g. as an installable web app on Android) and sync when back online.
@@ -25,7 +29,7 @@ Elistly needs Supabase (your backend and database). Without it, the app shows a 
 2. Copy `config.example.js` to `config.js`.
 3. In [Supabase](https://supabase.com): create a project, run the SQL in `supabase/schema.sql` (SQL Editor).
 4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
-5. Open `index.html` in a browser. You’ll get the sign-in screen; after that, your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. for an installable web app on Android).
+5. Open `index.html` in a browser (landing page), then click **Start using Elistly** to open the app and sign in. After that, your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. for an installable web app on Android).
 
 ## Basic usage
 
@@ -38,7 +42,7 @@ Elistly needs Supabase (your backend and database). Without it, the app shows a 
 
 ## Screenshot
 
-The app shows a dashboard of category cards (or list/gallery), a sidebar for navigation, and a header with search and settings. After choosing a preset you can load sample data to see it in action.
+The app shows a dashboard of category cards (or list/gallery), a sidebar for navigation, and a header with search and settings. A screenshot is included as `img/elistly-app.png` on the landing page. After choosing a preset you can load sample data to see it in action.
 
 ## Full documentation
 
@@ -48,7 +52,7 @@ For a complete reference—concepts, all features, deployment, and project struc
 
 - **Static host** — Upload the repo (after building if you use `scripts/write-config.js` for config). Supabase provides the backend and database.
 - **Supabase** — Run `supabase/schema.sql`; set `config.js` (or inject config in build). See [DOCS.md](DOCS.md) and `DEPLOY.md`.
-- **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps (Pages + Worker, env vars, optional admin). One-repo flow: `CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md`.
+- **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps (Pages + Worker, env vars, one-push flow, optional admin).
 
 ## License
 

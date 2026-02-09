@@ -1,6 +1,6 @@
 # Deploy Elistly to Cloudflare
 
-You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** for the API (health, delete-account, admin list/delete users). Both can be connected to the same GitHub repo so one push deploys both.
+You use **Cloudflare Pages** for the app (frontend) and a **Cloudflare Worker** for the API (health, delete-account, admin list/delete users). Both connect to the **same GitHub repo**: one push deploys both (Pages runs the build, Worker runs `npx wrangler deploy` from the `worker/` directory).
 
 **Admin:** The Worker exposes `/admin/me`, `/admin/users`, `DELETE /admin/users/:id`, and `DELETE /users/me`. To add yourself as admin: in Supabase run `insert into public.admin_users (user_id) values ('your-auth-user-uuid');` (get your UUID from Supabase → Authentication → Users). Then the Admin link appears in the profile dropdown and you can list/delete accounts. The frontend still talks to Supabase directly for normal app data; the Worker is used only for delete-account and admin.
 
@@ -63,4 +63,10 @@ Once both are connected to the same repo:
 
 - **Push to your production branch** → Cloudflare runs the **Pages** build (root of repo, `node scripts/write-config.js`, output `/`) and the **Worker** deploy (root directory `worker`, `npx wrangler deploy`). Both update from the same push.
 
-See **CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md** for the generic pattern and troubleshooting.
+**Summary**
+
+| What | Where |
+|------|--------|
+| Static app | Repo root; Pages builds and serves it. |
+| Worker API | `worker/` (wrangler.toml, src/index.js, package.json); Worker project uses root directory `worker`, deploy command `npx wrangler deploy`. |
+| Secrets | Pages env vars for the site (e.g. SUPABASE_URL, ELISTLY_API_URL); Worker Variables and Secrets for the API (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY). |

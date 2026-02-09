@@ -13,11 +13,10 @@
 
 ## 3. Cloudflare (one push → Pages + Worker)
 
-See **CLOUDFLARE_ONE_PUSH_PAGES_AND_WORKER.md** for the pattern.
+See **CLOUDFLARE_DEPLOY.md** for full steps. Short version:
 
-- **Pages:** Connect the repo. Build command: `node scripts/write-config.js`. Build output directory: `/` (or your static output). Environment variables: `SUPABASE_URL`, `SUPABASE_ANON_KEY` (so the build script can write config.js).
-- **Worker:** Create a Worker, connect the **same** repo. Root directory: `worker`. Deploy command: `npx wrangler deploy`. In Variables and Secrets add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (never in the repo).
-- In Pages, add an env var (e.g. `API_URL`) with the Worker URL if the app will call it later.
+- **Pages:** Connect the repo. Build command: `node scripts/write-config.js`. Build output directory: `/`. Env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, optional `ELISTLY_API_URL` (Worker URL).
+- **Worker:** Create a Worker, connect the **same** repo. Root directory: `worker`. Deploy command: `npx wrangler deploy`. In Variables and Secrets add `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
 
 ## 4. Supabase Edge Functions (optional)
 

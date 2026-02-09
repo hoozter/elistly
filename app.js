@@ -1,11 +1,11 @@
 /**
  * elistly Application
- * Version 1.11.0
+ * Version 1.12.0
  * A modular system for managing entities, categories, and their relationships
  */
 
 // Global version constant - update this value to trigger update checks
-const CURRENT_VERSION = '1.11.0';
+const CURRENT_VERSION = '1.12.0';
 
 // Load version history on demand (changelog / update modal). Sets window.VERSION_CHANGES.
 function loadVersionHistory() {
@@ -1156,10 +1156,25 @@ const App = {
         const edit = document.getElementById('entityEdit');
         const viewActions = document.getElementById('entityViewActions');
         const editActions = document.getElementById('entityEditActions');
+        const titleEl = document.getElementById('entityModalTitle');
+        const form = document.getElementById('entityForm');
         if (view) view.classList.toggle('hidden', show);
         if (edit) edit.classList.toggle('hidden', !show);
         if (viewActions) viewActions.classList.toggle('hidden', show);
         if (editActions) editActions.classList.toggle('hidden', !show);
+        if (titleEl && form) {
+          const typeId = form.getAttribute('data-type-id');
+          const type = this.data.entityTypes[typeId];
+          const entityId = form.getAttribute('data-entity-id');
+          const entity = entityId ? this.data.entities[entityId] : null;
+          const typeLabel = type ? type.label : '';
+          if (show) {
+            titleEl.textContent = typeLabel ? 'Edit ' + typeLabel : 'Edit';
+          } else if (entity && type) {
+            const info = this.getEntityTitleInfo(entity);
+            titleEl.textContent = info.title || typeLabel;
+          }
+        }
       },
       
       showNotification(msg, type='info') {
@@ -1216,7 +1231,7 @@ const App = {
                 <h4>Update Options</h4>
                 <div class="form-group">
                   <label class="checkbox-label">
-                    <input type="checkbox" name="updateCore" checked disabled>
+                    <input type="checkbox" class="elistly-checkbox" name="updateCore" checked disabled>
                     <span>Core System Updates</span>
                     <div class="help-text">Required system improvements and bug fixes</div>
                   </label>
@@ -2069,6 +2084,13 @@ const App = {
         });
       },
 
+      getItemsPerCategoryLimit() {
+        const raw = this.data.settings.dashboard?.itemsPerCategory;
+        if (raw === undefined || raw === null || raw === -1) return -1;
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) && n >= 1 ? Math.min(n, 100) : -1;
+      },
+
       renderDashboard() {
         const mainContent = document.getElementById('mainContent');
         if (!mainContent) return;
@@ -2076,6 +2098,7 @@ const App = {
         const settings = this.data.settings.dashboard || {};
         const viewMode = settings.viewMode || 'categoryCards';
         const groupByCategory = settings.groupByCategory !== false; // Default to true
+        const itemsLimit = this.getItemsPerCategoryLimit();
 
         // Get all entities and sort them (guard against missing name/autoName)
         let allEntities = Object.values(this.data.entities)
@@ -2101,9 +2124,10 @@ const App = {
           if (groupByCategory) {
             let html = '';
             visibleCategories.forEach(category => {
-              const categoryEntities = allEntities.filter(
+              let categoryEntities = allEntities.filter(
                 entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(category.id)
               );
+              if (itemsLimit >= 1) categoryEntities = categoryEntities.slice(0, itemsLimit);
               const emptyState = '<p class="empty-state">No items yet</p>';
               html += `
                 <section class="icon-group">
@@ -2199,9 +2223,9 @@ const App = {
 
         // Render category-based view (Category Cards or grouped List)
         const cardsHtml = visibleCategories.map(category => {
-          // All entities for this category
-          const entities = Object.values(this.data.entities)
+          let entities = Object.values(this.data.entities)
             .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(category.id));
+          if (itemsLimit >= 1) entities = entities.slice(0, itemsLimit);
 
           return `
             <div class="card">
@@ -2496,21 +2520,20 @@ const App = {
                       </div>
                       <div class="form-group group-by-category">
                         <label class="checkbox-label">
-                          <input type="checkbox" 
+                          <input type="checkbox" class="elistly-checkbox" 
                                  name="groupByCategory" 
                                  onchange="App.updateDashboardSettings('groupByCategory', this.checked)"
                                  ${this.data.settings.dashboard?.groupByCategory ? 'checked' : ''}>
                           Group by Category
                         </label>
                       </div>
-                      <div class="form-group">
+                      <div class="form-group items-per-category-settings">
                         <label>Items per Category</label>
-                        <select name="dashboardItemsPerCategory" onchange="App.updateDashboardSettings('itemsPerCategory', this.value)">
-                          <option value="3" ${this.data.settings.dashboard?.itemsPerCategory === 3 ? 'selected' : ''}>3 items</option>
-                          <option value="5" ${this.data.settings.dashboard?.itemsPerCategory === 5 ? 'selected' : ''}>5 items</option>
-                          <option value="10" ${this.data.settings.dashboard?.itemsPerCategory === 10 ? 'selected' : ''}>10 items</option>
-                          <option value="-1" ${this.data.settings.dashboard?.itemsPerCategory === -1 ? 'selected' : ''}>Show all</option>
-                        </select>
+                        <div class="items-per-category-number-row">
+                          <input type="range" name="dashboardItemsPerCategorySlider" min="0" max="100" value="${(() => { const v = this.data.settings.dashboard?.itemsPerCategory; return (v === undefined || v === null || v === -1) ? 0 : Math.min(100, Math.max(1, parseInt(v, 10) || 10)); })()}" oninput="App.syncItemsPerCategoryFromSlider(this.value)">
+                          <input type="number" name="dashboardItemsPerCategoryNumber" min="0" max="100" value="${(() => { const v = this.data.settings.dashboard?.itemsPerCategory; return (v === undefined || v === null || v === -1) ? 0 : Math.min(100, Math.max(1, parseInt(v, 10) || 10)); })()}" onchange="App.syncItemsPerCategoryFromNumber(this)">
+                        </div>
+                        <div class="items-per-category-hint">0 = show all</div>
                       </div>
                     </div>
                   </div>
@@ -3237,22 +3260,24 @@ const App = {
           menu.style.display = 'none';
         });
         
-        // Generate form HTML for actual entity (not entity type)
+        // Generate form HTML for actual entity (not entity type). Info modal shows all fields with a value (ignores visibleInCard; dashboard cards use visibleInCard).
         const titleInfo = isEdit ? this.getEntityTitleInfo(entity) : { title: '' };
         const viewFields = isEdit ? (type.fields || []).map(field => {
           const value = this.formatFieldValue(field, entity[field.name]);
           if (!value) return '';
           const safeLabel = (field.label || '').replace(/</g, '&lt;');
           const safeValue = String(value).replace(/</g, '&lt;');
-          return `<div class="entity-view-row"><div class="entity-view-label">${safeLabel}</div><div class="entity-view-value">${safeValue}</div></div>`;
+          return `<div class="entity-detail-field"><span class="entity-detail-label">${safeLabel}</span> <span class="entity-detail-value">${safeValue}</span></div>`;
         }).filter(Boolean).join('') : '';
         const viewAssocs = isEdit ? (type.associations || []).map(assoc => {
           const name = this.getEntityDisplayName(entity[assoc.name]);
           if (!name) return '';
           const safeLabel = (assoc.label || '').replace(/</g, '&lt;');
           const safeValue = String(name).replace(/</g, '&lt;');
-          return `<div class="entity-view-row"><div class="entity-view-label">${safeLabel}</div><div class="entity-view-value">${safeValue}</div></div>`;
+          return `<div class="entity-detail-field"><span class="entity-detail-label">${safeLabel}</span> <span class="entity-detail-value">${safeValue}</span></div>`;
         }).filter(Boolean).join('') : '';
+        const viewTitle = (isEdit && titleInfo.title) ? titleInfo.title.replace(/</g, '&lt;') : '';
+        const modalHeaderTitle = isEdit ? (viewTitle || type.label) : 'New ' + type.label;
         const modalHtml = `
           <div class="modal" id="entityModal">
             <div class="modal-content">
@@ -3260,14 +3285,19 @@ const App = {
                 <span class="material-icons">close</span>
               </button>
               <div class="modal-header">
-                <h3>${isEdit ? 'Edit' : 'New'} ${type.label}</h3>
+                <h3 id="entityModalTitle">${modalHeaderTitle}</h3>
               </div>
               ${isEdit ? `
-                <div class="modal-body" id="entityView">
-                  <div class="entity-view-title">${titleInfo.title ? titleInfo.title.replace(/</g, '&lt;') : ''}</div>
-                  <div class="entity-view-grid">
-                    ${viewFields}
-                    ${viewAssocs}
+                <div class="modal-body entity-detail-view" id="entityView">
+                  <div class="entity-detail-card">
+                    <div class="entity-detail-head">
+                      <span class="material-icons entity-detail-icon" aria-hidden="true">${type.icon || 'folder'}</span>
+                      <div class="entity-detail-title">${viewTitle}</div>
+                    </div>
+                    <div class="entity-detail-properties">
+                      ${viewFields}
+                      ${viewAssocs}
+                    </div>
                   </div>
                 </div>
               ` : ''}
@@ -3403,7 +3433,7 @@ const App = {
             `;
           case 'checkbox':
             const checked = value === true || value === 'on' || value === '1' || value === 'yes';
-            return `<input type="checkbox" id="${field.name}" name="${field.name}" value="yes" ${checked ? 'checked' : ''}>`;
+            return `<input type="checkbox" class="elistly-checkbox" id="${field.name}" name="${field.name}" value="yes" ${checked ? 'checked' : ''}>`;
           default:
             return `
               <input type="text" id="${field.name}" name="${field.name}" autocomplete="off" value="${value != null ? value : ''}" ${field.required ? 'required' : ''}>
@@ -3450,7 +3480,7 @@ const App = {
           if (f.type === 'textarea') return `<div class="form-group"><label for="${id}">${f.label}</label><textarea id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></textarea></div>`;
           if (f.type === 'date') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="date" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
           if (f.type === 'number') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="number" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
-          if (f.type === 'checkbox') return `<div class="form-group"><label class="checkbox-label"><input type="checkbox" id="${id}" name="${f.name}" value="yes"><span>${f.label}</span></label></div>`;
+          if (f.type === 'checkbox') return `<div class="form-group"><label class="checkbox-label"><input type="checkbox" class="elistly-checkbox" id="${id}" name="${f.name}" value="yes"><span>${f.label}</span></label></div>`;
           if (f.type === 'dropdown' && f.options && f.options.length) return `<div class="form-group"><label for="${id}">${f.label}</label><select id="${id}" name="${f.name}"><option value="">—</option>${f.options.map(o => `<option value="${o.value}">${o.label || o.value}</option>`).join('')}</select></div>`;
           return `<div class="form-group"><label for="${id}">${f.label}</label><input type="text" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
         }).join('');
@@ -3676,7 +3706,7 @@ const App = {
                     ${entityTypes.map(t => {
                       const checked = this.getEntityTypeCategoryIds(t).includes(categoryId);
                       return `<label class="checkbox-label category-entity-type-option">
-                        <input type="checkbox" name="entityType_${t.id}" value="1" ${checked ? 'checked' : ''}>
+                        <input type="checkbox" class="elistly-checkbox" name="entityType_${t.id}" value="1" ${checked ? 'checked' : ''}>
                         <span>${(t.label || t.id).replace(/</g, '&lt;')}</span>
                       </label>`;
                     }).join('')}
@@ -3710,7 +3740,7 @@ const App = {
 
                       <div class="form-group">
                         <label class="checkbox-label">
-                    <input type="checkbox" name="visibleInDashboard" 
+                    <input type="checkbox" class="elistly-checkbox" name="visibleInDashboard" 
                            ${category?.visibleInDashboard !== false ? 'checked' : ''}>
                     <span>Show in Dashboard</span>
                         </label>
@@ -4387,7 +4417,7 @@ const App = {
                               const typeCatIds = this.getEntityTypeCategoryIds(type);
                               const checked = typeCatIds.includes(cat.id);
                               return `<label class="checkbox-label category-entity-type-option">
-                                <input type="checkbox" name="category_${cat.id}" value="1" ${checked ? 'checked' : ''}>
+                                <input type="checkbox" class="elistly-checkbox" name="category_${cat.id}" value="1" ${checked ? 'checked' : ''}>
                                 <span>${(cat.label || cat.id).replace(/</g, '&lt;')}</span>
                               </label>`;
                             }).join('')}
@@ -4405,12 +4435,12 @@ const App = {
                           <div class="name-gen-title">Name/ID generator</div>
                           <div class="name-gen-options">
                             <label class="checkbox-label">
-                              <input type="checkbox" name="enableNameGen" ${type.enableNameGen ? 'checked' : ''}
+                              <input type="checkbox" class="elistly-checkbox" name="enableNameGen" ${type.enableNameGen ? 'checked' : ''}
                                      onchange="App.toggleNameGenSection(this)">
                               <span>Enable</span>
                             </label>
                             <label class="checkbox-label">
-                              <input type="checkbox" name="useAutoNameAsTitle" ${type.useAutoNameAsTitle ? 'checked' : ''} ${type.enableNameGen ? '' : 'disabled'}
+                              <input type="checkbox" class="elistly-checkbox" name="useAutoNameAsTitle" ${type.useAutoNameAsTitle ? 'checked' : ''} ${type.enableNameGen ? '' : 'disabled'}
                                      onchange="App.toggleUseAutoNameAsTitle(this)">
                               <span>Use as title</span>
                             </label>
@@ -4520,19 +4550,19 @@ const App = {
                                 ` : ''}
                                 <div class="checkbox-group" style="display: flex; gap: 1.1em;">
                                   <label class="checkbox-label">
-                                    <input type="checkbox" name="fields[${index}].required" ${field.required ? 'checked' : ''}>
+                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].required" ${field.required ? 'checked' : ''}>
                                     <span>Required</span>
                                   </label>
                                   <label class="checkbox-label">
-                                    <input type="checkbox" name="fields[${index}].visibleInCard" ${field.visibleInCard ? 'checked' : ''}>
+                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" ${field.visibleInCard ? 'checked' : ''}>
                                     <span>Visible in Card</span>
                                   </label>
                                   <label class="checkbox-label">
-                                    <input type="checkbox" name="fields[${index}].useAsTitle" ${field.useAsTitle ? 'checked' : ''} ${type.useAutoNameAsTitle ? 'disabled' : ''}>
+                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].useAsTitle" ${field.useAsTitle ? 'checked' : ''} ${type.useAutoNameAsTitle ? 'disabled' : ''}>
                                     <span>Use as Title</span>
                                   </label>
                                   <label class="checkbox-label">
-                                    <input type="checkbox" name="fields[${index}].partOfName" ${field.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
+                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].partOfName" ${field.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
                                     <span>Part of Name</span>
                                   </label>
                                 </div>
@@ -4679,25 +4709,25 @@ const App = {
             
             <div class="checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" name="fields[${index}].required" 
+                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].required" 
                        ${field.required ? 'checked' : ''}>
                 <span>Required</span>
               </label>
               
               <label class="checkbox-label">
-                <input type="checkbox" name="fields[${index}].visibleInCard" 
+                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" 
                        ${field.visibleInCard ? 'checked' : ''}>
                 <span>Visible in Card</span>
               </label>
 
               <label class="checkbox-label">
-                <input type="checkbox" name="fields[${index}].useAsTitle" 
+                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].useAsTitle" 
                        ${field.useAsTitle ? 'checked' : ''}>
                 <span>Use as Title</span>
               </label>
               
               <label class="checkbox-label">
-                <input type="checkbox" name="fields[${index}].partOfName" 
+                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].partOfName" 
                        ${field.partOfName ? 'checked' : ''} 
                        ${partOfNameDisabled ? 'disabled' : ''}
                        onchange="App.updateNamePreview()">
@@ -5629,7 +5659,7 @@ const App = {
                   <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
                   <p><strong>Your rights</strong></p>
                   <ul class="legal-list">
-                    <li><strong>Export</strong> your data: Settings → Data → Export, or Profile → Export all data.</li>
+                    <li><strong>Export</strong> your data: Profile → Export all data.</li>
                     <li><strong>Delete your account</strong>: Profile → Delete account. This removes your account and associated data.</li>
                   </ul>
                   <p>If you use a third-party auth or database provider, their terms also apply.</p>
@@ -5682,11 +5712,28 @@ const App = {
         }
       },
       
+      syncItemsPerCategoryFromSlider(value) {
+        const raw = parseInt(value, 10);
+        const n = Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 0;
+        const stored = n === 0 ? -1 : n;
+        const numInput = document.querySelector('input[name="dashboardItemsPerCategoryNumber"]');
+        if (numInput) numInput.value = n;
+        this.updateDashboardSettings('itemsPerCategory', stored);
+      },
+      syncItemsPerCategoryFromNumber(inputEl) {
+        const raw = parseInt(inputEl.value, 10);
+        const n = Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 0;
+        const stored = n === 0 ? -1 : n;
+        inputEl.value = n;
+        const slider = document.querySelector('input[name="dashboardItemsPerCategorySlider"]');
+        if (slider) slider.value = n;
+        this.updateDashboardSettings('itemsPerCategory', stored);
+      },
       updateDashboardSettings(setting, value) {
         if (!this.data.settings.dashboard) {
           this.data.settings.dashboard = {};
         }
-        
+        if (setting === 'itemsPerCategory') value = value === -1 ? -1 : Math.min(100, Math.max(1, parseInt(value, 10) || 1));
         this.data.settings.dashboard[setting] = value;
         
         // If changing view mode to categoryCards, force groupByCategory to true
@@ -6018,7 +6065,7 @@ const App = {
                     <h4>Entity Types</h4>
                     <div style="padding-bottom: 8px;">
                       <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllEntityTypes" onclick="App.toggleAllCheckboxes('entity-type-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllEntityTypes" onclick="App.toggleAllCheckboxes('entity-type-checkbox', this.checked)">
                         <span>Select All Entity Types</span>
                       </label>
                     </div>
@@ -6032,7 +6079,7 @@ const App = {
                             <div style="display:flex;align-items:center;gap:0.7em;">
                               <span class="material-icons">${defaultType.icon}</span>
                               <label class="checkbox-label" style="margin-bottom:0;">
-                                <input type="checkbox" name="restoreEntityTypes" value="${typeId}" class="entity-type-checkbox">
+                                <input type="checkbox" class="elistly-checkbox entity-type-checkbox" name="restoreEntityTypes" value="${typeId}">
                                 <span>${defaultType.label}</span>
                               </label>
                               ${isDeleted ? '<span class="modify-badge deleted">Deleted</span>' : isModified ? '<span class="modify-badge">Modified</span>' : '<span class="modify-badge original">Original</span>'}
@@ -6048,7 +6095,7 @@ const App = {
                     <h4>Categories</h4>
                     <div style="padding-bottom: 8px;">
                       <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllCategories" onclick="App.toggleAllCheckboxes('category-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllCategories" onclick="App.toggleAllCheckboxes('category-checkbox', this.checked)">
                         <span>Select All Categories</span>
                       </label>
                     </div>
@@ -6059,7 +6106,7 @@ const App = {
                         const isModified = !userCat || userCat.label !== defaultCat.label || userCat.icon !== defaultCat.icon;
                         return `<div class="restore-item ${isModified ? 'modified' : ''}">
                           <label class="checkbox-label">
-                            <input type="checkbox" name="restoreCategories" value="${catId}" class="category-checkbox">
+                            <input type="checkbox" class="elistly-checkbox category-checkbox" name="restoreCategories" value="${catId}">
                             <span>${defaultCat.label}</span>
                           </label>
                           ${!userCat ? '<span class="modify-badge deleted">Deleted</span>' : isModified ? '<span class="modify-badge">Modified</span>' : '<span class="modify-badge original">Original</span>'}
@@ -6071,7 +6118,7 @@ const App = {
                     <h4>Default Entities</h4>
                     <div style="padding-bottom: 8px;">
                       <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllEntities" onclick="App.toggleAllCheckboxes('entity-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllEntities" onclick="App.toggleAllCheckboxes('entity-checkbox', this.checked)">
                         <span>Select All Example Entities</span>
                       </label>
                     </div>
@@ -6083,7 +6130,7 @@ const App = {
                         const isModified = !userEntity;
                         return `<div class="restore-item ${isModified ? 'modified' : ''}">
                           <label class="checkbox-label">
-                            <input type="checkbox" name="restoreEntities" value="${entityId}" class="entity-checkbox">
+                            <input type="checkbox" class="elistly-checkbox entity-checkbox" name="restoreEntities" value="${entityId}">
                             <span>${defaultEntity.name || defaultEntity.autoName}</span>
                           </label>
                           ${!userEntity ? '<span class="modify-badge deleted">Deleted</span>' : '<span class="modify-badge original">Original</span>'}
@@ -6235,7 +6282,7 @@ const App = {
                   }
                   return `<div class='restore-option-item' style='margin-left:1.5em;'>
                     <label class='checkbox-label'>
-                      <input type='checkbox' name='restoreOption_${typeId}_${field.name}' value='${oIdx}' class='option-checkbox'>
+                      <input type='checkbox' name='restoreOption_${typeId}_${field.name}' value='${oIdx}' class='elistly-checkbox option-checkbox'>
                       <span>${opt.value} (${opt.nameValue})</span>
                     </label>
                     ${optBadge}
@@ -6247,7 +6294,7 @@ const App = {
           return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
             <div style='display:flex;align-items:center;gap:0.7em;'>
               <label class='checkbox-label' style='margin-bottom:0;'>
-                <input type='checkbox' name='restoreField_${typeId}' value='${field.name}' class='field-checkbox'>
+                <input type='checkbox' name='restoreField_${typeId}' value='${field.name}' class='elistly-checkbox field-checkbox'>
                 <span>${field.label}</span>
               </label>
               ${badgeHtml}
@@ -6290,7 +6337,7 @@ const App = {
                     <h4>Entity Types</h4>
                     <div style="padding-bottom: 8px;">
                       <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllExportEntityTypes" onclick="App.toggleAllCheckboxes('export-entity-type-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntityTypes" onclick="App.toggleAllCheckboxes('export-entity-type-checkbox', this.checked)">
                         <span>Select All Entity Types</span>
                       </label>
                     </div>
@@ -6302,7 +6349,7 @@ const App = {
                             <div style="display:flex;align-items:center;gap:0.7em;">
                         <span class="material-icons">${type.icon}</span>
                               <label class="checkbox-label" style="margin-bottom:0;">
-                                <input type="checkbox" name="exportEntityTypes" value="${typeId}" class="export-entity-type-checkbox">
+                                <input type="checkbox" class="elistly-checkbox export-entity-type-checkbox" name="exportEntityTypes" value="${typeId}">
                         <span>${type.label}</span>
                               </label>
                       </div>
@@ -6317,7 +6364,7 @@ const App = {
                     <h4>Categories</h4>
                     <div style="padding-bottom: 8px;">
                       <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllExportCategories" onclick="App.toggleAllCheckboxes('export-category-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportCategories" onclick="App.toggleAllCheckboxes('export-category-checkbox', this.checked)">
                         <span>Select All Categories</span>
                       </label>
               </div>
@@ -6326,7 +6373,7 @@ const App = {
                         const cat = this.data.categories[catId];
                         return `<div class="restore-item">
                           <label class="checkbox-label">
-                            <input type="checkbox" name="exportCategories" value="${catId}" class="export-category-checkbox">
+                            <input type="checkbox" class="elistly-checkbox export-category-checkbox" name="exportCategories" value="${catId}">
                             <span>${cat.label}</span>
                           </label>
                         </div>`;
@@ -6337,7 +6384,7 @@ const App = {
                     <h4>Entities</h4>
                     <div style="padding-bottom: 8px;">
                                   <label class="checkbox-label">
-                        <input type="checkbox" id="selectAllExportEntities" onclick="App.toggleAllCheckboxes('export-entity-checkbox', this.checked)">
+                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntities" onclick="App.toggleAllCheckboxes('export-entity-checkbox', this.checked)">
                         <span>Select All Entities</span>
                                   </label>
                     </div>
@@ -6346,7 +6393,7 @@ const App = {
                         const entity = this.data.entities[entityId];
                         return `<div class="restore-item">
                                   <label class="checkbox-label">
-                            <input type="checkbox" name="exportEntities" value="${entityId}" class="export-entity-checkbox">
+                            <input type="checkbox" class="elistly-checkbox export-entity-checkbox" name="exportEntities" value="${entityId}">
                             <span>${this.getEntityCardTitle(entity)}</span>
                                   </label>
                         </div>`;
@@ -6357,7 +6404,7 @@ const App = {
                     <h4>Settings</h4>
                     <div class="restore-item">
                                   <label class="checkbox-label">
-                        <input type="checkbox" name="exportSettings" value="settings" class="export-settings-checkbox" checked>
+                        <input type="checkbox" class="elistly-checkbox export-settings-checkbox" name="exportSettings" value="settings" checked>
                         <span>Settings</span>
                                   </label>
                     </div>
@@ -6413,7 +6460,7 @@ const App = {
                 ${(field.options || []).map((opt, oIdx) => {
                   return `<div class='restore-option-item' style='margin-left:1.5em;'>
                     <label class='checkbox-label'>
-                      <input type='checkbox' name='exportOption_${typeId}_${field.name}' value='${oIdx}' class='export-option-checkbox' checked>
+                      <input type='checkbox' name='exportOption_${typeId}_${field.name}' value='${oIdx}' class='elistly-checkbox export-option-checkbox' checked>
                       <span>${opt.value} (${opt.nameValue})</span>
                     </label>
                   </div>`;
@@ -6424,7 +6471,7 @@ const App = {
           return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
             <div style='display:flex;align-items:center;gap:0.7em;'>
               <label class='checkbox-label' style='margin-bottom:0;'>
-                <input type='checkbox' name='exportField_${typeId}' value='${field.name}' class='export-field-checkbox' checked>
+                <input type='checkbox' name='exportField_${typeId}' value='${field.name}' class='elistly-checkbox export-field-checkbox' checked>
                 <span>${field.label}</span>
               </label>
             </div>
@@ -6581,7 +6628,7 @@ const App = {
             }
             html += `<div class='restore-item'>
               <label class='checkbox-label'>
-                <input type='checkbox' name='importEntityTypes' value='${typeId}' class='import-entity-type-checkbox' checked>
+                <input type='checkbox' name='importEntityTypes' value='${typeId}' class='elistly-checkbox import-entity-type-checkbox' checked>
                 <span>${type.label}</span>
               </label>
               ${badge}
@@ -6603,7 +6650,7 @@ const App = {
             }
             html += `<div class='restore-item'>
               <label class='checkbox-label'>
-                <input type='checkbox' name='importCategories' value='${catId}' class='import-category-checkbox' checked>
+                <input type='checkbox' name='importCategories' value='${catId}' class='elistly-checkbox import-category-checkbox' checked>
                 <span>${cat.label}</span>
               </label>
               ${badge}
@@ -6625,7 +6672,7 @@ const App = {
             }
             html += `<div class='restore-item'>
               <label class='checkbox-label'>
-                <input type='checkbox' name='importEntities' value='${entityId}' class='import-entity-checkbox' checked>
+                <input type='checkbox' name='importEntities' value='${entityId}' class='elistly-checkbox import-entity-checkbox' checked>
                 <span>${this.getEntityCardTitle(entity)}</span>
               </label>
               ${badge}
@@ -6645,7 +6692,7 @@ const App = {
           }
           html += `<div class='restore-defaults-section'><h4>Settings</h4><div class='restore-item'>
             <label class='checkbox-label'>
-              <input type='checkbox' name='importSettings' value='settings' class='import-settings-checkbox' checked>
+              <input type='checkbox' name='importSettings' value='settings' class='elistly-checkbox import-settings-checkbox' checked>
               <span>Settings</span>
             </label>
             ${badge}

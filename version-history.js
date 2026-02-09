@@ -6,6 +6,17 @@
   'use strict';
   window.VERSION_CHANGES = [
     {
+      version: '1.12.0',
+      date: '2026-02-09',
+      changes: [
+        'Items per category: single control (slider 0–100 + number); 0 = show all (default), 1–100 = limit; limit now applied in dashboard for category cards, list, and gallery',
+        'Checkboxes: theme styling with input-bg, custom checkmark when checked; all checkboxes use elistly-checkbox class',
+        'Entity info modal: secondary background, detail spacing, and focus ring on close button',
+        'Settings slider (items per category): track uses input-bg and accent-colored thumb',
+        'Docs and cleanup: README logo and quick-install flow; DOCS project structure (index/app/img); deployment docs merged into one Cloudflare file (CLOUDFLARE_DEPLOY.md); refresh.html styles moved to styles.css'
+      ]
+    },
+    {
       version: '1.11.0',
       date: '2026-02-09',
       changes: [
