@@ -1,0 +1,5 @@
+# Elistly API Worker – deploy from Cloudflare with root directory = worker
+# Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Workers → Settings → Variables and Secrets
+name = "elistly-api"
+main = "src/index.js"
+compatibility_date = "2024-01-01"

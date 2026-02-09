@@ -1,0 +1,6109 @@
+/**
+ * elistly Application
+ * Version 1.10.0
+ * A modular system for managing entities, categories, and their relationships
+ */
+
+// Global version constant - update this value to trigger update checks
+const CURRENT_VERSION = '1.10.0';
+
+// Load version history on demand (changelog / update modal). Sets window.VERSION_CHANGES.
+function loadVersionHistory() {
+  if (window.VERSION_CHANGES) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'version-history.js';
+    script.onload = () => resolve();
+    script.onerror = () => {
+      window.VERSION_CHANGES = [];
+      resolve();
+    };
+    document.head.appendChild(script);
+  });
+}
+
+// Available Material Design icons for use throughout the application
+const MATERIAL_ICONS = [
+  'computer', 'devices', 'phone_android', 'tablet_android', 'laptop',
+  'desktop_windows', 'keyboard', 'mouse', 'speaker', 'router', 'hub',
+  'memory', 'sd_card', 'sim_card', 'developer_board', 'dns', 'storage',
+  'usb', 'wifi', 'bluetooth', 'phonelink', 'cast', 'headset', 'print',
+  'scanner', 'security', 'settings', 'build', 'account_circle', 'group',
+  'folder', 'description', 'assignment', 'bug_report', 'assessment',
+  'help', 'info', 'warning', 'error', 'done', 'thumb_up', 'thumb_down',
+  'person', 'person_outline', 'inventory_2', 'menu_book', 'local_library', 'book',
+  'event', 'event_note', 'schedule', 'location_on', 'place', 'home', 'apartment', 'business',
+  'work', 'meeting_room', 'add_circle', 'remove_circle', 'edit', 'delete', 'search', 'close',
+  'expand_more', 'expand_less', 'chevron_right', 'chevron_left', 'dashboard', 'category',
+  'list', 'grid_view', 'view_list', 'view_module', 'label', 'bookmark', 'star'
+];
+
+// Supabase client (when config present). Used by Storage and Auth.
+var supabaseClient = null;
+(function () {
+  var c = typeof window !== 'undefined' && window.ELISTLY_CONFIG;
+  if (c && c.supabaseUrl && c.supabaseAnonKey && typeof window.supabase !== 'undefined') {
+    try {
+      supabaseClient = window.supabase.createClient(c.supabaseUrl, c.supabaseAnonKey);
+    } catch (e) {
+      console.warn('Elistly: Supabase client init failed', e);
+    }
+  }
+})();
+
+// Storage layer: localStorage or Supabase (one row per user in app_data)
+const Storage = {
+  KEY: 'elistlyData',
+  _cached: null,
+
+  getAppData() {
+    if (supabaseClient) return this.getAppDataAsync();
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return Promise.resolve(raw ? JSON.parse(raw) : null);
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  },
+
+  async getAppDataAsync() {
+    if (supabaseClient) {
+      try {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return null;
+        const { data, error } = await supabaseClient.from('app_data').select('payload').eq('user_id', user.id).maybeSingle();
+        if (error) {
+          console.error('Storage.getAppData Supabase error', error);
+          return null;
+        }
+        this._cached = data && data.payload ? data.payload : null;
+        return this._cached;
+      } catch (e) {
+        console.error('Storage.getAppData failed', e);
+        return null;
+      }
+    }
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  setAppData(data) {
+    if (supabaseClient) return this.setAppDataAsync(data);
+    try {
+      localStorage.setItem(this.KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('Storage.setAppData failed', e);
+    }
+    return Promise.resolve();
+  },
+
+  async setAppDataAsync(data) {
+    if (supabaseClient) {
+      try {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        this._cached = data;
+        await supabaseClient.from('app_data').upsert({ user_id: user.id, payload: data }, { onConflict: 'user_id' });
+      } catch (e) {
+        console.error('Storage.setAppData Supabase failed', e);
+      }
+      return;
+    }
+    try {
+      localStorage.setItem(this.KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('Storage.setAppData failed', e);
+    }
+  },
+
+  getOnboardingDone() {
+    if (this._cached && 'onboardingDone' in this._cached) return !!this._cached.onboardingDone;
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      const data = raw ? JSON.parse(raw) : null;
+      return !!(data && data.onboardingDone);
+    } catch (e) {
+      return false;
+    }
+  },
+
+  setOnboardingDone() {
+    const data = this._cached || { version: CURRENT_VERSION, settings: {}, categories: {}, entityTypes: {}, entities: {} };
+    data.onboardingDone = true;
+    this._cached = data;
+    return this.setAppData(data);
+  }
+};
+
+// Setups: add preset IDs here; each setup-<id>.js registers into window.ELISTLY_PRESETS (loaded before app.js)
+const SETUP_IDS = ['blank', 'library', 'it', 'staff', 'property'];
+const PRESETS = (function () {
+  const out = {};
+  const source = typeof window !== 'undefined' && window.ELISTLY_PRESETS ? window.ELISTLY_PRESETS : {};
+  SETUP_IDS.forEach(function (id) { if (source[id]) out[id] = source[id]; });
+  return out;
+})();
+
+// Default data = IT preset (version merge, entity-type templates, restore defaults). Fallback empty if setup not loaded.
+const defaultData = {
+  categories: (PRESETS.it && PRESETS.it.categories) ? PRESETS.it.categories : {},
+  entityTypes: (PRESETS.it && PRESETS.it.entityTypes) ? PRESETS.it.entityTypes : {},
+  entities: (PRESETS.it && PRESETS.it.entities) ? PRESETS.it.entities : {}
+};
+
+// Sample data is loaded from sample-data.js (optional). Fallback if not loaded.
+if (typeof window.SAMPLE_ENTITIES === 'undefined') {
+  window.SAMPLE_ENTITIES = { library: {}, it: {}, staff: {}, property: {}, blank: {} };
+}
+
+const App = {
+  data: {
+    version: CURRENT_VERSION,
+    settings: {
+      defaultView: 'dashboard',
+      materialIcons: MATERIAL_ICONS
+    },
+    categories: {},
+    entityTypes: {},
+    entities: {}
+  },
+  defaultData,
+  _presets: PRESETS,
+      
+      async init() {
+        this.data = {
+          version: CURRENT_VERSION,
+          settings: { defaultView: 'dashboard', materialIcons: MATERIAL_ICONS },
+          categories: {},
+          entityTypes: {},
+          entities: {}
+        };
+
+        if (!supabaseClient) {
+          const main = document.getElementById('mainContent');
+          if (main) {
+            main.innerHTML = `
+              <div class="card" style="max-width: 480px; margin: 2rem auto;">
+                <div class="card-header"><h2><span class="material-icons">settings</span> Setup required</h2></div>
+                <p style="margin: 0 0 1rem 0; color: var(--text-secondary); line-height: 1.5;">Elistly requires an account and a database. To use this app, configure Supabase:</p>
+                <ol style="margin: 0 0 1rem 0; padding-left: 1.5rem; color: var(--text-primary); line-height: 1.6;">
+                  <li>Copy <code>config.example.js</code> to <code>config.js</code></li>
+                  <li>Create a Supabase project and run the SQL in <code>supabase/schema.sql</code></li>
+                  <li>In Supabase → Project Settings → API, copy <strong>Project URL</strong> and <strong>anon public</strong> key into <code>config.js</code></li>
+                  <li>Reload this page</li>
+                </ol>
+                <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">See the README for full instructions.</p>
+              </div>`;
+          }
+          return;
+        }
+
+        if (supabaseClient) {
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          if (!session) {
+            const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', systemTheme);
+            this.updateAccentColor('#2a7ebf', false);
+            this.updateHeaderColor('#1a1b1e', false);
+            this.applyLogoStyle('color');
+            this.showSignInModal();
+            return;
+          }
+          this.initProfileDropdown(session.user);
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('type') === 'verify_secondary_email' && params.get('token')) {
+            await this.confirmSecondaryEmailVerification(params.get('token'));
+          }
+          if (await this.requiresMFAVerification()) {
+            this.showMFAVerifyModal();
+            return;
+          }
+        }
+
+        var savedTheme = localStorage.getItem('theme');
+        if (!savedTheme || savedTheme === 'system') {
+          savedTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        this.updateAccentColor(localStorage.getItem('accentColor') || '#2a7ebf', false);
+        this.updateHeaderColor(localStorage.getItem('headerColor') || '#1a1b1e', false);
+        this.applyLogoStyle(localStorage.getItem('logoStyle') || 'color');
+
+        const stored = await Storage.getAppData();
+        const isFirstRun = !stored || (Object.keys(stored.categories || {}).length === 0 && Object.keys(stored.entityTypes || {}).length === 0);
+        const onboardingDone = !!(stored && stored.onboardingDone);
+
+        if (stored && !isFirstRun) {
+          try {
+            const userData = stored;
+            const storedVersion = userData.version || '1.0.0';
+            this.data.categories = { ...(userData.categories || {}) };
+            this.data.entities = { ...(userData.entities || {}) };
+            this.data.entityTypes = { ...(userData.entityTypes || {}) };
+            this.data.settings = { ...this.data.settings, ...(userData.settings || {}) };
+              const fontSize = this.data.settings.fontSize || 'normal';
+              document.documentElement.setAttribute('data-font-size', ['small','normal','large','larger'].includes(fontSize) ? fontSize : 'normal');
+
+            if (this.compareVersions(CURRENT_VERSION, storedVersion) > 0) {
+              const updateChanges = { newEntityTypes: [], updatedEntityTypes: [], newFields: {}, askToRestoreTypes: [] };
+              const defaultTypeIds = Object.keys(this.defaultData.entityTypes);
+              const userTypeIds = Object.keys(this.data.entityTypes);
+              const removedDefaultTypes = defaultTypeIds.filter(id => !userTypeIds.includes(id));
+
+              for (const [typeId, defaultType] of Object.entries(this.defaultData.entityTypes)) {
+                if (this.data.entityTypes[typeId]) {
+                  const userType = this.data.entityTypes[typeId];
+                  const userFieldNames = (userType.fields || []).map(f => f.name);
+                  const newDefaultFields = (defaultType.fields || []).filter(f => !userFieldNames.includes(f.name));
+                  if (newDefaultFields.length > 0) {
+                    if (!this.data.entityTypes[typeId].fields) this.data.entityTypes[typeId].fields = [];
+                    this.data.entityTypes[typeId].fields = [...this.data.entityTypes[typeId].fields, ...newDefaultFields];
+                    updateChanges.updatedEntityTypes.push(typeId);
+                  }
+                  (userType.fields || []).forEach((uf, i) => {
+                    if (uf.type === 'dropdown') {
+                      const df = defaultType.fields.find(f => f.name === uf.name);
+                      if (df && df.options && (!uf.options || uf.options.length === 0))
+                        this.data.entityTypes[typeId].fields[i].options = JSON.parse(JSON.stringify(df.options));
+                    }
+                  });
+                  const userAssocNames = (userType.associations || []).map(a => a.name);
+                  const newAssocs = (defaultType.associations || []).filter(a => !userAssocNames.includes(a.name));
+                  if (newAssocs.length > 0) {
+                    if (!this.data.entityTypes[typeId].associations) this.data.entityTypes[typeId].associations = [];
+                    this.data.entityTypes[typeId].associations = [...this.data.entityTypes[typeId].associations, ...newAssocs];
+                    if (!updateChanges.updatedEntityTypes.includes(typeId)) updateChanges.updatedEntityTypes.push(typeId);
+                  }
+                } else if (!removedDefaultTypes.includes(typeId)) {
+                  this.data.entityTypes[typeId] = JSON.parse(JSON.stringify(defaultType));
+                  updateChanges.newEntityTypes.push(typeId);
+                } else {
+                  updateChanges.askToRestoreTypes.push({ id: typeId, label: defaultType.label });
+                }
+              }
+              if (updateChanges.askToRestoreTypes.length > 0) localStorage.setItem('removedDefaultTypes', JSON.stringify(updateChanges.askToRestoreTypes));
+              if (updateChanges.newEntityTypes.length > 0 || updateChanges.updatedEntityTypes.length > 0) localStorage.setItem('lastUpdateChanges', JSON.stringify(updateChanges));
+              loadVersionHistory().then(() => this.showWhatsNew());
+              if (updateChanges.askToRestoreTypes.length > 0) setTimeout(() => this.showRestoreTypesPrompt(), 1000);
+            }
+          } catch (e) {
+            console.error('Error loading user data:', e);
+          }
+        }
+
+          const personType = this.data.entityTypes && this.data.entityTypes.person;
+          if (personType && Array.isArray(personType.fields)) {
+            const hasFirst = personType.fields.some(f => f.name === 'firstName');
+            const hasLast = personType.fields.some(f => f.name === 'lastName');
+            const hasOrder = Array.isArray(personType.nameGen?.componentsOrder) && personType.nameGen.componentsOrder.length > 0;
+            if (hasFirst && hasLast && (!personType.enableNameGen || !hasOrder)) {
+              personType.enableNameGen = true;
+              personType.nameGen = {
+                prefix: personType.nameGen?.prefix || '',
+                partOfNamePrefix: personType.nameGen?.partOfNamePrefix ?? false,
+                suffixType: personType.nameGen?.suffixType || 'number',
+                componentsOrder: [
+                  { type: 'field', name: 'firstName' },
+                  { type: 'separator', value: ' ' },
+                  { type: 'field', name: 'lastName' }
+                ]
+              };
+              personType.fields = personType.fields.map(field => {
+                if (field.name === 'firstName' || field.name === 'lastName') {
+                  return { ...field, partOfName: true, visibleInCard: false };
+                }
+                return field;
+              });
+            }
+          }
+
+        const componentsChanged = this.normalizeNameComponents();
+        const titleChanged = this.normalizeTitleSettings();
+        const namesChanged = this.normalizeAutoNames();
+        document.documentElement.setAttribute('data-font-size', this.data.settings.fontSize || 'normal');
+        if (componentsChanged || titleChanged || namesChanged) this.saveData();
+        this.saveData();
+        this.buildIconGrid();
+        this.renderSidebar();
+        this.loadView('dashboard');
+
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+          searchInput.addEventListener('input', (e) => {
+            if (e.target.value) this.handleSearch(e.target.value);
+            else this.loadView('dashboard');
+          });
+        }
+        this.setupEventListeners();
+        this.setupMobileNav();
+
+        if (isFirstRun && !onboardingDone) {
+          setTimeout(() => this.showOnboarding(), 100);
+        }
+      },
+      
+      showModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+          modal.style.display = 'flex';
+          modal.classList.add('show');
+        }
+      },
+
+      showConfirmModal({ title, message, confirmLabel, cancelLabel, confirmVariant, onConfirm, onCancel }) {
+        const modal = document.getElementById('confirmModal');
+        if (!modal) return;
+        const titleEl = document.getElementById('confirmTitle');
+        const messageEl = document.getElementById('confirmMessage');
+        const confirmBtn = document.getElementById('confirmButton');
+        const cancelBtn = modal.querySelector('.btn.btn-secondary');
+        if (titleEl) titleEl.textContent = title || 'Confirm Action';
+        if (messageEl) messageEl.textContent = message || '';
+        if (confirmBtn) {
+          confirmBtn.textContent = confirmLabel || 'Confirm';
+          confirmBtn.className = `btn btn-${confirmVariant === 'primary' ? 'primary' : 'danger'}`;
+          confirmBtn.onclick = () => {
+            this.closeConfirmModal();
+            if (onConfirm) onConfirm();
+          };
+        }
+        if (cancelBtn) {
+          cancelBtn.textContent = cancelLabel || 'Cancel';
+          cancelBtn.onclick = () => {
+            this.closeConfirmModal();
+            if (onCancel) onCancel();
+          };
+        }
+        this.showModal('confirmModal');
+      },
+
+      closeConfirmModal() {
+        this.closeModal('confirmModal');
+      },
+
+      closeModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+          modal.classList.remove('show');
+          setTimeout(() => {
+            if (document.body.contains(modal)) {
+              modal.style.display = 'none';
+              if (!modal.hasAttribute('data-persistent')) {
+                modal.remove();
+              }
+            }
+          }, 200);
+        }
+      },
+
+      showSignInModal() {
+        const existing = document.getElementById('authSignInModal');
+        if (existing) existing.remove();
+        const html = `
+<div class="modal auth-modal" id="authSignInModal" style="display: flex;" data-persistent>
+  <div class="auth-modal-card">
+    <div class="auth-modal-brand">
+      <img src="img/elistly-logo-white.svg" alt="" class="auth-modal-logo">
+      <h2 class="auth-modal-title">Sign in</h2>
+      <p class="auth-modal-tagline">Modular inventory. Endlessly flexible.</p>
+    </div>
+    <form id="authSignInForm" class="auth-form" onsubmit="event.preventDefault(); App.handleSignIn(document.getElementById('authSignInEmail').value, document.getElementById('authSignInPassword').value);">
+      <div class="form-group">
+        <label for="authSignInEmail">Email</label>
+        <input type="email" id="authSignInEmail" class="auth-input" required placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group auth-password-row">
+        <label for="authSignInPassword">Password</label>
+        <input type="password" id="authSignInPassword" class="auth-input" required placeholder="••••••••" autocomplete="current-password">
+        <a href="#" class="auth-forgot" onclick="event.preventDefault(); App.showForgotPasswordModal();">Forgot password?</a>
+      </div>
+      <div id="authSignInError" class="auth-error" style="display: none;"></div>
+      <div id="authSignInResendBlock" class="auth-resend-block" style="display: none;">
+        <p class="auth-resend-text">Didn't get the email? <button type="button" class="btn-link" id="authSignInResendBtn">Resend confirmation email</button></p>
+      </div>
+      <button type="submit" class="btn btn-primary auth-submit" id="authSignInBtn">Sign in</button>
+    </form>
+    <p class="auth-modal-footer">Don't have an account? <button type="button" class="btn-link" onclick="App.closeModal('authSignInModal'); App.showSignUpModal();">Create account</button></p>
+  </div>
+</div>`;
+        const div = document.createElement('div');
+        div.innerHTML = html.trim();
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('authSignInModal');
+      },
+
+      showSignUpModal() {
+        const existing = document.getElementById('authSignUpModal');
+        if (existing) existing.remove();
+        const html = `
+<div class="modal auth-modal" id="authSignUpModal" style="display: flex;" data-persistent>
+  <div class="auth-modal-card">
+    <div class="auth-modal-brand">
+      <img src="img/elistly-logo-white.svg" alt="" class="auth-modal-logo">
+      <h2 class="auth-modal-title">Create account</h2>
+      <p class="auth-modal-tagline">Modular inventory. Endlessly flexible.</p>
+    </div>
+    <form id="authSignUpForm" class="auth-form" onsubmit="event.preventDefault(); App.handleSignUp(document.getElementById('authSignUpUsername').value, document.getElementById('authSignUpEmail').value, document.getElementById('authSignUpPassword').value, document.getElementById('authSignUpConfirm').value);">
+      <div class="form-group">
+        <label for="authSignUpUsername">Username</label>
+        <input type="text" id="authSignUpUsername" class="auth-input" required placeholder="Your name" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="authSignUpEmail">Email</label>
+        <input type="email" id="authSignUpEmail" class="auth-input" required placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label for="authSignUpPassword">Password</label>
+        <input type="password" id="authSignUpPassword" class="auth-input" required placeholder="At least 6 characters" autocomplete="new-password" minlength="6">
+      </div>
+      <div class="form-group">
+        <label for="authSignUpConfirm">Confirm password</label>
+        <input type="password" id="authSignUpConfirm" class="auth-input" required placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <div id="authSignUpError" class="auth-error" style="display: none;"></div>
+      <button type="submit" class="btn btn-primary auth-submit" id="authSignUpBtn">Create account</button>
+    </form>
+    <p class="auth-modal-footer">Already have an account? <button type="button" class="btn-link" onclick="App.closeModal('authSignUpModal'); App.showSignInModal();">Sign in</button></p>
+  </div>
+</div>`;
+        const div = document.createElement('div');
+        div.innerHTML = html.trim();
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('authSignUpModal');
+      },
+
+      showForgotPasswordModal() {
+        const existing = document.getElementById('authForgotModal');
+        if (existing) existing.remove();
+        const html = `
+<div class="modal auth-modal" id="authForgotModal" style="display: flex;" data-persistent>
+  <div class="auth-modal-card">
+    <div class="auth-modal-brand">
+      <span class="material-icons auth-modal-icon">lock_reset</span>
+      <h2 class="auth-modal-title">Reset password</h2>
+      <p class="auth-modal-tagline">Enter your email and we'll send a reset link</p>
+    </div>
+    <form id="authForgotForm" class="auth-form" onsubmit="event.preventDefault(); App.handleForgotPassword(document.getElementById('authForgotEmail').value);">
+      <div class="form-group">
+        <label for="authForgotEmail">Email</label>
+        <input type="email" id="authForgotEmail" class="auth-input" required placeholder="you@example.com" autocomplete="email">
+      </div>
+      <div id="authForgotError" class="auth-error" style="display: none;"></div>
+      <div id="authForgotSuccess" class="auth-success" style="display: none;"></div>
+      <button type="submit" class="btn btn-primary auth-submit" id="authForgotBtn">Send reset link</button>
+    </form>
+    <p class="auth-modal-footer"><button type="button" class="btn-link" onclick="App.closeModal('authForgotModal'); App.showSignInModal();">Back to sign in</button></p>
+  </div>
+</div>`;
+        const div = document.createElement('div');
+        div.innerHTML = html.trim();
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('authForgotModal');
+      },
+
+      async handleForgotPassword(email) {
+        if (!supabaseClient) return;
+        const errEl = document.getElementById('authForgotError');
+        const successEl = document.getElementById('authForgotSuccess');
+        const btn = document.getElementById('authForgotBtn');
+        if (errEl) errEl.style.display = 'none';
+        if (successEl) successEl.style.display = 'none';
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/' });
+        if (btn) { btn.disabled = false; btn.textContent = 'Send reset link'; }
+        if (error) {
+          if (errEl) { errEl.textContent = error.message || 'Something went wrong'; errEl.style.display = 'block'; }
+          return;
+        }
+        if (successEl) { successEl.textContent = 'Check your email for the reset link.'; successEl.style.display = 'block'; }
+      },
+
+      async handleSignIn(email, password) {
+        if (!supabaseClient) return;
+        const errEl = document.getElementById('authSignInError');
+        const resendBlock = document.getElementById('authSignInResendBlock');
+        const btn = document.getElementById('authSignInBtn');
+        if (errEl) errEl.style.display = 'none';
+        if (resendBlock) resendBlock.style.display = 'none';
+        if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
+        if (error) {
+          var isEmailNotConfirmed = (error.message || '').toLowerCase().indexOf('email not confirmed') !== -1;
+          if (errEl) { errEl.textContent = error.message || 'Sign in failed'; errEl.style.display = 'block'; }
+          if (isEmailNotConfirmed && resendBlock) {
+            resendBlock.style.display = 'block';
+            resendBlock.dataset.email = email;
+            var resendBtn = document.getElementById('authSignInResendBtn');
+            if (resendBtn) resendBtn.onclick = function () { App.handleResendConfirmation(email); };
+          }
+          return;
+        }
+        if (await this.requiresMFAVerification()) {
+          this.closeModal('authSignInModal');
+          this.showMFAVerifyModal();
+          return;
+        }
+        this.closeModal('authSignInModal');
+        window.location.reload();
+      },
+
+      async handleResendConfirmation(email) {
+        if (!supabaseClient || !email) return;
+        var btn = document.getElementById('authSignInResendBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+        var errEl = document.getElementById('authSignInError');
+        if (errEl) errEl.style.display = 'none';
+        var res = await supabaseClient.auth.resend({ type: 'signup', email: email });
+        if (btn) { btn.disabled = false; btn.textContent = 'Resend confirmation email'; }
+        if (res.error) {
+          if (errEl) { errEl.textContent = res.error.message || 'Could not resend email'; errEl.style.display = 'block'; }
+          return;
+        }
+        this.showNotification('Confirmation email sent. Check your inbox.', 'success');
+      },
+
+      async handleSignUp(username, email, password, confirmPassword) {
+        if (!supabaseClient) return;
+        if (password !== confirmPassword) {
+          const errEl = document.getElementById('authSignUpError');
+          if (errEl) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; }
+          return;
+        }
+        const errEl = document.getElementById('authSignUpError');
+        const btn = document.getElementById('authSignUpBtn');
+        if (errEl) errEl.style.display = 'none';
+        if (btn) { btn.disabled = true; btn.textContent = 'Creating account…'; }
+        const { data, error } = await supabaseClient.auth.signUp({
+          email,
+          password,
+          options: { data: { username: username || email.split('@')[0] } }
+        });
+        if (btn) { btn.disabled = false; btn.textContent = 'Create account'; }
+        if (error) {
+          if (errEl) { errEl.textContent = error.message || 'Sign up failed'; errEl.style.display = 'block'; }
+          return;
+        }
+        this.closeModal('authSignUpModal');
+        this.showEmailConfirmationModal(email, !!(data.session));
+      },
+
+      showEmailConfirmationModal(email, alreadyConfirmed) {
+        const existing = document.getElementById('authConfirmEmailModal');
+        if (existing) existing.remove();
+        if (alreadyConfirmed) {
+          window.location.reload();
+          return;
+        }
+        const html = `
+<div class="modal auth-modal" id="authConfirmEmailModal" style="display: flex;" data-persistent>
+  <div class="auth-modal-card">
+    <div class="auth-modal-brand">
+      <span class="material-icons auth-modal-icon">mark_email_read</span>
+      <h2 class="auth-modal-title">Check your email</h2>
+      <p class="auth-modal-tagline">We sent a confirmation link to <strong>${(email || '').replace(/</g, '&lt;')}</strong></p>
+    </div>
+    <div class="auth-confirm-body">
+      <p>Click the link in that email to confirm your account. Then you can sign in below.</p>
+      <p class="auth-confirm-note">If you don't see it, check your spam folder.</p>
+      <button type="button" class="btn btn-primary auth-submit" onclick="App.closeModal('authConfirmEmailModal'); App.showSignInModal();">Go to sign in</button>
+    </div>
+  </div>
+</div>`;
+        const div = document.createElement('div');
+        div.innerHTML = html.trim();
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('authConfirmEmailModal');
+      },
+
+      initProfileDropdown(user) {
+        const wrap = document.getElementById('profileDropdownWrap');
+        const menu = document.getElementById('profileMenu');
+        const btn = document.getElementById('profileBtn');
+        if (!wrap || !menu || !btn) return;
+        wrap.style.display = '';
+        var displayName = (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
+        menu.innerHTML = `
+          <div class="profile-dropdown-user">
+            <span class="material-icons">person</span>${displayName}
+          </div>
+          <div class="profile-dropdown-actions">
+            <a href="#" id="profileModalLink"><span class="material-icons">manage_accounts</span>Profile</a>
+            <a href="#" id="profileFaqLink"><span class="material-icons">help</span>Help</a>
+          </div>
+          <div class="profile-dropdown-signout">
+            <a href="#" id="profileSignOutLink"><span class="material-icons">logout</span>Sign out</a>
+          </div>
+        `;
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.toggleProfileDropdown();
+        });
+        menu.querySelector('#profileModalLink').addEventListener('click', (e) => {
+          e.preventDefault();
+          this.closeProfileDropdown();
+          this.showProfileModal();
+        });
+        const faqLink = menu.querySelector('#profileFaqLink');
+        if (faqLink) faqLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.closeProfileDropdown();
+          this.showFaqModal();
+        });
+        menu.querySelector('#profileSignOutLink').addEventListener('click', (e) => {
+          e.preventDefault();
+          this.handleSignOut();
+        });
+        menu.style.display = 'none';
+      },
+
+      toggleProfileDropdown() {
+        const menu = document.getElementById('profileMenu');
+        const btn = document.getElementById('profileBtn');
+        if (!menu || !btn) return;
+        const all = document.querySelectorAll('.dropdown-menu');
+        all.forEach(m => { if (m !== menu) m.style.display = 'none'; });
+        menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+        btn.setAttribute('aria-expanded', menu.style.display === 'block');
+      },
+
+      closeProfileDropdown() {
+        const menu = document.getElementById('profileMenu');
+        if (menu) menu.style.display = 'none';
+        const btn = document.getElementById('profileBtn');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+      },
+
+      async handleSignOut() {
+        if (!supabaseClient) return;
+        this.closeProfileDropdown();
+        this.closeModal('settingsModal');
+        await supabaseClient.auth.signOut();
+        Storage._cached = null;
+        window.location.reload();
+      },
+
+      setupEventListeners() {
+        // Handle URL routing
+        window.addEventListener('popstate', (e) => this.handleRouting());
+        
+        // Settings button is wired via onclick in HTML
+        // Profile dropdown is wired in initProfileDropdown when Supabase + session
+        
+        // Global modal click-outside-to-close
+        document.addEventListener('click', (e) => {
+          const modal = e.target.closest('.modal');
+          if (modal && e.target === modal) {
+            if (modal.id === 'entityModal') this.tryCloseEntityModal();
+            else this.closeModal(modal.id);
+          }
+        });
+
+        // Handle dropdown closing (click outside)
+        document.addEventListener('click', (e) => {
+          const dropdowns = document.querySelectorAll('.dropdown-menu');
+          dropdowns.forEach(dropdown => {
+            if (!dropdown.contains(e.target) && !dropdown.previousElementSibling.contains(e.target)) {
+              dropdown.style.display = 'none';
+              if (dropdown.id === 'profileMenu') {
+                const btn = document.getElementById('profileBtn');
+                if (btn) btn.setAttribute('aria-expanded', 'false');
+              }
+            }
+          });
+          if (!e.target.closest('.profile-email-menu-wrap') && !e.target.closest('.profile-email-dropdown')) {
+            document.querySelectorAll('.profile-email-dropdown.open').forEach(d => d.classList.remove('open'));
+          }
+          if (document.body.classList.contains('search-expanded') && !e.target.closest('.search-container') && !e.target.closest('#searchToggle')) {
+            document.body.classList.remove('search-expanded');
+          }
+        });
+      },
+
+      setupMobileNav() {
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const searchToggle = document.getElementById('searchToggle');
+        const searchInput = document.getElementById('searchInput');
+
+        if (sidebarToggle) {
+          sidebarToggle.addEventListener('click', () => {
+            const open = document.body.classList.toggle('sidebar-open');
+            sidebarToggle.setAttribute('aria-expanded', open);
+            sidebarToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+            if (sidebarOverlay) sidebarOverlay.setAttribute('aria-hidden', !open);
+          });
+        }
+        if (sidebarOverlay) {
+          sidebarOverlay.addEventListener('click', () => this.closeSidebar());
+        }
+        if (searchToggle && searchInput) {
+          searchToggle.addEventListener('click', () => {
+            document.body.classList.add('search-expanded');
+            searchInput.focus();
+          });
+        }
+        window.addEventListener('resize', () => {
+          if (window.innerWidth > 640) {
+            this.closeSidebar();
+            document.body.classList.remove('search-expanded');
+          }
+        });
+      },
+
+      closeSidebar() {
+        document.body.classList.remove('sidebar-open');
+        const btn = document.getElementById('sidebarToggle');
+        if (btn) {
+          btn.setAttribute('aria-expanded', 'false');
+          btn.setAttribute('aria-label', 'Open menu');
+        }
+        const overlay = document.getElementById('sidebarOverlay');
+        if (overlay) overlay.setAttribute('aria-hidden', 'true');
+      },
+      
+      handleRouting() {
+        const url = new URL(window.location);
+        const view = url.searchParams.get('view') || 'dashboard';
+        const entityType = url.searchParams.get('entityType');
+        const entityId = url.searchParams.get('entityId');
+        const category = url.searchParams.get('category');
+        
+        if (entityType) {
+          this.showEntityForm(entityType, entityId || '');
+        } else if (category) {
+          this.loadView(category);
+        } else {
+          this.loadView(view);
+        }
+      },
+      
+      updateURL(params) {
+        const url = new URL(window.location);
+        Object.entries(params).forEach(([key, value]) => {
+          if (value) {
+            url.searchParams.set(key, value);
+          } else {
+            url.searchParams.delete(key);
+          }
+        });
+        window.history.pushState({}, '', url);
+      },
+      
+      mergeData(target, source) {
+        const result = JSON.parse(JSON.stringify(target));
+        for (let key in source) {
+          if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+            if (!result[key]) result[key] = {};
+            result[key] = this.mergeData(result[key], source[key]);
+          } else {
+            result[key] = source[key];
+          }
+        }
+        return result;
+      },
+      
+      saveData() {
+        const dataToSave = { ...this.data, version: this.data.version };
+        if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
+        Storage.setAppData(dataToSave);
+      },
+
+      showOnboarding() {
+        const presetIcons = { blank: 'add_circle_outline', library: 'menu_book', it: 'devices', staff: 'group', property: 'apartment' };
+        const presets = SETUP_IDS.map(function (id) { return PRESETS[id]; }).filter(Boolean);
+        const modalHtml = `
+          <div class="modal onboarding-modal" id="onboardingModal" style="display: flex;" data-persistent>
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3>Welcome to Elistly</h3>
+              </div>
+              <p class="onboarding-intro">Choose a setup to get started. You can change or remove anything later.</p>
+              <div class="onboarding-options">
+                ${presets.map(p => `
+                  <button type="button" class="onboarding-option" onclick="App.applyPreset('${p.id}', true)">
+                    <span class="onboarding-option-icon"><span class="material-icons">${presetIcons[p.id] || 'folder'}</span></span>
+                    <div class="onboarding-option-body">
+                      <div class="onboarding-option-title">${p.label}</div>
+                      <p class="onboarding-option-desc">${p.description}</p>
+                    </div>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          </div>`;
+        const existing = document.getElementById('onboardingModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('onboardingModal');
+      },
+
+      applyPreset(presetId, fromOnboarding = false) {
+        const preset = PRESETS[presetId];
+        if (!preset) return;
+        if (fromOnboarding) {
+          this.data.categories = JSON.parse(JSON.stringify(preset.categories || {}));
+          this.data.entityTypes = JSON.parse(JSON.stringify(preset.entityTypes || {}));
+          this.data.entities = {};
+          Storage.setOnboardingDone();
+          this.saveData();
+          const modal = document.getElementById('onboardingModal');
+          if (modal) modal.remove();
+          this.renderSidebar();
+          this.loadView('dashboard');
+          if (presetId !== 'blank') this.showNotification(`Added "${preset.label}" setup`, 'success');
+          const samples = (window.SAMPLE_ENTITIES || {})[presetId];
+          if (samples && samples.order && samples.order.some(function (t) { return Array.isArray(samples[t]) && samples[t].length > 0; })) {
+            setTimeout(function () { App.showSampleDataPrompt(presetId); }, 300);
+          }
+        } else {
+          Object.keys(preset.categories || {}).forEach(id => {
+            if (!this.data.categories[id]) this.data.categories[id] = JSON.parse(JSON.stringify(preset.categories[id]));
+          });
+          Object.keys(preset.entityTypes || {}).forEach(id => {
+            if (!this.data.entityTypes[id]) this.data.entityTypes[id] = JSON.parse(JSON.stringify(preset.entityTypes[id]));
+          });
+          const idMap = {};
+          Object.keys(preset.entities || {}).forEach(oldId => {
+            const ent = preset.entities[oldId];
+            const newId = this.generateId();
+            idMap[oldId] = newId;
+            this.data.entities[newId] = { ...JSON.parse(JSON.stringify(ent)), id: newId };
+          });
+          this.saveData();
+          this.renderSidebar();
+          this.loadView('dashboard');
+          this.showNotification(`Added "${preset.label}" preset`, 'success');
+        }
+      },
+      
+      generateId() {
+        return 'id-' + Math.random().toString(36).substring(2,9);
+      },
+
+      showSampleDataPrompt(presetId) {
+        const preset = PRESETS[presetId];
+        const label = preset ? preset.label : 'this setup';
+        const modalHtml = `
+          <div class="modal" id="sampleDataModal">
+            <div class="modal-content sample-data-modal-content">
+              <button class="modal-close" onclick="App.closeModal('sampleDataModal')" aria-label="Close">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Load sample data?</h3>
+              </div>
+              <div class="modal-body">
+                <p class="modal-description">Add example items so you can see how ${label} works. You can delete them anytime from the app.</p>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('sampleDataModal')">No thanks</button>
+                <button type="button" class="btn btn-primary" onclick="App.loadSampleData('${presetId}'); App.closeModal('sampleDataModal');">
+                  <span class="material-icons">add</span> Yes, load samples
+                </button>
+              </div>
+            </div>
+          </div>`;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('sampleDataModal');
+      },
+
+      loadSampleData(presetId) {
+        const samples = (window.SAMPLE_ENTITIES || {})[presetId];
+        if (!samples || !samples.order) return;
+        const createdIds = {};
+        samples.order.forEach(typeId => {
+          const type = this.data.entityTypes[typeId];
+          const list = samples[typeId];
+          if (!Array.isArray(list)) return;
+          createdIds[typeId] = [];
+          list.forEach((data) => {
+            const id = this.generateId();
+            const entity = { id, type: typeId };
+            Object.keys(data).forEach(k => {
+              if (k.endsWith('Index')) {
+                const assocName = k.replace(/Index$/, '');
+                const assoc = type && type.associations ? type.associations.find(a => a.name === assocName) : null;
+                const refType = assoc && assoc.association ? assoc.association.targetType : null;
+                entity[assocName] = refType && createdIds[refType] ? (createdIds[refType][data[k]] || '') : '';
+              } else {
+                entity[k] = data[k];
+              }
+            });
+            if (type && type.enableNameGen) {
+              entity.autoName = this.generateAutoName(typeId, entity);
+              delete entity.name;
+            } else if (type && type.fields && type.fields.some(f => f.name === 'firstName') && type.fields.some(f => f.name === 'lastName')) {
+              entity.name = [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim() || entity.name || '';
+              delete entity.autoName;
+            }
+            this.data.entities[id] = entity;
+            createdIds[typeId].push(id);
+          });
+        });
+        this.saveData();
+        this.renderSidebar();
+        this.loadView('dashboard');
+        this.showNotification('Sample data added', 'success');
+      },
+
+      getEntityDisplayName(entityOrId) {
+        const e = typeof entityOrId === 'string' ? this.data.entities[entityOrId] : entityOrId;
+        if (!e) return '';
+        const type = this.data.entityTypes[e.type];
+        if (type?.enableNameGen) return e.autoName || e.name || e.id;
+        return e.name || e.autoName || e.id;
+      },
+
+      getEntityTitleInfo(entity) {
+        if (!entity) return { title: '', fieldName: null };
+        const type = this.data.entityTypes[entity.type];
+        if (type?.enableNameGen && type.useAutoNameAsTitle && entity.autoName) {
+          return { title: String(entity.autoName), fieldName: null };
+        }
+        if (type?.fields && type.fields.length > 0) {
+          const useAsTitleField = type.fields.find(f => f.useAsTitle && entity[f.name]);
+          if (useAsTitleField) {
+            return { title: String(entity[useAsTitleField.name] ?? ''), fieldName: useAsTitleField.name };
+          }
+        }
+        return { title: '', fieldName: null };
+      },
+
+      getEntityCardTitle(entity) {
+        return this.getEntityTitleInfo(entity).title;
+      },
+
+      renderEntityMiniCard(entity) {
+        const type = this.data.entityTypes[entity.type];
+        const titleInfo = this.getEntityTitleInfo(entity);
+        const title = titleInfo.title;
+        if (!type) {
+          return `<div class="mini-card" onclick="App.showEntityForm('${entity.type}','${entity.id}')">
+            <div class="mini-card-icon"><span class="material-icons">folder</span></div>
+            <div class="mini-card-fields"><div class="mini-field-label">${title || entity.id}</div></div>
+          </div>`;
+        }
+        const visibleFields = (type.fields || [])
+          .filter(f => f.visibleInCard && (f.name || '').trim())
+          .filter(f => !titleInfo.fieldName || f.name !== titleInfo.fieldName);
+        const assocLines = (type.associations || [])
+          .filter(a => entity[a.name])
+          .map(a => {
+            const name = this.getEntityDisplayName(entity[a.name]);
+            return name ? `<div class="mini-field"><span class="mini-field-label">${(a.label || '').replace(/</g, '&lt;')}:</span> <span>${String(name).replace(/</g, '&lt;')}</span></div>` : '';
+          })
+          .filter(Boolean)
+          .join('');
+        const fieldsHtml = visibleFields.map(field => {
+          let value = entity[field.name];
+          if (field.type === 'dropdown' && field.options && field.options.length > 0) {
+            const opt = field.options.find(opt => opt.value === value);
+            value = opt ? (opt.label || opt.value) : (value || '');
+          } else if (field.type === 'date' && value) {
+            value = new Date(value + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+          } else if (field.type === 'checkbox') {
+            value = value === true || value === 'on' || value === '1' || value === 'yes' ? 'Yes' : 'No';
+          } else if (field.type === 'qr') {
+            value = value ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(value)}" class="qr-preview qr-preview-inline" alt="QR code">` : '';
+            const safeLabel = (field.label || '').replace(/</g, '&lt;');
+            return value ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> ${value}</div>` : '';
+          } else {
+            value = (value != null && value !== '') ? String(value) : '';
+          }
+          const safeLabel = (field.label || '').replace(/</g, '&lt;');
+          const safeValue = String(value ?? '').replace(/</g, '&lt;');
+          return `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> <span>${safeValue}</span></div>`;
+        }).join('');
+        return `<div class="mini-card" onclick="App.showEntityForm('${entity.type}','${entity.id}')">
+          <div class="mini-card-icon"><span class="material-icons">${type.icon}</span></div>
+          <div class="mini-card-fields">
+            ${title ? `<div class="mini-card-title">${title.replace(/</g, '&lt;')}</div>` : ''}
+            <div class="mini-card-properties">
+              ${fieldsHtml}
+              ${assocLines}
+            </div>
+          </div>
+        </div>`;
+      },
+
+      formatFieldValue(field, value) {
+        if (field.type === 'dropdown' && field.options && field.options.length > 0) {
+          const opt = field.options.find(opt => opt.value === value);
+          return opt ? (opt.label || opt.value) : (value || '');
+        }
+        if (field.type === 'date' && value) {
+          return new Date(value + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        if (field.type === 'checkbox') {
+          return value === true || value === 'on' || value === '1' || value === 'yes' ? 'Yes' : 'No';
+        }
+        if (field.type === 'qr') return value || '';
+        return (value != null && value !== '') ? String(value) : '';
+      },
+
+      showEntityEditMode(show) {
+        const view = document.getElementById('entityView');
+        const edit = document.getElementById('entityEdit');
+        const viewActions = document.getElementById('entityViewActions');
+        const editActions = document.getElementById('entityEditActions');
+        if (view) view.classList.toggle('hidden', show);
+        if (edit) edit.classList.toggle('hidden', !show);
+        if (viewActions) viewActions.classList.toggle('hidden', show);
+        if (editActions) editActions.classList.toggle('hidden', !show);
+      },
+      
+      showNotification(msg, type='info') {
+        const sb = document.getElementById('snackbar');
+        sb.textContent = msg;
+        sb.className = `snackbar show ${type==='error' ? 'error' : type==='success' ? 'success' : ''}`;
+        setTimeout(() => {
+          sb.className = sb.className.replace('show','');
+        }, this.data.settings.notifications?.duration || 3000);
+      },
+      
+      /* VERSION UPDATE MODAL */
+      showUpdateModal() {
+        loadVersionHistory().then(() => {
+          const changes = window.VERSION_CHANGES || [];
+          const storedVersion = (Storage._cached && Storage._cached.version) || this.data?.version || '1.0.0';
+          const relevantVersions = changes
+            .filter(v => this.compareVersions(v.version, storedVersion) > 0)
+            .sort((a, b) => this.compareVersions(b.version, a.version));
+
+          if (relevantVersions.length === 0) return;
+
+          const modalHtml = `
+          <div class="modal" id="updateModal" style="display: flex;">
+            <div class="modal-content">
+              <h3>Update Available (v${CURRENT_VERSION})</h3>
+              <p style="margin-bottom: 1.5rem;">A new version is available with improvements to the core application.</p>
+              
+              <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem;">
+                <h4>What's New</h4>
+                <ul style="list-style: none; padding: 0;">
+                  ${relevantVersions.map(v => `
+                    <li style="margin-bottom: 1rem;">
+                      <strong style="display: block; margin-bottom: 0.5rem; color: var(--accent-color);">Version ${v.version}</strong>
+                      <ul style="list-style: none; padding-left: 1rem;">
+                        ${v.changes.map(change => `
+                          <li style="margin-bottom: 0.5rem; position: relative;">
+                            <span style="position: absolute; left: -1rem; color: var(--accent-color);">â€¢</span>
+                            ${change}
+                          </li>
+                        `).join('')}
+                      </ul>
+                    </li>
+                  `).join('')}
+                </ul>
+              </div>
+              
+              <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem;">
+                <h4>Update Options</h4>
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" name="updateCore" checked disabled>
+                    <span>Core System Updates</span>
+                    <div class="help-text">Required system improvements and bug fixes</div>
+                  </label>
+                </div>
+              </div>
+              
+              <div class="modal-actions">
+                <button class="btn btn-primary" onclick="App.applyUpdate()">
+                  <span class="material-icons">system_update_alt</span>
+                  Update Now
+                </button>
+                <button class="btn btn-secondary" onclick="App.postponeUpdate()">
+                  <span class="material-icons">schedule</span>
+                  Remind me in 24h
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+          const existingModal = document.getElementById('updateModal');
+          if (existingModal) existingModal.remove();
+          const div = document.createElement('div');
+          div.innerHTML = modalHtml;
+          document.body.appendChild(div.firstElementChild);
+        });
+      },
+      
+      compareVersions(a, b) {
+        const partsA = a.split('.').map(Number);
+        const partsB = b.split('.').map(Number);
+        for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+          const numA = partsA[i] || 0;
+          const numB = partsB[i] || 0;
+          if (numA > numB) return 1;
+          if (numA < numB) return -1;
+        }
+        return 0;
+      },
+      
+      closeUpdateModal() {
+        this.closeModal('updateModal');
+      },
+      
+      postponeUpdate() {
+        localStorage.setItem('postponedUpdate', 'true');
+        localStorage.setItem('lastPostponedTime', Date.now().toString());
+        this.closeModal('updateModal');
+        this.showNotification('Update postponed for 24 hours', 'info');
+      },
+      
+      showUpdateSuccessModal(details) {
+        const modalHtml = `
+          <div class="modal" id="updateSuccessModal" style="display: flex;">
+            <div class="modal-content">
+              <div style="text-align: center; margin-bottom: 2rem;">
+                <span class="material-icons" style="font-size: 48px; color: var(--success-color);">check_circle</span>
+                <h3>Update Complete!</h3>
+                <p>System successfully updated to v${CURRENT_VERSION}</p>
+              </div>
+              
+              <div class="update-section">
+                <h4>Changes Applied</h4>
+                <ul>
+                  ${details.map(detail => `<li>${detail}</li>`).join('')}
+                </ul>
+              </div>
+              
+              <div class="modal-actions">
+                <button class="btn btn-primary" onclick="document.getElementById('updateSuccessModal').remove()">
+                  <span class="material-icons">done</span>
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        // Remove existing modal if present
+        const existingModal = document.getElementById('updateSuccessModal');
+        if (existingModal) {
+          existingModal.remove();
+        }
+        
+        // Add new modal
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+      },
+      
+      applyUpdate(options) {
+        // Show loading state
+        const updateBtn = document.querySelector('#updateModal .btn-primary');
+        if (updateBtn) {
+          updateBtn.disabled = true;
+          updateBtn.innerHTML = '<span class="material-icons">sync</span> Updating...';
+        }
+        
+        // Clear any postponed update status
+        localStorage.removeItem('postponedUpdate');
+        localStorage.removeItem('lastPostponedTime');
+        
+        // Get all changes being applied (VERSION_CHANGES loaded when update modal was shown)
+        const storedVersion = this.data.version || '1.0.0';
+        const changes = window.VERSION_CHANGES || [];
+        const relevantVersions = changes
+          .filter(v => this.compareVersions(v.version, storedVersion) > 0)
+          .sort((a, b) => this.compareVersions(b.version, a.version));
+        
+        // Update version
+        this.data.version = CURRENT_VERSION;
+        this.saveData();
+        
+        // Show success message with details
+        const updateDetails = [];
+        updateDetails.push(`Core system updated to v${CURRENT_VERSION}`);
+        
+        // Add all changes from relevant versions
+        relevantVersions.forEach(v => {
+          updateDetails.push(...v.changes);
+        });
+        
+        // Close update modal and show success notification
+        setTimeout(() => {
+          this.closeUpdateModal();
+          this.showUpdateSuccessModal(updateDetails);
+          this.showNotification(`System updated to v${CURRENT_VERSION}`, 'success');
+        }, 1000);
+      },
+      
+      updateAccentColor(color, save = true) {
+        const normalized = this.normalizeHex(color);
+        if (!normalized) return;
+        var rgb = this.hexToRgb(normalized);
+        document.documentElement.style.setProperty('--accent-color', normalized);
+        document.documentElement.style.setProperty('--accent-color-rgb', rgb.r + ', ' + rgb.g + ', ' + rgb.b);
+        if (save) localStorage.setItem('accentColor', normalized);
+        const hexEl = document.querySelector('.accent-color-hex');
+        if (hexEl) hexEl.textContent = normalized;
+        const swatchEl = document.querySelector('.accent-color-swatch');
+        if (swatchEl) swatchEl.style.backgroundColor = normalized;
+      },
+
+      updateHeaderColor(color, save = true) {
+        const normalized = this.normalizeHex(color);
+        if (!normalized) return;
+        document.documentElement.style.setProperty('--header-bg', normalized);
+        var rgb = this.hexToRgb(normalized);
+        var luminance = rgb.r * 0.299 + rgb.g * 0.587 + rgb.b * 0.114;
+        document.documentElement.style.setProperty('--header-text', luminance > 186 ? '#202124' : '#ffffff');
+        if (save) localStorage.setItem('headerColor', normalized);
+        const hexEl = document.querySelector('.header-color-hex');
+        if (hexEl) hexEl.textContent = normalized;
+        const swatchEl = document.querySelector('.header-color-swatch');
+        if (swatchEl) swatchEl.style.backgroundColor = normalized;
+      },
+
+      applyLogoStyle(style) {
+        style = (style || 'color').toLowerCase();
+        if (style !== 'color' && style !== 'white' && style !== 'black') style = 'color';
+        document.documentElement.setAttribute('data-logo-style', style);
+        var img = document.getElementById('appLogo');
+        if (img) img.src = style === 'color' ? 'img/elistly-logo.svg' : 'img/elistly-logo-' + style + '.svg';
+      },
+
+      setLogoStyle(style) {
+        style = (style || 'color').toLowerCase();
+        if (style !== 'color' && style !== 'white' && style !== 'black') style = 'color';
+        this.applyLogoStyle(style);
+        localStorage.setItem('logoStyle', style);
+        document.querySelectorAll('.logo-style-btn').forEach(function (b) {
+          b.classList.toggle('active', b.getAttribute('data-logo-style') === style);
+        });
+      },
+
+      hexToRgb(hex) {
+        // Remove # if present
+        hex = hex.replace('#', '');
+        
+        // Parse the hex values
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        
+        return { r, g, b };
+      },
+
+      rgbToHex(r, g, b) {
+        const toHex = (v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0');
+        return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+      },
+
+      rgbToHsv(r, g, b) {
+        const rn = r / 255;
+        const gn = g / 255;
+        const bn = b / 255;
+        const max = Math.max(rn, gn, bn);
+        const min = Math.min(rn, gn, bn);
+        const delta = max - min;
+        let h = 0;
+        if (delta !== 0) {
+          if (max === rn) h = ((gn - bn) / delta) % 6;
+          else if (max === gn) h = (bn - rn) / delta + 2;
+          else h = (rn - gn) / delta + 4;
+          h = Math.round(h * 60);
+          if (h < 0) h += 360;
+        }
+        const s = max === 0 ? 0 : delta / max;
+        const v = max;
+        return { h, s, v };
+      },
+
+      hsvToRgb(h, s, v) {
+        const c = v * s;
+        const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+        const m = v - c;
+        let r1 = 0, g1 = 0, b1 = 0;
+        if (h >= 0 && h < 60) { r1 = c; g1 = x; b1 = 0; }
+        else if (h >= 60 && h < 120) { r1 = x; g1 = c; b1 = 0; }
+        else if (h >= 120 && h < 180) { r1 = 0; g1 = c; b1 = x; }
+        else if (h >= 180 && h < 240) { r1 = 0; g1 = x; b1 = c; }
+        else if (h >= 240 && h < 300) { r1 = x; g1 = 0; b1 = c; }
+        else { r1 = c; g1 = 0; b1 = x; }
+        return {
+          r: Math.round((r1 + m) * 255),
+          g: Math.round((g1 + m) * 255),
+          b: Math.round((b1 + m) * 255)
+        };
+      },
+
+      normalizeHex(value) {
+        if (!value) return null;
+        let hex = String(value).trim();
+        if (!hex) return null;
+        if (hex[0] !== '#') hex = '#' + hex;
+        if (/^#[0-9a-fA-F]{3}$/.test(hex)) {
+          hex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+        }
+        if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return null;
+        return hex.toLowerCase();
+      },
+
+      resetAccentColor() {
+        this.setColorPickerHex('#2a7ebf', true);
+      },
+
+      resetHeaderColor() {
+        this.setColorPickerHex('#1a1b1e', true);
+      },
+
+      resetColorPickerDefault() {
+        const defaultHex = this._colorPickerTarget === 'header' ? '#1a1b1e' : '#2a7ebf';
+        this.setColorPickerHex(defaultHex, true);
+      },
+
+      openColorPicker(target) {
+        const current = target === 'header'
+          ? (localStorage.getItem('headerColor') || '#1a1b1e')
+          : (localStorage.getItem('accentColor') || '#2a7ebf');
+        this._colorPickerTarget = target === 'header' ? 'header' : 'accent';
+        this.showColorPickerModal(current);
+      },
+
+      showColorPickerModal(hex) {
+        let modal = document.getElementById('colorPickerModal');
+        if (!modal) {
+          const html = `
+            <div class="modal" id="colorPickerModal">
+              <div class="modal-content color-picker-modal">
+                <button class="modal-close" onclick="App.closeModal('colorPickerModal')">
+                  <span class="material-icons">close</span>
+                </button>
+                <div class="modal-header">
+                  <h3 id="colorPickerTitle">Pick a color</h3>
+                </div>
+                <div class="modal-body">
+                  <div class="color-picker-preview">
+                    <div class="color-picker-swatch" id="colorPickerSwatch"></div>
+                    <div class="color-picker-hex" id="colorPickerHex"></div>
+                  </div>
+                  <div class="color-picker-body">
+                    <div class="color-picker-square" id="colorPickerSquare">
+                      <div class="color-picker-white"></div>
+                      <div class="color-picker-black"></div>
+                      <div class="color-picker-handle" id="colorPickerHandle"></div>
+                    </div>
+                    <div class="color-picker-hue" id="colorPickerHue">
+                      <div class="color-picker-hue-handle" id="colorPickerHueHandle"></div>
+                    </div>
+                  </div>
+                  <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="App.resetAccentColor()" id="colorPickerDefaultBtn">Default</button>
+                    <button type="button" class="btn btn-primary" onclick="App.closeModal('colorPickerModal')">Done</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+          const div = document.createElement('div');
+          div.innerHTML = html.trim();
+          document.body.appendChild(div.firstElementChild);
+          modal = document.getElementById('colorPickerModal');
+        }
+        const title = document.getElementById('colorPickerTitle');
+        if (title) title.textContent = this._colorPickerTarget === 'header' ? 'Header color' : 'Accent color';
+        const defaultBtn = document.getElementById('colorPickerDefaultBtn');
+        if (defaultBtn) defaultBtn.onclick = () => this.resetColorPickerDefault();
+        this.initColorPickerHandlers();
+        this.setColorPickerHex(hex, false);
+        this.showModal('colorPickerModal');
+      },
+
+      initColorPickerHandlers() {
+        if (this._colorPickerBound) return;
+        const square = document.getElementById('colorPickerSquare');
+        const hue = document.getElementById('colorPickerHue');
+        if (!square || !hue) return;
+        const onSquare = (event) => {
+          const rect = square.getBoundingClientRect();
+          const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+          const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+          const s = rect.width === 0 ? 0 : x / rect.width;
+          const v = rect.height === 0 ? 0 : 1 - (y / rect.height);
+          if (!this._colorPickerState) this._colorPickerState = { h: 0, s, v };
+          this._colorPickerState.s = s;
+          this._colorPickerState.v = v;
+          this.updateColorPickerFromState(true);
+        };
+        const onHue = (event) => {
+          const rect = hue.getBoundingClientRect();
+          const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+          const h = rect.height === 0 ? 0 : Math.round((1 - y / rect.height) * 360);
+          if (!this._colorPickerState) this._colorPickerState = { h, s: 0, v: 0 };
+          this._colorPickerState.h = h >= 360 ? 359 : h;
+          this.updateColorPickerFromState(true);
+        };
+        const bindDrag = (el, handler) => {
+          const start = (e) => {
+            handler(e);
+            const move = (ev) => handler(ev);
+            const stop = () => {
+              window.removeEventListener('pointermove', move);
+              window.removeEventListener('pointerup', stop);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', stop);
+          };
+          el.addEventListener('pointerdown', start);
+        };
+        bindDrag(square, onSquare);
+        bindDrag(hue, onHue);
+        this._colorPickerBound = true;
+      },
+
+      setColorPickerHex(value, save) {
+        const normalized = this.normalizeHex(value);
+        if (!normalized) return;
+        const rgb = this.hexToRgb(normalized);
+        const hsv = this.rgbToHsv(rgb.r, rgb.g, rgb.b);
+        this._colorPickerState = { h: hsv.h, s: hsv.s, v: hsv.v };
+        this.updateColorPickerFromState(save);
+      },
+
+      updateColorPickerFromState(save) {
+        const state = this._colorPickerState || { h: 0, s: 0, v: 0 };
+        const rgb = this.hsvToRgb(state.h, state.s, state.v);
+        const hex = this.rgbToHex(rgb.r, rgb.g, rgb.b);
+        const swatch = document.getElementById('colorPickerSwatch');
+        const hexEl = document.getElementById('colorPickerHex');
+        const square = document.getElementById('colorPickerSquare');
+        const handle = document.getElementById('colorPickerHandle');
+        const hue = document.getElementById('colorPickerHue');
+        const hueHandle = document.getElementById('colorPickerHueHandle');
+        if (swatch) swatch.style.backgroundColor = hex;
+        if (hexEl) hexEl.textContent = hex;
+        if (square) square.style.backgroundColor = `hsl(${state.h}, 100%, 50%)`;
+        if (handle && square) {
+          const width = square.clientWidth;
+          const height = square.clientHeight;
+          const x = Math.round(state.s * width);
+          const y = Math.round((1 - state.v) * height);
+          handle.style.transform = `translate(${x}px, ${y}px)`;
+        }
+        if (hueHandle && hue) {
+          const height = hue.clientHeight;
+          const y = Math.round((1 - state.h / 360) * height);
+          hueHandle.style.transform = `translate(-50%, ${y}px)`;
+        }
+        if (save) {
+          if (this._colorPickerTarget === 'header') this.updateHeaderColor(hex, true);
+          else this.updateAccentColor(hex, true);
+        }
+      },
+      
+      buildIconGrid() {
+        const iconGrid = document.getElementById('iconGrid');
+        if (!iconGrid) return;
+        
+        iconGrid.innerHTML = this.data.settings.materialIcons.map(icon => `
+          <div class="icon-option" data-icon="${icon}">
+            <span class="material-icons">${icon}</span>
+            <span class="icon-label">${icon}</span>
+          </div>
+        `).join('');
+      },
+      
+      renderSidebar() {
+        const categoryList = document.getElementById('categoryList');
+        if (!categoryList) return;
+        
+        // Get current URL parameters
+        const url = new URL(window.location);
+        const currentView = url.searchParams.get('view') || 'dashboard';
+        const currentCategory = url.searchParams.get('category');
+        
+        const showDueView = this.hasDueDateTypes();
+        const dashboardHtml = `
+          <li>
+            <a href="#" class="${currentView === 'dashboard' ? 'active' : ''}" 
+               onclick="App.loadView('dashboard'); return false;">
+              <span class="material-icons">dashboard</span>
+              Dashboard
+            </a>
+          </li>
+          ${showDueView ? `
+            <li>
+              <a href="#" class="${currentView === 'overdue' ? 'active' : ''}" 
+                 onclick="App.loadView('overdue'); return false;">
+                <span class="material-icons">event_busy</span>
+                Due & overdue
+              </a>
+            </li>
+          ` : ''}
+        `;
+        
+        const categoriesHtml = Object.values(this.data.categories)
+          .map(category => `
+            <li>
+              <a href="#" class="${currentCategory === category.id ? 'active' : ''}"
+                 onclick="App.loadView('${category.id}'); return false;">
+                <span class="material-icons">${category.icon}</span>
+                ${category.label}
+              </a>
+            </li>
+          `).join('');
+        
+        categoryList.innerHTML = dashboardHtml + categoriesHtml;
+      },
+      
+      loadView(view) {
+        this.closeSidebar();
+        if (view === 'overdue' && !this.hasDueDateTypes()) view = 'dashboard';
+        this.updateURL({ view: view === 'dashboard' ? null : view, category: view === 'dashboard' ? null : view });
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+        if (view === 'dashboard') {
+          this.renderDashboard();
+        } else if (view === 'overdue') {
+          this.renderOverdueView();
+        } else {
+          this.renderCategoryView(view);
+        }
+        this.renderSidebar();
+      },
+
+      hasDueDateTypes() {
+        return Object.values(this.data.entityTypes || {}).some(type =>
+          Array.isArray(type.fields) && type.fields.some(f => f.type === 'date' && /due/i.test(f.name))
+        );
+      },
+
+      getDueDateFieldName(entityType) {
+        const type = this.data.entityTypes[entityType];
+        if (!type || !type.fields) return null;
+        const dueField = type.fields.find(f => f.type === 'date' && /due/i.test(f.name));
+        return dueField ? dueField.name : null;
+      },
+
+      getOverdueEntities() {
+        const today = new Date().toISOString().slice(0, 10);
+        return Object.values(this.data.entities).filter(entity => {
+          const dueField = this.getDueDateFieldName(entity.type);
+          if (!dueField || !entity[dueField]) return false;
+          return entity[dueField] < today;
+        }).sort((a, b) => {
+          const dueA = a[this.getDueDateFieldName(a.type)] || '';
+          const dueB = b[this.getDueDateFieldName(b.type)] || '';
+          return dueA.localeCompare(dueB);
+        });
+      },
+
+      getDueSoonEntities() {
+        const today = new Date();
+        const in7 = new Date(today);
+        in7.setDate(in7.getDate() + 7);
+        const todayStr = today.toISOString().slice(0, 10);
+        const in7Str = in7.toISOString().slice(0, 10);
+        return Object.values(this.data.entities).filter(entity => {
+          const dueField = this.getDueDateFieldName(entity.type);
+          if (!dueField || !entity[dueField]) return false;
+          const d = entity[dueField];
+          return d >= todayStr && d <= in7Str;
+        }).sort((a, b) => {
+          const dueA = a[this.getDueDateFieldName(a.type)] || '';
+          const dueB = b[this.getDueDateFieldName(b.type)] || '';
+          return dueA.localeCompare(dueB);
+        });
+      },
+
+      renderOverdueView() {
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+        const overdue = this.getOverdueEntities();
+        const dueSoon = this.getDueSoonEntities();
+        const formatDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '';
+        const dueField = (e) => this.getDueDateFieldName(e.type);
+        const renderRow = (entity) => {
+          const type = this.data.entityTypes[entity.type];
+          const dueVal = entity[dueField(entity)];
+          let lentToName = '';
+          if (type && type.associations) {
+            const linkAssoc = type.associations.find(a => entity[a.name]);
+            if (linkAssoc) lentToName = this.getEntityDisplayName(entity[linkAssoc.name]);
+          }
+          return `
+            <div class="entity-list-item">
+              <div class="entity-info">
+                <span class="material-icons">${type?.icon || 'folder'}</span>
+                <div>
+                  <div>${this.getEntityCardTitle(entity)}</div>
+                  ${lentToName ? `<div class="mini-field-desc">${lentToName} · Due ${formatDate(dueVal)}</div>` : `<div class="mini-field-desc">Due ${formatDate(dueVal)}</div>`}
+                </div>
+              </div>
+              <div class="entity-actions">
+                <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                  <span class="material-icons">edit</span>
+                </button>
+              </div>
+            </div>`;
+        };
+        const html = `
+          <div class="category-view">
+            <div class="card">
+              <div class="card-header">
+                <h2><span class="material-icons">event_busy</span> Due & overdue</h2>
+              </div>
+              ${overdue.length > 0 ? `
+                <h3 class="overdue-section-title"><span class="material-icons" style="color: var(--danger-color);">warning</span> Overdue</h3>
+                <div class="entity-list">${overdue.map(e => renderRow(e)).join('')}</div>
+              ` : ''}
+              ${dueSoon.length > 0 ? `
+                <h3 class="overdue-section-title"><span class="material-icons" style="color: var(--warning-color);">schedule</span> Due in the next 7 days</h3>
+                <div class="entity-list">${dueSoon.map(e => renderRow(e)).join('')}</div>
+              ` : ''}
+              ${overdue.length === 0 && dueSoon.length === 0 ? `
+                <p class="empty-state">Nothing overdue or due soon. Items with a due date will appear here.</p>
+              ` : ''}
+            </div>
+          </div>`;
+        mainContent.innerHTML = html;
+      },
+      
+      renderDashboard() {
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+
+        const settings = this.data.settings.dashboard || {};
+        const viewMode = settings.viewMode || 'categoryCards';
+        const groupByCategory = settings.groupByCategory !== false; // Default to true
+
+        // Get all entities and sort them (guard against missing name/autoName)
+        let allEntities = Object.values(this.data.entities)
+          .sort((a, b) => this.getEntityDisplayName(a).localeCompare(this.getEntityDisplayName(b)));
+
+        // Visible categories (used by gallery and category cards)
+        let visibleCategories = Object.values(this.data.categories)
+          .filter(cat => cat.visibleInDashboard !== false);
+        if (Array.isArray(settings.categoryOrder)) {
+          const ordered = [];
+          settings.categoryOrder.forEach(id => {
+            const cat = visibleCategories.find(c => c.id === id);
+            if (cat) ordered.push(cat);
+          });
+          visibleCategories.forEach(c => {
+            if (!settings.categoryOrder.includes(c.id)) ordered.push(c);
+          });
+          visibleCategories = ordered;
+        }
+
+        // Handle different view modes
+        if (viewMode === 'gallery') {
+          if (groupByCategory) {
+            let html = '';
+            visibleCategories.forEach(category => {
+              const categoryEntities = allEntities.filter(
+                entity => this.data.entityTypes[entity.type]?.category === category.id
+              );
+              const emptyState = '<p class="empty-state">No items yet</p>';
+              html += `
+                <section class="icon-group">
+                  <h3><span class="material-icons">${category.icon}</span> ${category.label}</h3>
+                  <div class="gallery-cards">
+                    ${categoryEntities.length > 0
+                      ? categoryEntities.map(entity => this.renderEntityMiniCard(entity)).join('')
+                      : emptyState}
+                  </div>
+                </section>
+              `;
+            });
+            if (visibleCategories.length === 0) {
+              html = '<div class="card empty-dashboard-card"><div class="card-header"><h2>Dashboard</h2></div><p class="empty-dashboard-message">No categories yet. Add a preset or create categories in Settings.</p><div class="empty-dashboard-actions"><button type="button" class="btn btn-primary" onclick="App.showSettingsModal()"><span class="material-icons">settings</span> Settings</button></div></div>';
+            }
+            mainContent.innerHTML = html;
+          } else {
+            const letterGroups = allEntities.reduce((acc, entity) => {
+              const name = this.getEntityCardTitle(entity);
+              const letter = name.charAt(0).toUpperCase() || '#';
+              (acc[letter] = acc[letter] || []).push(entity);
+              return acc;
+            }, {});
+            const letters = Object.keys(letterGroups).sort();
+            let html = letters.length > 0 ? '' : '<div class="card empty-dashboard-card"><div class="card-header"><h2>Dashboard</h2></div><p class="empty-dashboard-message">No items yet. Add items from the sidebar or Settings.</p></div>';
+            letters.forEach(letter => {
+              html += `
+                <section class="icon-group">
+                  <h3>${letter}</h3>
+                  <div class="gallery-cards">
+                    ${letterGroups[letter].map(entity => this.renderEntityMiniCard(entity)).join('')}
+                  </div>
+                </section>
+              `;
+            });
+            mainContent.innerHTML = html;
+          }
+          return;
+        }
+
+        // Handle Category Cards and List views (visibleCategories already computed above)
+        if (viewMode === 'list' && !groupByCategory) {
+          const letterGroups = allEntities.reduce((acc, entity) => {
+            const name = this.getEntityCardTitle(entity);
+            const letter = name.charAt(0).toUpperCase() || '#';
+            (acc[letter] = acc[letter] || []).push(entity);
+            return acc;
+          }, {});
+          const letters = Object.keys(letterGroups).sort();
+          if (letters.length === 0) {
+            mainContent.innerHTML = `
+              <div class="card empty-dashboard-card">
+                <div class="card-header"><h2>Dashboard</h2></div>
+                <p class="empty-dashboard-message">No items yet. Add items from a category in the sidebar or from Settings.</p>
+              </div>`;
+            return;
+          }
+          let html = `<div class="dashboard-list"><div class="card">`;
+          letters.forEach(letter => {
+            html += `<div class="entity-list-letter">${letter}</div><div class="entity-list">` +
+              letterGroups[letter].map(entity => `
+                <div class="entity-list-item">
+                  <div class="entity-info">
+                    <span class="material-icons">${this.data.entityTypes[entity.type]?.icon || 'folder'}</span>
+                    ${this.getEntityCardTitle(entity)}
+                  </div>
+                  <div class="entity-actions">
+                    <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                      <span class="material-icons">edit</span>
+                    </button>
+                  </div>
+                </div>
+              `).join('') + `</div>`;
+          });
+          html += `</div></div>`;
+          mainContent.innerHTML = html;
+          return;
+        }
+
+        if (visibleCategories.length === 0) {
+          mainContent.innerHTML = `
+            <div class="card empty-dashboard-card">
+              <div class="card-header"><h2>Dashboard</h2></div>
+              <p class="empty-dashboard-message">No categories yet. Add a preset or create categories in Settings.</p>
+              <div class="empty-dashboard-actions">
+                <button type="button" class="btn btn-primary" onclick="App.showSettingsModal()">
+                  <span class="material-icons">settings</span> Settings
+                </button>
+              </div>
+            </div>`;
+          return;
+        }
+
+        // Render category-based view (Category Cards or grouped List)
+        const cardsHtml = visibleCategories.map(category => {
+          // All entities for this category
+          const entities = Object.values(this.data.entities)
+            .filter(entity => this.data.entityTypes[entity.type]?.category === category.id);
+
+          return `
+            <div class="card">
+              <div class="card-header">
+                <h2><span class="material-icons">${category.icon}</span> ${category.label}</h2>
+              </div>
+              ${
+                viewMode === 'list'
+                ? (() => {
+                    // Group by letter inside each category
+                    const letterGroups = entities.reduce((acc, entity) => {
+                      const name = this.getEntityCardTitle(entity);
+                      const letter = name.charAt(0).toUpperCase() || '#';
+                      (acc[letter] = acc[letter] || []).push(entity);
+                      return acc;
+                    }, {});
+                    return Object.keys(letterGroups).sort().map(letter =>
+                      `<div class="entity-list-letter">${letter}</div>
+                      <div class="entity-list">
+                        ${
+                          letterGroups[letter].map(entity => `
+                            <div class="entity-list-item">
+                              <div class="entity-info">
+                                <span class="material-icons">${this.data.entityTypes[entity.type]?.icon || 'folder'}</span>
+                                ${this.getEntityCardTitle(entity)}
+                              </div>
+                              <div class="entity-actions">
+                                <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                                  <span class="material-icons">edit</span>
+                                </button>
+                              </div>
+                            </div>
+                          `).join('')
+                        }
+                      </div>`
+                    ).join('');
+                  })()
+                : `<div class="gallery-cards">${
+                    entities.length > 0
+                      ? entities.map(entity => this.renderEntityMiniCard(entity)).join('')
+                      : '<p class="empty-state">No items yet</p>'
+                  }</div>`
+              }
+            </div>
+          `;
+        }).join('');
+
+        const containerClass = viewMode === 'list' ? 'dashboard-list' : 'dashboard-grid';
+        mainContent.innerHTML = `<div class="${containerClass}">${cardsHtml}</div>`;
+      },
+      
+      renderEntityList(categoryId) {
+        const entities = Object.values(this.data.entities)
+          .filter(entity => this.data.entityTypes[entity.type]?.category === categoryId)
+          .sort((a, b) => this.getEntityCardTitle(a).localeCompare(this.getEntityCardTitle(b)));
+
+        if (entities.length === 0) {
+          return '<p class="empty-state">No items yet</p>';
+        }
+
+        return `<div class="gallery-cards">${entities.map(entity => this.renderEntityMiniCard(entity)).join('')}</div>`;
+      },
+      
+      renderCategoryView(categoryId) {
+        const category = this.data.categories[categoryId];
+        if (!category) return;
+        
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+        
+        // Get entity types for this category
+        const categoryEntityTypes = Object.values(this.data.entityTypes)
+          .filter(type => type.category === categoryId);
+        
+        const html = `
+          <div class="category-view">
+            <div class="card">
+              <div class="card-header">
+                <h2>
+                  <span class="material-icons">${category.icon}</span>
+                  ${category.label}
+                </h2>
+                <div class="button-group" style="display: flex; gap: 0.5rem;">
+                  ${categoryEntityTypes.length > 0 ? (
+                    categoryEntityTypes.length === 1
+                      ? `
+                    <button class="btn btn-primary" onclick="App.showEntityForm('${categoryEntityTypes[0].id}')">
+                      <span class="material-icons">add</span>
+                      Add ${categoryEntityTypes[0].label}
+                    </button>
+                  `
+                      : `
+                    <div class="dropdown">
+                      <button class="btn btn-primary" onclick="App.toggleDropdown(event, this)">
+                        <span class="material-icons">add</span>
+                        Add New
+                      </button>
+                      <div class="dropdown-menu" style="display: none;">
+                        ${categoryEntityTypes.map(type => `
+                          <a href="#" onclick="event.preventDefault(); App.showEntityForm('${type.id}')">
+                            <span class="material-icons">${type.icon}</span>
+                            ${type.label}
+                          </a>
+                        `).join('')}
+                      </div>
+                    </div>
+                  `
+                  ) : ''}
+                </div>
+              </div>
+              <div class="entity-list">
+                ${this.renderEntityList(categoryId)}
+              </div>
+            </div>
+          </div>
+        `;
+        
+        mainContent.innerHTML = html;
+      },
+      
+      handleSearch(query) {
+        const mainContent = document.getElementById('mainContent');
+        if (!mainContent) return;
+        
+        query = query.toLowerCase();
+        
+        const matchingEntities = Object.values(this.data.entities)
+          .filter(entity => {
+            const name = this.getEntityCardTitle(entity).toLowerCase();
+            return name.includes(query);
+          });
+        
+        const html = `
+          <div class="search-results">
+            <div class="card">
+              <div class="card-header">
+                <h2>Search Results</h2>
+              </div>
+              ${matchingEntities.length > 0 ? matchingEntities.map(entity => {
+                const et = this.data.entityTypes[entity.type];
+                const icon = et ? et.icon : 'folder';
+                return `
+                <div class="entity-list-item">
+                  <div class="entity-info">
+                    <span class="material-icons">${icon}</span>
+                    ${this.getEntityCardTitle(entity)}
+                  </div>
+                  <div class="entity-actions">
+                    <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                      <span class="material-icons">edit</span>
+                    </button>
+                  </div>
+                </div>`;
+              }).join('') : '<p class="empty-state">No matching items found</p>'}
+            </div>
+          </div>
+        `;
+        
+        mainContent.innerHTML = html;
+      },
+      
+      showSettingsModal() {
+        var currentTheme = document.documentElement.getAttribute('data-theme');
+        if (!currentTheme) currentTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        const modalHtml = `
+          <div class="modal" id="settingsModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('settingsModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Settings</h3>
+              </div>
+              
+              <div class="settings-container">
+                <!-- Left Column: Main Settings -->
+                <div class="settings-main">
+                  <!-- Appearance Section -->
+                  <div class="settings-section">
+                    <div class="section-header">
+                      <span class="material-icons">palette</span>
+                      <h4>Appearance</h4>
+                    </div>
+                    <div class="section-content">
+                      <div class="form-group">
+                        <label>Theme</label>
+                        <div class="theme-toggle" data-theme="${currentTheme}">
+                          <div class="theme-toggle-slider"></div>
+                          <button type="button" class="theme-toggle-option" onclick="App.setTheme('light')" aria-pressed="${currentTheme === 'light'}" aria-label="Light">
+                            <span class="material-icons">light_mode</span>
+                          </button>
+                          <button type="button" class="theme-toggle-option" onclick="App.setTheme('dark')" aria-pressed="${currentTheme === 'dark'}" aria-label="Dark">
+                            <span class="material-icons">dark_mode</span>
+                          </button>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label>Accent color</label>
+                        <div class="color-control">
+                          <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('accent')">
+                            <span class="color-swatch accent-color-swatch" style="background-color: ${localStorage.getItem('accentColor') || '#2a7ebf'}"></span>
+                          </button>
+                          <span class="color-hex accent-color-hex">${localStorage.getItem('accentColor') || '#2a7ebf'}</span>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label>Header color</label>
+                        <div class="color-control">
+                          <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('header')">
+                            <span class="color-swatch header-color-swatch" style="background-color: ${localStorage.getItem('headerColor') || '#1a1b1e'}"></span>
+                          </button>
+                          <span class="color-hex header-color-hex">${localStorage.getItem('headerColor') || '#1a1b1e'}</span>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label>Logo style</label>
+                        <div class="logo-style-options">
+                          <button type="button" class="btn btn-secondary logo-style-btn ${(localStorage.getItem('logoStyle') || 'color') === 'color' ? 'active' : ''}" data-logo-style="color" onclick="App.setLogoStyle('color')">Color</button>
+                          <button type="button" class="btn btn-secondary logo-style-btn ${(localStorage.getItem('logoStyle') || '') === 'white' ? 'active' : ''}" data-logo-style="white" onclick="App.setLogoStyle('white')">White</button>
+                          <button type="button" class="btn btn-secondary logo-style-btn ${(localStorage.getItem('logoStyle') || '') === 'black' ? 'active' : ''}" data-logo-style="black" onclick="App.setLogoStyle('black')">Black</button>
+                        </div>
+                      </div>
+                      <div class="form-group">
+                        <label>Text size</label>
+                        <div class="text-size-control" role="group" aria-label="Text size">
+                          <button type="button" class="btn btn-text-size" onclick="App.setFontSizeStep(-1)" title="Smaller text" aria-label="Smaller text">
+                            <span class="text-size-a">A</span>
+                          </button>
+                          <button type="button" class="btn btn-text-size" onclick="App.setFontSizeStep(1)" title="Larger text" aria-label="Larger text">
+                            <span class="text-size-a text-size-a-large">A</span>
+                          </button>
+                        </div>
+                        <div class="help-text text-size-label">${(this.data.settings.fontSize || 'normal').charAt(0).toUpperCase() + (this.data.settings.fontSize || 'normal').slice(1)}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Dashboard Layout -->
+                  <div class="settings-section">
+                    <div class="section-header">
+                      <span class="material-icons">dashboard</span>
+                      <h4>Dashboard Layout</h4>
+                    </div>
+                    <div class="section-content">
+                      <p class="help-text" style="margin-bottom: 0.75rem;">Choose how the main dashboard and category views show items. What appears on each card is set per entity type under Manage entity types → Visible in Card.</p>
+                      <div class="form-group">
+                        <label>View mode</label>
+                        <select name="dashboardViewMode" onchange="App.updateDashboardSettings('viewMode', this.value); App.updateGroupByVisibility(this.value); App.updateViewModeHint(this.value)">
+                          <option value="categoryCards" ${this.data.settings.dashboard?.viewMode === 'categoryCards' ? 'selected' : ''}>Category Cards</option>
+                          <option value="list" ${this.data.settings.dashboard?.viewMode === 'list' ? 'selected' : ''}>List</option>
+                          <option value="gallery" ${this.data.settings.dashboard?.viewMode === 'gallery' ? 'selected' : ''}>Gallery</option>
+                        </select>
+                        <div class="view-mode-hints" aria-live="polite">
+                          <div class="view-mode-hint" data-mode="categoryCards">
+                            <div class="view-mode-preview view-mode-preview-cards" aria-hidden="true">
+                              <div class="preview-category-card">
+                                <div class="preview-category-header">Books</div>
+                                <div class="preview-category-inner">
+                                  <div class="preview-item-card"></div>
+                                  <div class="preview-item-card"></div>
+                                  <div class="preview-item-card"></div>
+                                </div>
+                              </div>
+                            </div>
+                            <p><strong>Category Cards</strong> — One card per category (e.g. Books, People) with item cards inside. Best for: libraries, asset types, anything grouped by kind.</p>
+                          </div>
+                          <div class="view-mode-hint" data-mode="list">
+                            <div class="view-mode-preview view-mode-preview-list" aria-hidden="true">
+                              <div class="preview-list-section">A</div>
+                              <div class="preview-list-row"></div>
+                              <div class="preview-list-row"></div>
+                              <div class="preview-list-section">B</div>
+                              <div class="preview-list-row"></div>
+                            </div>
+                            <p><strong>List</strong> — Rows grouped by first letter (A–Z). Best for: long lists of people, devices, or items where you scan by name.</p>
+                          </div>
+                          <div class="view-mode-hint" data-mode="gallery">
+                            <div class="view-mode-preview view-mode-preview-gallery" aria-hidden="true">
+                              <div class="preview-gallery-grid">
+                                <div class="preview-gallery-card"></div>
+                                <div class="preview-gallery-card"></div>
+                                <div class="preview-gallery-card"></div>
+                                <div class="preview-gallery-card"></div>
+                                <div class="preview-gallery-card"></div>
+                                <div class="preview-gallery-card"></div>
+                              </div>
+                            </div>
+                            <p><strong>Gallery</strong> — Same cards as Category Cards but in a grid. Use "Group by category" for one section per category, or off for one A–Z grid. Best for: visual skim of everything.</p>
+                          </div>
+                        </div>
+                        <p class="help-text view-mode-note">A book-store style (cover image + title + author) would need an image field type; for now cards show the fields you mark as Visible in Card.</p>
+                      </div>
+                      <div class="form-group group-by-category">
+                        <label class="checkbox-label">
+                          <input type="checkbox" 
+                                 name="groupByCategory" 
+                                 onchange="App.updateDashboardSettings('groupByCategory', this.checked)"
+                                 ${this.data.settings.dashboard?.groupByCategory ? 'checked' : ''}>
+                          Group by Category
+                        </label>
+                      </div>
+                      <div class="form-group">
+                        <label>Items per Category</label>
+                        <select name="dashboardItemsPerCategory" onchange="App.updateDashboardSettings('itemsPerCategory', this.value)">
+                          <option value="3" ${this.data.settings.dashboard?.itemsPerCategory === 3 ? 'selected' : ''}>3 items</option>
+                          <option value="5" ${this.data.settings.dashboard?.itemsPerCategory === 5 ? 'selected' : ''}>5 items</option>
+                          <option value="10" ${this.data.settings.dashboard?.itemsPerCategory === 10 ? 'selected' : ''}>10 items</option>
+                          <option value="-1" ${this.data.settings.dashboard?.itemsPerCategory === -1 ? 'selected' : ''}>Show all</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Right: Data & About -->
+                <div class="settings-sidebar">
+                  <div class="settings-section">
+                    <div class="section-header">
+                      <span class="material-icons">folder</span>
+                      <h4>Data</h4>
+                    </div>
+                    <div class="section-content">
+                      <div class="button-stack">
+                        <button class="btn btn-secondary" onclick="App.showEntityTypeManager()">
+                          <span class="material-icons">schema</span>
+                          Entity types
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showCategoryManager()">
+                          <span class="material-icons">category</span>
+                          Categories
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showExportModal()">
+                          <span class="material-icons">upload</span>
+                          Export
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showImportModal()">
+                          <span class="material-icons">download</span>
+                          Import
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showAddPresetModal()">
+                          <span class="material-icons">add_circle_outline</span>
+                          Add preset
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.resetApp()" title="Permanently delete all data from this device and your account">
+                          <span class="material-icons">refresh</span>
+                          Reset app
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- About -->
+                  <div class="settings-section">
+                    <div class="section-header">
+                      <span class="material-icons">info</span>
+                      <h4>About</h4>
+                    </div>
+                    <div class="section-content">
+                      <div class="version-info">
+                        <span>Version ${CURRENT_VERSION}</span>
+                        <button class="btn btn-secondary" onclick="App.showChangelog()">
+                          <span class="material-icons">history</span>
+                          View Changelog
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showFaqModal()">
+                          <span class="material-icons">help</span>
+                          Help
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('settingsModal');
+        this.initDashboardSettings();
+      },
+      
+      closeSettingsModal() {
+        this.closeModal('settingsModal');
+      },
+
+      async showProfileModal() {
+        if (!supabaseClient) return;
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        let factors = { totp: [] };
+        try {
+          const f = await supabaseClient.auth.mfa.listFactors();
+          if (f.data) factors = f.data;
+        } catch (_) {}
+        const meta = user.user_metadata || {};
+        const userName = meta.user_name || '';
+        const hasTOTP = factors.totp && factors.totp.length > 0;
+        const totpFactorId = hasTOTP ? factors.totp[0].id : null;
+        let secondaryEmails = Array.isArray(meta.secondary_emails) ? meta.secondary_emails : [];
+        if (secondaryEmails.length === 0 && meta.recovery_email) {
+          secondaryEmails = [{ email: String(meta.recovery_email), verified: false }];
+        }
+        const primaryEmail = (user.email || '').replace(/</g, '&lt;');
+        const secondaryRows = secondaryEmails.map((item, i) => {
+          const email = (item.email || '').replace(/</g, '&lt;');
+          const badge = item.verified ? 'Verified' : 'Unverified';
+          const badgeClass = item.verified ? 'profile-email-badge profile-email-badge-verified' : 'profile-email-badge';
+          const verifyItem = item.verified ? '' : '<button type="button" role="menuitem" class="profile-email-menuitem" data-action="send-verify">Send verification</button>';
+          return `<div class="profile-email-row profile-email-secondary" data-index="${i}" data-email="${email.replace(/"/g, '&quot;')}">
+  <span class="profile-email-value">${email}</span>
+  <span class="${badgeClass}">${badge}</span>
+  <div class="profile-email-menu-wrap">
+    <button type="button" class="profile-email-menu-btn" aria-label="Options" aria-haspopup="true"><span class="material-icons">more_vert</span></button>
+    <div class="profile-email-dropdown" role="menu">
+      <button type="button" role="menuitem" class="profile-email-menuitem" data-action="set-default">Set as default</button>
+      ${verifyItem}
+      <button type="button" role="menuitem" class="profile-email-menuitem profile-email-menuitem-danger" data-action="delete">Delete</button>
+    </div>
+  </div>
+</div>`;
+        }).join('');
+
+        const modalHtml = `
+          <div class="modal" id="profileModal">
+            <div class="modal-content profile-modal-content">
+              <button class="modal-close" onclick="App.closeModal('profileModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Profile</h3>
+              </div>
+              <div class="modal-body">
+                <section class="profile-section profile-section-email">
+                  <h4 class="profile-section-heading">Email</h4>
+                  <p class="profile-help profile-email-intro">A secondary email lets you recover access if you lose your primary one. It must be verified before it can be used for password reset.</p>
+                  <div class="profile-email-card">
+                    <div class="profile-email-row profile-email-primary">
+                      <span class="profile-email-value">${primaryEmail}</span>
+                      <span class="profile-email-badge">Primary</span>
+                      <div class="profile-email-menu-wrap">
+                        <button type="button" class="profile-email-menu-btn" id="profilePrimaryMenuBtn" aria-label="Options" aria-haspopup="true"><span class="material-icons">more_vert</span></button>
+                        <div class="profile-email-dropdown" id="profilePrimaryDropdown" role="menu">
+                          <button type="button" role="menuitem" class="profile-email-menuitem" data-action="change-email">Change email</button>
+                        </div>
+                      </div>
+                    </div>
+                    ${secondaryRows}
+                    <div id="profileChangeEmailBlock" class="profile-change-email-block" style="display: none;">
+                      <input type="email" id="profileNewEmail" placeholder="New primary email" class="profile-input">
+                      <div class="profile-inline-actions">
+                        <button type="button" class="btn btn-primary btn-sm" id="profileConfirmNewEmail">Send confirmation</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="profileCancelEmail">Cancel</button>
+                      </div>
+                    </div>
+                    <div class="profile-add-email-block">
+                      <button type="button" class="btn btn-primary btn-sm" id="profileAddEmailBtn">Add another email</button>
+                    </div>
+                    <div id="profileAddEmailForm" class="profile-add-email-form" style="display: none;">
+                      <input type="email" id="profileNewSecondaryEmail" placeholder="Secondary email address" class="profile-input">
+                      <div class="profile-inline-actions">
+                        <button type="button" class="btn btn-primary btn-sm" id="profileAddSecondarySubmit">Add</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="profileAddSecondaryCancel">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section class="profile-section">
+                  <h4 class="profile-section-heading">Display name</h4>
+                  <div class="profile-section-content">
+                    <input type="text" id="profileUserName" class="profile-input" value="${(userName || '').replace(/"/g, '&quot;')}" placeholder="Name shown in the app">
+                    <p class="profile-help">Shown in the header and when your account is referenced.</p>
+                  </div>
+                </section>
+                <section class="profile-section" id="profile2FASection">
+                  <h4 class="profile-section-heading">Two-factor authentication</h4>
+                  ${hasTOTP ? `
+                    <p class="profile-help">Two-factor authentication is on (authenticator app).</p>
+                    <div class="profile-inline-actions">
+                      <button type="button" class="btn btn-secondary btn-sm" id="profileDisableTOTPBtn">Disable authenticator</button>
+                    </div>
+                  ` : `
+                    <p class="profile-help">Add an extra layer of security when signing in.</p>
+                    <button type="button" class="btn btn-primary" id="profileEnable2FABtn">Enable two-factor authentication</button>
+                  `}
+                </section>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-primary" id="profileSaveBtn">Save</button>
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('profileModal')">Close</button>
+              </div>
+            </div>
+          </div>
+        `;
+        const existing = document.getElementById('profileModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('profileModal');
+        this.bindProfileModal(user, totpFactorId, secondaryEmails);
+      },
+
+      bindProfileModal(user, totpFactorId, secondaryEmails) {
+        const saveBtn = document.getElementById('profileSaveBtn');
+        const changeEmailBlock = document.getElementById('profileChangeEmailBlock');
+        const newEmailInput = document.getElementById('profileNewEmail');
+        const confirmNewEmailBtn = document.getElementById('profileConfirmNewEmail');
+        const cancelEmailBtn = document.getElementById('profileCancelEmail');
+        const primaryMenuBtn = document.getElementById('profilePrimaryMenuBtn');
+        const primaryDropdown = document.getElementById('profilePrimaryDropdown');
+        const addEmailBtn = document.getElementById('profileAddEmailBtn');
+        const addEmailForm = document.getElementById('profileAddEmailForm');
+        const newSecondaryInput = document.getElementById('profileNewSecondaryEmail');
+        const addSecondarySubmit = document.getElementById('profileAddSecondarySubmit');
+        const addSecondaryCancel = document.getElementById('profileAddSecondaryCancel');
+        const disableTOTPBtn = document.getElementById('profileDisableTOTPBtn');
+
+        const closeAllEmailDropdowns = () => {
+          document.querySelectorAll('.profile-email-dropdown').forEach(d => d.classList.remove('open'));
+        };
+
+        if (primaryMenuBtn && primaryDropdown) {
+          primaryMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            primaryDropdown.classList.toggle('open');
+          });
+          const changeItem = primaryDropdown.querySelector('[data-action="change-email"]');
+          if (changeItem) changeItem.addEventListener('click', () => {
+            primaryDropdown.classList.remove('open');
+            if (changeEmailBlock) changeEmailBlock.style.display = 'block';
+          });
+        }
+        if (cancelEmailBtn) {
+          cancelEmailBtn.addEventListener('click', () => {
+            if (changeEmailBlock) changeEmailBlock.style.display = 'none';
+            if (newEmailInput) newEmailInput.value = '';
+          });
+        }
+        if (confirmNewEmailBtn && newEmailInput) {
+          confirmNewEmailBtn.addEventListener('click', async () => {
+            const email = newEmailInput.value.trim();
+            if (!email) return;
+            const { error } = await supabaseClient.auth.updateUser({ email });
+            if (error) {
+              this.showSnackbar(error.message || 'Failed to update email', true);
+              return;
+            }
+            this.showSnackbar('Confirmation sent to the new email address.');
+            this.closeModal('profileModal');
+            this.showProfileModal();
+          });
+        }
+
+        if (addEmailBtn && addEmailForm) {
+          addEmailBtn.addEventListener('click', () => {
+            addEmailForm.style.display = 'block';
+            if (newSecondaryInput) newSecondaryInput.value = '';
+          });
+        }
+        if (addSecondaryCancel && addEmailForm) {
+          addSecondaryCancel.addEventListener('click', () => { addEmailForm.style.display = 'none'; });
+        }
+        if (addSecondarySubmit && newSecondaryInput) {
+          addSecondarySubmit.addEventListener('click', () => this.addSecondaryEmail(newSecondaryInput.value.trim(), addEmailForm));
+        }
+
+        document.querySelectorAll('.profile-email-secondary').forEach(row => {
+          const menuBtn = row.querySelector('.profile-email-menu-btn');
+          const dropdown = row.querySelector('.profile-email-dropdown');
+          const index = parseInt(row.dataset.index, 10);
+          const email = (row.dataset.email || '').replace(/&quot;/g, '"');
+          if (!menuBtn || !dropdown) return;
+          menuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeAllEmailDropdowns();
+            dropdown.classList.toggle('open');
+          });
+          dropdown.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              dropdown.classList.remove('open');
+              const action = btn.dataset.action;
+              if (action === 'set-default') await this.setDefaultEmail(email);
+              else if (action === 'send-verify') await this.sendSecondaryVerification(email);
+              else if (action === 'delete') await this.removeSecondaryEmail(index);
+            });
+          });
+        });
+
+        const enable2FABtn = document.getElementById('profileEnable2FABtn');
+        if (enable2FABtn) enable2FABtn.addEventListener('click', () => this.showTwoFAModal());
+
+        if (saveBtn) saveBtn.addEventListener('click', () => this.saveProfile());
+        if (disableTOTPBtn && totpFactorId) {
+          disableTOTPBtn.addEventListener('click', () => {
+            this.showConfirmModal({
+              title: 'Disable authenticator?',
+              message: 'You will no longer need a code to sign in.',
+              confirmLabel: 'Disable',
+              confirmVariant: 'danger',
+              onConfirm: async () => {
+                const { error } = await supabaseClient.auth.mfa.unenroll({ factorId: totpFactorId });
+                if (error) {
+                  this.showSnackbar(error.message || 'Failed to disable', true);
+                  return;
+                }
+                this.closeModal('profileModal');
+                this.showSnackbar('Two-factor authentication disabled.');
+                this.showProfileModal();
+              }
+            });
+          });
+        }
+      },
+
+      async saveProfile() {
+        const userName = (document.getElementById('profileUserName') && document.getElementById('profileUserName').value) || '';
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        const meta = { ...(user.user_metadata || {}), user_name: userName };
+        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: meta } });
+        if (error) {
+          this.showSnackbar(error.message || 'Failed to save profile', true);
+          return;
+        }
+        this.showSnackbar('Profile saved.');
+        this.closeModal('profileModal');
+        const { data: { user: u } } = await supabaseClient.auth.getUser();
+        const menu = document.getElementById('profileMenu');
+        const userLine = menu && menu.querySelector('.profile-dropdown-user');
+        if (userLine && u) {
+          const display = (u.user_metadata && u.user_metadata.user_name) || u.email || 'Signed in';
+          userLine.innerHTML = '<span class="material-icons">person</span>' + display;
+        }
+      },
+
+      async addSecondaryEmail(email, formEl) {
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          this.showSnackbar('Please enter a valid email address.', true);
+          return;
+        }
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        const primary = (user.email || '').toLowerCase();
+        if (email.toLowerCase() === primary) {
+          this.showSnackbar('This is already your primary email.', true);
+          return;
+        }
+        const meta = user.user_metadata || {};
+        let list = Array.isArray(meta.secondary_emails) ? meta.secondary_emails : [];
+        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
+        if (list.some(item => (item.email || '').toLowerCase() === email.toLowerCase())) {
+          this.showSnackbar('That email is already added.', true);
+          return;
+        }
+        list.push({ email, verified: false });
+        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
+        if (error) {
+          this.showSnackbar(error.message || 'Failed to add email', true);
+          return;
+        }
+        if (formEl) formEl.style.display = 'none';
+        this.showSnackbar('Secondary email added. Send verification so it can be used for recovery.');
+        this.closeModal('profileModal');
+        this.showProfileModal();
+      },
+
+      async removeSecondaryEmail(index) {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        const meta = user.user_metadata || {};
+        let list = Array.isArray(meta.secondary_emails) ? [...meta.secondary_emails] : [];
+        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
+        if (index < 0 || index >= list.length) return;
+        list.splice(index, 1);
+        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
+        if (error) {
+          this.showSnackbar(error.message || 'Failed to remove email', true);
+          return;
+        }
+        this.closeModal('profileModal');
+        this.showProfileModal();
+      },
+
+      async setDefaultEmail(secondaryEmail) {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        const primary = user.email || '';
+        const meta = user.user_metadata || {};
+        let list = Array.isArray(meta.secondary_emails) ? [...meta.secondary_emails] : [];
+        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
+        const idx = list.findIndex(item => (item.email || '').toLowerCase() === (secondaryEmail || '').toLowerCase());
+        if (idx < 0) return;
+        const [removed] = list.splice(idx, 1);
+        list.push({ email: primary, verified: false });
+        const { error } = await supabaseClient.auth.updateUser({
+          email: removed.email,
+          data: { user_metadata: { ...meta, secondary_emails: list } }
+        });
+        if (error) {
+          this.showSnackbar(error.message || 'Failed to set default email', true);
+          return;
+        }
+        this.showSnackbar('Confirmation sent to the new primary email.');
+        this.closeModal('profileModal');
+        this.showProfileModal();
+      },
+
+      async sendSecondaryVerification(email) {
+        try {
+          const { data, error } = await supabaseClient.functions.invoke('send-secondary-email-verification', { body: { email } });
+          if (error) throw error;
+          if (data && data.error) throw new Error(data.error);
+          this.showSnackbar('Verification email sent. Check the inbox for that address.');
+        } catch (e) {
+          const msg = (e && e.message) || 'Failed to send verification.';
+          this.showSnackbar('Verification requires server setup. Add the Edge Function send-secondary-email-verification so this email can be used for recovery.', true);
+        }
+        document.querySelectorAll('.profile-email-dropdown').forEach(d => d.classList.remove('open'));
+      },
+
+      async confirmSecondaryEmailVerification(token) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('type');
+        url.searchParams.delete('token');
+        window.history.replaceState({}, '', url.toString());
+        try {
+          const { data, error } = await supabaseClient.functions.invoke('confirm-secondary-email-verification', { body: { token } });
+          if (error) throw error;
+          if (data && data.error) throw new Error(data.error);
+          this.showSnackbar('Secondary email verified. You can use it for account recovery.');
+        } catch (e) {
+          this.showSnackbar('Verification could not be completed. The link may have expired.', true);
+        }
+      },
+
+      async showTwoFAModal() {
+        if (!supabaseClient) return;
+        const modalHtml = `
+          <div class="modal" id="twoFAModal">
+            <div class="modal-content profile-modal-content">
+              <button class="modal-close" onclick="App.closeModal('twoFAModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Enable Two-Factor Authentication</h3>
+              </div>
+              <div class="modal-body">
+                <div id="twoFAStepIntro" class="profile-2fa-step">
+                  <p class="profile-help profile-2fa-intro">Two‑factor authentication uses an authenticator app to generate sign‑in codes.</p>
+                  <button type="button" class="btn btn-primary" id="twoFAStartTotp">Start setup</button>
+                </div>
+                <div id="twoFAStepTotp" class="profile-2fa-step profile-2fa-totp-setup" style="display: none;">
+                  <div id="twoFATOTPLoading" class="profile-2fa-totp-loading">
+                    <span class="profile-2fa-spinner"></span>
+                    <p class="profile-help">Setting up authenticator…</p>
+                  </div>
+                  <div id="twoFATOTPContent" class="profile-2fa-totp-content" style="display: none;">
+                    <p class="profile-help">Scan the QR code with your authenticator app, or enter the code manually if you're on the same device.</p>
+                    <div id="twoFATOTPQR" class="profile-totp-qr"></div>
+                    <div class="profile-2fa-secret-row">
+                      <label class="profile-help">Can't scan? Enter this code in your app:</label>
+                      <div class="profile-2fa-secret-wrap">
+                        <code id="twoFATOTPSecret" class="profile-totp-secret"></code>
+                        <button type="button" class="btn btn-secondary btn-sm" id="twoFATOTPCopySecret">Copy</button>
+                      </div>
+                    </div>
+                    <div class="profile-2fa-verify-row">
+                      <label class="profile-help">Enter the 6-digit code from your app:</label>
+                      <input type="text" id="twoFATOTPCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
+                      <button type="button" class="btn btn-primary" id="twoFATOTPVerify">Verify and enable</button>
+                    </div>
+                    <p id="twoFATOTPError" class="profile-error" style="display: none;"></p>
+                    <button type="button" class="btn btn-secondary btn-sm profile-2fa-back" id="twoFABackFromTotp">Back</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        const existing = document.getElementById('twoFAModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('twoFAModal');
+
+        const showStep = (stepId) => {
+          ['twoFAStepIntro', 'twoFAStepTotp'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = id === stepId ? 'block' : 'none';
+          });
+        };
+        showStep('twoFAStepIntro');
+
+        const startTotp = document.getElementById('twoFAStartTotp');
+        const backFromTotp = document.getElementById('twoFABackFromTotp');
+        const copySecret = document.getElementById('twoFATOTPCopySecret');
+        const verifyBtn = document.getElementById('twoFATOTPVerify');
+
+        if (startTotp) startTotp.addEventListener('click', async () => {
+          showStep('twoFAStepTotp');
+          await this.startTwoFATOTPSetup();
+        });
+        if (backFromTotp) backFromTotp.addEventListener('click', () => {
+          this._totpEnrollData = null;
+          showStep('twoFAStepIntro');
+        });
+
+        if (copySecret) copySecret.addEventListener('click', () => {
+          const secretEl = document.getElementById('twoFATOTPSecret');
+          if (!secretEl || !secretEl.textContent) return;
+          navigator.clipboard.writeText(secretEl.textContent).then(() => {
+            copySecret.textContent = 'Copied';
+            setTimeout(() => { copySecret.textContent = 'Copy'; }, 2000);
+          }).catch(() => this.showSnackbar('Could not copy', true));
+        });
+
+        if (verifyBtn) verifyBtn.addEventListener('click', async () => {
+          const codeEl = document.getElementById('twoFATOTPCode');
+          const errEl = document.getElementById('twoFATOTPError');
+          const code = codeEl && codeEl.value.trim();
+          if (!code || code.length !== 6) {
+            if (errEl) { errEl.textContent = 'Enter the 6-digit code from your app.'; errEl.style.display = 'block'; }
+            return;
+          }
+          const d = this._totpEnrollData;
+          if (!d) return;
+          const { data: challengeData, error: challengeError } = await supabaseClient.auth.mfa.challenge({ factorId: d.factorId });
+          if (challengeError) {
+            if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
+            return;
+          }
+          const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: d.factorId, challengeId: challengeData.id, code });
+          if (verifyError) {
+            if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
+            return;
+          }
+          this._totpEnrollData = null;
+          await supabaseClient.auth.refreshSession();
+          this.closeModal('twoFAModal');
+          this.showSnackbar('Two-factor authentication is on.');
+          this.closeModal('profileModal');
+          setTimeout(() => this.showProfileModal(), 250);
+        });
+      },
+
+      async startTwoFATOTPSetup() {
+        const loadingEl = document.getElementById('twoFATOTPLoading');
+        const contentEl = document.getElementById('twoFATOTPContent');
+        const qrEl = document.getElementById('twoFATOTPQR');
+        const secretEl = document.getElementById('twoFATOTPSecret');
+        const codeInput = document.getElementById('twoFATOTPCode');
+        const errEl = document.getElementById('twoFATOTPError');
+        if (loadingEl) loadingEl.style.display = 'flex';
+        if (contentEl) contentEl.style.display = 'none';
+        if (codeInput) codeInput.value = '';
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+        const { data, error } = await supabaseClient.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' });
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (error) {
+          this.showSnackbar(error.message || 'Failed to set up authenticator', true);
+          return;
+        }
+        const secret = (data.totp && data.totp.secret) || '';
+        this._totpEnrollData = { factorId: data.id, qrCode: data.totp && data.totp.qr_code, secret };
+        if (contentEl) contentEl.style.display = 'flex';
+        if (qrEl && data.totp && data.totp.qr_code) {
+          qrEl.innerHTML = '';
+          const img = document.createElement('img');
+          img.src = data.totp.qr_code;
+          img.alt = 'TOTP QR code';
+          qrEl.appendChild(img);
+        }
+        if (secretEl) secretEl.textContent = secret || '(use QR code)';
+      },
+
+      async requiresMFAVerification() {
+        if (!supabaseClient) return false;
+        const { data, error } = await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (error || !data) return false;
+        return data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
+      },
+
+      showMFAVerifyModal() {
+        const modalHtml = `
+          <div class="modal" id="mfaVerifyModal">
+            <div class="modal-content profile-modal-content">
+              <button class="modal-close" onclick="App.closeModal('mfaVerifyModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Two-Factor Verification</h3>
+              </div>
+              <div class="modal-body">
+                <p class="profile-help">Enter the 6-digit code from your authenticator app to finish signing in.</p>
+                <div class="profile-2fa-verify-row">
+                  <label class="profile-help">Verification code</label>
+                  <input type="text" id="mfaVerifyCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
+                  <button type="button" class="btn btn-primary" id="mfaVerifySubmit">Verify</button>
+                </div>
+                <p id="mfaVerifyError" class="profile-error" style="display: none;"></p>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="mfaVerifyCancel">Cancel</button>
+              </div>
+            </div>
+          </div>
+        `;
+        const existing = document.getElementById('mfaVerifyModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('mfaVerifyModal');
+
+        const submitBtn = document.getElementById('mfaVerifySubmit');
+        const cancelBtn = document.getElementById('mfaVerifyCancel');
+        const codeInput = document.getElementById('mfaVerifyCode');
+        const errEl = document.getElementById('mfaVerifyError');
+
+        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+          await supabaseClient.auth.signOut();
+          this.closeModal('mfaVerifyModal');
+          this.showSignInModal();
+        });
+
+        if (submitBtn) submitBtn.addEventListener('click', async () => {
+          const code = codeInput && codeInput.value.trim();
+          if (!code || code.length !== 6) {
+            if (errEl) { errEl.textContent = 'Enter the 6-digit code.'; errEl.style.display = 'block'; }
+            return;
+          }
+          const factors = await supabaseClient.auth.mfa.listFactors();
+          const totp = factors.data && factors.data.totp && factors.data.totp[0];
+          if (!totp) {
+            if (errEl) { errEl.textContent = 'No authenticator found.'; errEl.style.display = 'block'; }
+            return;
+          }
+          const { data: challengeData, error: challengeError } = await supabaseClient.auth.mfa.challenge({ factorId: totp.id });
+          if (challengeError) {
+            if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
+            return;
+          }
+          const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: totp.id, challengeId: challengeData.id, code });
+          if (verifyError) {
+            if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
+            return;
+          }
+          this.closeModal('mfaVerifyModal');
+          window.location.reload();
+        });
+      },
+
+      _totpEnrollData: null,
+
+      setTheme(theme) {
+        if (theme !== 'light' && theme !== 'dark') return;
+        localStorage.setItem('theme', theme);
+        document.documentElement.setAttribute('data-theme', theme);
+        var themeToggle = document.querySelector('.theme-toggle');
+        if (themeToggle) themeToggle.setAttribute('data-theme', theme);
+      },
+
+      setFontSizeStep(delta) {
+        const steps = ['small', 'normal', 'large', 'larger'];
+        const current = this.data.settings.fontSize || 'normal';
+        let idx = steps.indexOf(current);
+        if (idx < 0) idx = 1;
+        idx = Math.max(0, Math.min(steps.length - 1, idx + delta));
+        const next = steps[idx];
+        this.data.settings.fontSize = next;
+        document.documentElement.setAttribute('data-font-size', next);
+        this.saveData();
+        const label = document.querySelector('.text-size-label');
+        if (label) label.textContent = next.charAt(0).toUpperCase() + next.slice(1);
+      },
+      
+      showEntityForm(entityType, entityId = '') {
+        const type = this.data.entityTypes[entityType];
+        if (!type) {
+          console.error('Entity type not found:', entityType);
+          return;
+        }
+        
+        const entity = entityId ? this.data.entities[entityId] : null;
+        if (entityId && !entity) {
+          console.error('Entity not found:', entityId);
+          return;
+        }
+        
+        const isEdit = !!entity;
+        if (isEdit && type.enableNameGen) {
+          const nextName = this.generateAutoName(entityType, entity);
+          if (nextName && entity.autoName !== nextName) {
+            entity.autoName = nextName;
+            this.data.entities[entity.id] = entity;
+            this.saveData();
+          }
+        }
+        
+        // Close any open dropdowns
+        document.querySelectorAll('.dropdown-menu').forEach(menu => {
+          menu.style.display = 'none';
+        });
+        
+        // Generate form HTML for actual entity (not entity type)
+        const titleInfo = isEdit ? this.getEntityTitleInfo(entity) : { title: '' };
+        const viewFields = isEdit ? (type.fields || []).map(field => {
+          const value = this.formatFieldValue(field, entity[field.name]);
+          if (!value) return '';
+          const safeLabel = (field.label || '').replace(/</g, '&lt;');
+          const safeValue = String(value).replace(/</g, '&lt;');
+          return `<div class="entity-view-row"><div class="entity-view-label">${safeLabel}</div><div class="entity-view-value">${safeValue}</div></div>`;
+        }).filter(Boolean).join('') : '';
+        const viewAssocs = isEdit ? (type.associations || []).map(assoc => {
+          const name = this.getEntityDisplayName(entity[assoc.name]);
+          if (!name) return '';
+          const safeLabel = (assoc.label || '').replace(/</g, '&lt;');
+          const safeValue = String(name).replace(/</g, '&lt;');
+          return `<div class="entity-view-row"><div class="entity-view-label">${safeLabel}</div><div class="entity-view-value">${safeValue}</div></div>`;
+        }).filter(Boolean).join('') : '';
+        const modalHtml = `
+          <div class="modal" id="entityModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('entityModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>${isEdit ? 'Edit' : 'New'} ${type.label}</h3>
+              </div>
+              ${isEdit ? `
+                <div class="modal-body" id="entityView">
+                  <div class="entity-view-title">${titleInfo.title ? titleInfo.title.replace(/</g, '&lt;') : ''}</div>
+                  <div class="entity-view-grid">
+                    ${viewFields}
+                    ${viewAssocs}
+                  </div>
+                </div>
+              ` : ''}
+              <form id="entityForm" data-type-id="${entityType}" data-entity-id="${entityId || ''}" autocomplete="off" onsubmit="App.saveEntity(event, '${entityType}', '${entityId}')">
+                <div class="form-sections ${isEdit ? 'hidden' : ''}" id="entityEdit">
+                  <!-- Basic Information Section -->
+                  <div class="modal-group carded-section">
+                    <h4>Basic Information</h4>
+                    
+                    ${type.enableNameGen ? `
+                      <div class="form-group">
+                        <label>Name</label>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                          <input type="text" name="name" id="nameInput" value="${type.enableNameGen ? (entity?.autoName || entity?.name || '') : (entity?.name || '')}"
+                                 data-unlocked="false" readonly style="flex: 1;">
+                          <button type="button" class="btn btn-secondary" onclick="App.toggleNameLock(this)"
+                                  title="Unlock to edit name manually">
+                            <span class="material-icons">lock</span>
+                          </button>
+                        </div>
+                        <div class="help-text" id="nameGenStatus">Name will be auto-generated based on fields</div>
+                      </div>
+                    ` : ''}
+                    
+                    ${/* Fields based on the entity type definition */ ''}
+                    ${type.fields.map(field => `
+                      <div class="form-group">
+                        <label for="${field.name}">${field.label}${field.required ? ' *' : ''}</label>
+                        ${this.renderFieldInput(field, entity ? entity[field.name] : '')}
+                      </div>
+                    `).join('')}
+                  </div>
+                  
+                  ${/* Associations Section */ ''}
+                  ${type.associations && type.associations.length > 0 ? `
+                    <div class="modal-group carded-section">
+                      <h4>Links</h4>
+                      ${type.associations.map(assoc => `
+                        <div class="form-group association-field-wrap" data-assoc-name="${assoc.name}">
+                          <label for="${assoc.name}">${assoc.label}</label>
+                          ${this.renderAssociationInput(assoc, entity ? entity[assoc.name] : '')}
+                        </div>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+                
+                <div class="modal-actions">
+                  <div id="entityViewActions" class="${isEdit ? '' : 'hidden'}">
+                    <button type="button" class="btn btn-secondary" onclick="App.closeModal('entityModal')">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="App.showEntityEditMode(true)">
+                      <span class="material-icons">edit</span>
+                      Edit
+                    </button>
+                  </div>
+                  <div id="entityEditActions" class="${isEdit ? 'hidden' : ''}">
+                    <button type="button" class="btn btn-secondary" onclick="App.tryCloseEntityModal()">Cancel</button>
+                    ${isEdit ? `
+                      <button type="button" class="btn btn-danger" onclick="App.confirmDelete('${entityId}')">
+                        <span class="material-icons">delete</span>
+                        Delete
+                      </button>
+                    ` : ''}
+                    <button type="submit" class="btn btn-primary">
+                      <span class="material-icons">save</span>
+                      Save
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('entityModal');
+        
+        // Initialize name generation if needed
+        if (type.enableNameGen) {
+          this.initEntityFormNameGen();
+        }
+
+        const form = document.getElementById('entityForm');
+        if (form) {
+          const snapshot = this.serializeFormData(form);
+          form.dataset.initialSnapshot = snapshot;
+          form.dataset.dirty = 'false';
+          form.addEventListener('input', () => {
+            form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
+          });
+          form.addEventListener('change', () => {
+            form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
+          });
+        }
+      },
+      
+      renderFieldInput(field, value) {
+        switch (field.type) {
+          case 'dropdown':
+            return `
+              <select id="${field.name}" name="${field.name}" ${field.required ? 'required' : ''}>
+                <option value="">Select ${field.label}</option>
+                ${(field.options || []).map(opt => `
+                  <option value="${(opt.value || '').replace(/"/g, '&quot;')}" ${value === opt.value ? 'selected' : ''}>
+                    ${(opt.label || opt.value || '').replace(/</g, '&lt;')}
+                  </option>
+                `).join('')}
+              </select>
+            `;
+          case 'qr':
+            const qrValue = value || '';
+            const qrSrc = qrValue ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(qrValue)}` : '';
+            return `
+              <div class="qr-field-wrap">
+                <input type="text" id="${field.name}" name="${field.name}" value="${qrValue.replace(/"/g, '&quot;')}" readonly>
+                ${qrSrc ? `<img src="${qrSrc}" class="qr-preview" alt="QR code">` : ''}
+              </div>
+              <div class="help-text">QR code is generated on save and stays unique to this item.</div>
+            `;
+          case 'textarea':
+            return `
+              <textarea id="${field.name}" name="${field.name}" autocomplete="off" ${field.required ? 'required' : ''}>${value || ''}</textarea>
+            `;
+          case 'date':
+            return `
+              <input type="date" id="${field.name}" name="${field.name}" value="${value || ''}" ${field.required ? 'required' : ''}>
+            `;
+          case 'number':
+            return `
+              <input type="number" id="${field.name}" name="${field.name}" value="${value != null && value !== '' ? value : ''}" ${field.required ? 'required' : ''}>
+            `;
+          case 'checkbox':
+            const checked = value === true || value === 'on' || value === '1' || value === 'yes';
+            return `<input type="checkbox" id="${field.name}" name="${field.name}" value="yes" ${checked ? 'checked' : ''}>`;
+          default:
+            return `
+              <input type="text" id="${field.name}" name="${field.name}" autocomplete="off" value="${value != null ? value : ''}" ${field.required ? 'required' : ''}>
+            `;
+        }
+      },
+      
+      renderAssociationInput(assoc, value) {
+        const targetType = assoc.association.targetType;
+        const targetTypeLabel = this.data.entityTypes[targetType]?.label || targetType;
+        const options = Object.values(this.data.entities)
+          .filter(e => e.type === targetType);
+        
+        return `
+          <div class="association-field-row">
+            <select id="${assoc.name}" name="${assoc.name}">
+              <option value="">— None —</option>
+              ${options.map(opt => `
+                <option value="${opt.id}" ${value === opt.id ? 'selected' : ''}>
+                  ${this.getEntityDisplayName(opt)}
+                </option>
+              `).join('')}
+            </select>
+            <a href="#" class="association-add-link" data-target-type="${targetType}" data-assoc-name="${assoc.name}" data-target-label="${targetTypeLabel.replace(/"/g, '&quot;')}" onclick="App.showInlineAddEntity(event, this); return false;">
+              <span class="material-icons">add</span> Add ${targetTypeLabel}
+            </a>
+          </div>
+        `;
+      },
+
+      showInlineAddEntity(event, linkEl) {
+        event.preventDefault();
+        const link = linkEl && linkEl.dataset ? linkEl : event.target.closest('.association-add-link');
+        if (!link || !link.dataset) return;
+        const targetType = link.dataset.targetType;
+        const assocName = link.dataset.assocName;
+        const targetLabel = (link.dataset.targetLabel || targetType).replace(/&quot;/g, '"');
+        const wrap = link.closest('.association-field-wrap');
+        if (wrap.querySelector('.inline-add-entity')) return;
+        const type = this.data.entityTypes[targetType];
+        if (!type || !type.fields) return;
+        const fieldsHtml = type.fields.map(f => {
+          const id = `inline_${targetType}_${f.name}`;
+          if (f.type === 'textarea') return `<div class="form-group"><label for="${id}">${f.label}</label><textarea id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></textarea></div>`;
+          if (f.type === 'date') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="date" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
+          if (f.type === 'number') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="number" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
+          if (f.type === 'checkbox') return `<div class="form-group"><label class="checkbox-label"><input type="checkbox" id="${id}" name="${f.name}" value="yes"><span>${f.label}</span></label></div>`;
+          if (f.type === 'dropdown' && f.options && f.options.length) return `<div class="form-group"><label for="${id}">${f.label}</label><select id="${id}" name="${f.name}"><option value="">—</option>${f.options.map(o => `<option value="${o.value}">${o.label || o.value}</option>`).join('')}</select></div>`;
+          return `<div class="form-group"><label for="${id}">${f.label}</label><input type="text" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
+        }).join('');
+        const inlineEl = document.createElement('div');
+        inlineEl.className = 'inline-add-entity';
+        inlineEl.innerHTML = `
+          <div class="inline-add-title">New ${targetLabel}</div>
+          <form class="inline-add-form" data-target-type="${targetType}" data-assoc-name="${assocName}">
+            ${fieldsHtml}
+            <div class="inline-add-actions">
+              <button type="submit" class="btn btn-primary">Add</button>
+              <button type="button" class="btn btn-secondary" onclick="this.closest('.inline-add-entity').remove()">Cancel</button>
+            </div>
+          </form>
+        `;
+        inlineEl.querySelector('form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          const form = e.target;
+          const formData = new FormData(form);
+          const data = { id: this.generateId(), type: targetType };
+          formData.forEach((val, key) => { if (val !== '') data[key] = val; });
+          const t = this.data.entityTypes[targetType];
+          t.fields.filter(f => f.type === 'checkbox').forEach(f => { data[f.name] = formData.get(f.name) === 'yes'; });
+          if (t.enableNameGen) data.autoName = this.generateAutoName(targetType, data);
+          else if (t.fields.some(f => f.name === 'firstName') && t.fields.some(f => f.name === 'lastName')) data.name = [data.firstName, data.lastName].filter(Boolean).join(' ').trim() || '';
+          else if (t.fields.some(f => f.name === 'name')) data.name = data.name || '';
+          this.data.entities[data.id] = data;
+          this.saveData();
+          const select = wrap.querySelector(`select[name="${assocName}"]`);
+          if (select) {
+            const opt = document.createElement('option');
+            opt.value = data.id;
+            opt.textContent = this.getEntityDisplayName(data);
+            opt.selected = true;
+            select.appendChild(opt);
+          }
+          inlineEl.remove();
+          this.showNotification(`${targetLabel} added`, 'success');
+        });
+        wrap.appendChild(inlineEl);
+      },
+      
+      saveEntity(event, entityType, entityId) {
+        event.preventDefault();
+        const form = event.target;
+        const formData = new FormData(form);
+        const type = this.data.entityTypes[entityType];
+        
+        // Start with existing data if editing
+        const data = entityId ? { ...this.data.entities[entityId] } : { id: this.generateId(), type: entityType };
+        
+        for (let [key, value] of formData.entries()) {
+          if (value !== '') data[key] = value;
+        }
+        type.fields.filter(f => f.type === 'checkbox').forEach(f => {
+          data[f.name] = formData.get(f.name) === 'yes';
+        });
+
+        // Generate auto name if needed
+        if (type.enableNameGen) {
+          const nameInput = form.querySelector('#nameInput');
+          const unlocked = nameInput && nameInput.dataset.unlocked === 'true';
+          data.autoName = this.generateAutoName(entityType, data, data.id);
+          if (!unlocked) {
+            delete data.name;
+          } else if (formData.get('name')) {
+            data.name = formData.get('name');
+          }
+        } else if (type.fields.some(f => f.name === 'firstName') && type.fields.some(f => f.name === 'lastName')) {
+          data.name = [data.firstName, data.lastName].filter(Boolean).join(' ').trim() || data.name || '';
+        } else if (data.name) {
+          data.name = data.name;
+        }
+
+        type.fields.filter(f => f.type === 'qr').forEach(f => {
+          if (!data[f.name]) data[f.name] = data.id;
+        });
+        
+        // Save the entity
+        this.data.entities[data.id] = data;
+        
+        this.saveData();
+        this.closeEntityModal();
+        this.loadView(type.category);
+        this.showNotification(`Entity ${entityId ? 'updated' : 'created'} successfully`, 'success');
+      },
+      
+      deleteEntity(entityId) {
+        const entity = this.data.entities[entityId];
+        if (!entity) return;
+        
+        const confirmModal = `
+          <div class="modal" id="confirmDeleteModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('confirmDeleteModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Confirm Delete</h3>
+              </div>
+              <p>Are you sure you want to delete this item?</p>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteModal')">Cancel</button>
+                <button class="btn btn-danger" onclick="App.deleteEntity('${entityId}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = confirmModal;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('confirmDeleteModal');
+      },
+      
+      confirmDelete(entityId) {
+        const entity = this.data.entities[entityId];
+        const category = this.data.entityTypes[entity.type].category;
+        
+        delete this.data.entities[entityId];
+        this.saveData();
+        
+        document.getElementById('confirmDeleteModal').remove();
+        this.closeEntityModal();
+        this.loadView(category);
+        this.showNotification('Entity deleted successfully', 'success');
+      },
+      
+      closeEntityModal() {
+        this.closeModal('entityModal');
+      },
+
+      tryCloseEntityModal() {
+        const form = document.getElementById('entityForm');
+        if (!form || !document.getElementById('entityModal')) return;
+        const dirty = form.dataset.dirty === 'true';
+        if (!dirty) {
+          this.closeModal('entityModal');
+          return;
+        }
+        this.showConfirmModal({
+          title: 'Save changes?',
+          message: 'Save changes before closing this item?',
+          confirmLabel: 'Save changes',
+          cancelLabel: 'Discard',
+          confirmVariant: 'primary',
+          onConfirm: () => form.requestSubmit(),
+          onCancel: () => this.closeModal('entityModal')
+        });
+      },
+
+      serializeFormData(form) {
+        const data = [];
+        const formData = new FormData(form);
+        formData.forEach((value, key) => {
+          data.push([key, String(value)]);
+        });
+        return JSON.stringify(data.sort((a, b) => a[0].localeCompare(b[0])));
+      },
+      
+      showCategoryManager() {
+        const modalHtml = `
+          <div class="modal" id="categoryManagerModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('categoryManagerModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Manage Categories</h3>
+              </div>
+              <div class="modal-body" style="padding-top: 0">
+                <div class="category-list">
+                  ${Object.values(this.data.categories).map(category => `
+                    <div class="category-item">
+                      <div class="category-info">
+                        <span class="material-icons">${category.icon}</span>
+                        <span>${category.label}</span>
+                      </div>
+                      <div class="category-actions">
+                        <button class="btn btn-secondary" title="Edit" onclick="App.editCategory('${category.id}')">
+                          <span class="material-icons">edit</span>
+                        </button>
+                        <button class="btn btn-danger" title="Delete" onclick="App.deleteCategory('${category.id}')">
+                          <span class="material-icons">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeCategoryManager()">Close</button>
+                <button class="btn btn-primary" onclick="App.showCategoryForm()">
+                  <span class="material-icons">add</span>
+                  New Category
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('categoryManagerModal');
+      },
+            
+      closeCategoryManager() {
+        this.closeModal('categoryManagerModal');
+      },
+      
+      showCategoryForm(categoryId = '') {
+        const category = categoryId ? this.data.categories[categoryId] : null;
+        const isEdit = !!category;
+        
+        const modalHtml = `
+          <div class="modal" id="categoryFormModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('categoryFormModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>${isEdit ? 'Edit' : 'New'} Category</h3>
+              </div>
+              <form id="categoryForm" onsubmit="App.saveCategory(event, '${categoryId}')">
+                      <div class="form-group">
+                  <label for="label">Category Name *</label>
+                  <input type="text" name="label" value="${category?.label || ''}" required>
+                          </div>
+                
+                      <div class="form-group">
+                  <label for="icon">Icon</label>
+                  <div class="icon-select" onclick="App.showIconPicker('categoryIcon')">
+                    <span class="material-icons">${category?.icon || 'folder'}</span>
+                    <input type="hidden" name="icon" id="categoryIcon" value="${category?.icon || 'folder'}">
+                    <span class="icon-select-text">Click to change icon</span>
+                    </div>
+                  </div>
+
+                      <div class="form-group">
+                        <label class="checkbox-label">
+                    <input type="checkbox" name="visibleInDashboard" 
+                           ${category?.visibleInDashboard !== false ? 'checked' : ''}>
+                    <span>Show in Dashboard</span>
+                        </label>
+                </div>
+                
+                <div class="modal-actions">
+                  <button type="button" class="btn btn-secondary" onclick="App.closeCategoryForm()">
+                    Cancel
+                    </button>
+                  <button type="submit" class="btn btn-primary">
+                    <span class="material-icons">${isEdit ? 'save' : 'add'}</span>
+                    ${isEdit ? 'Save' : 'Create'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('categoryFormModal');
+      },
+      
+      closeCategoryForm() {
+        this.closeModal('categoryFormModal');
+      },
+      
+      saveCategory(event, categoryId) {
+        event.preventDefault();
+        const form = event.target;
+        const formData = new FormData(form);
+        const data = {
+          label: formData.get('label'),
+          icon: formData.get('icon'),
+          visibleInDashboard: formData.get('visibleInDashboard') === 'on'
+        };
+        
+        if (categoryId) {
+          // Update existing category
+          this.data.categories[categoryId] = {
+            ...this.data.categories[categoryId],
+            ...data
+          };
+        } else {
+          // Create new category
+          const newId = this.generateId();
+          this.data.categories[newId] = {
+            id: newId,
+            ...data
+          };
+        }
+        
+        this.saveData();
+        this.closeCategoryForm();
+        this.closeCategoryManager();
+        this.renderSidebar();
+        this.loadView('dashboard');
+        this.showNotification(`Category ${categoryId ? 'updated' : 'created'} successfully`, 'success');
+      },
+      
+      editCategory(categoryId) {
+        this.showCategoryForm(categoryId);
+      },
+      
+      deleteCategory(categoryId) {
+        const category = this.data.categories[categoryId];
+        if (!category) return;
+        
+        const hasEntities = Object.values(this.data.entities)
+          .some(entity => this.data.entityTypes[entity.type]?.category === categoryId);
+        
+        const confirmModal = `
+          <div class="modal" id="confirmDeleteCategoryModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('confirmDeleteCategoryModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Confirm Delete Category</h3>
+              </div>
+              ${hasEntities ? `
+                <p class="text-danger">Warning: This category contains entities. Deleting it will also delete all associated entities.</p>
+              ` : ''}
+              <p>Are you sure you want to delete the category "${category.label}"?</p>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteCategoryModal')">Cancel</button>
+                <button class="btn btn-danger" onclick="App.confirmDeleteCategory('${categoryId}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = confirmModal;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('confirmDeleteCategoryModal');
+      },
+      
+      confirmDeleteCategory(categoryId) {
+        // Delete all entities in this category
+        Object.entries(this.data.entities).forEach(([entityId, entity]) => {
+          if (this.data.entityTypes[entity.type]?.category === categoryId) {
+            delete this.data.entities[entityId];
+          }
+        });
+        
+        // Delete the category
+        delete this.data.categories[categoryId];
+        
+        this.saveData();
+        document.getElementById('confirmDeleteCategoryModal').remove();
+        this.closeCategoryManager();
+        this.renderSidebar();
+        this.loadView('dashboard');
+        this.showNotification('Category deleted successfully', 'success');
+      },
+      
+      showIconPicker(targetInputId) {
+        const iconPickerModal = document.getElementById('iconPickerModal');
+        if (iconPickerModal) {
+          iconPickerModal.style.display = 'flex';
+          
+          // Add click handlers to icon options
+          const iconOptions = iconPickerModal.querySelectorAll('.icon-option');
+          iconOptions.forEach(option => {
+            option.onclick = () => {
+              const icon = option.dataset.icon;
+              document.getElementById(targetInputId).value = icon;
+              const iconPreview = document.querySelector('.icon-select .material-icons');
+              if (iconPreview) {
+                iconPreview.textContent = icon;
+              }
+              this.closeIconPicker();
+            };
+          });
+        }
+      },
+      
+      closeIconPicker() {
+        this.closeModal('iconPickerModal');
+      },
+      
+      generateAutoName(entityType, data, currentId) {
+        const type = this.data.entityTypes[entityType];
+        if (!type || !type.enableNameGen) return '';
+
+        let name = this.buildAutoNameBase(entityType, data);
+        if (!name) return '';
+        const excludeId = currentId || data.id;
+
+        // Check if we need to add a suffix (exclude current entity)
+        const baseNameEntities = Object.values(this.data.entities)
+          .filter(e => e.type === entityType && e.id !== excludeId && this.buildAutoNameBase(entityType, e) === name);
+
+        if (baseNameEntities.length > 0) {
+          // We need to add a suffix
+          if (type.nameGen.suffixType === 'number') {
+            let suffix = 1;
+            let suffixName;
+            do {
+              suffixName = name + suffix.toString().padStart(2, '0');
+              suffix++;
+            } while (baseNameEntities.some(e => e.autoName === suffixName));
+            name = suffixName;
+          } else if (type.nameGen.suffixType === 'letter') {
+            let suffix = 'A';
+            let suffixName;
+            do {
+              suffixName = name + suffix;
+              suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
+            } while (baseNameEntities.some(e => e.autoName === suffixName) && suffix <= 'Z');
+            name = suffixName;
+          }
+        }
+
+        return name;
+      },
+
+      buildAutoNameBase(entityType, data) {
+        const type = this.data.entityTypes[entityType];
+        if (!type || !type.enableNameGen) return '';
+
+        const prefix = type.nameGen?.prefix || '';
+        const componentsOrder = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
+        const fields = Array.isArray(type.fields) ? type.fields : [];
+        const fieldMap = new Map(fields.map(f => [f.name, f]));
+        const components = componentsOrder.length
+          ? componentsOrder
+          : fields.filter(f => f.partOfName).map(f => ({ type: 'field', name: f.name }));
+
+        const parts = [];
+        let pendingSeparator = null;
+        components.forEach((component) => {
+          if (typeof component === 'string') {
+            const field = fieldMap.get(component);
+            const value = field && field.partOfName ? data[field.name] : '';
+            if (value) {
+              if (parts.length > 0 && pendingSeparator != null) {
+                parts.push(pendingSeparator);
+              }
+              pendingSeparator = null;
+              const option = field.options?.find(opt => opt.value === value);
+              parts.push(option && option.nameValue ? option.nameValue : value);
+            }
+            return;
+          }
+          if (component && component.type === 'separator') {
+            pendingSeparator = component.value != null ? String(component.value) : '';
+            return;
+          }
+          if (component && component.type === 'field') {
+            const field = fieldMap.get(component.name);
+            if (!field || !field.partOfName) return;
+            const value = data[field.name];
+            if (!value) return;
+            if (parts.length > 0 && pendingSeparator != null) {
+              parts.push(pendingSeparator);
+            }
+            pendingSeparator = null;
+            const option = field.options?.find(opt => opt.value === value);
+            parts.push(option && option.nameValue ? option.nameValue : value);
+          }
+        });
+
+        return prefix + parts.join('');
+      },
+
+      normalizeAutoNames() {
+        let changed = false;
+        const byType = {};
+        Object.values(this.data.entities || {}).forEach(entity => {
+          const type = this.data.entityTypes[entity.type];
+          if (!type || !type.enableNameGen) return;
+          const baseName = this.buildAutoNameBase(entity.type, entity) || '';
+          if (!baseName) {
+            if (entity.autoName) {
+              entity.autoName = '';
+              changed = true;
+            }
+            return;
+          }
+          if (!byType[entity.type]) byType[entity.type] = {};
+          if (!byType[entity.type][baseName]) byType[entity.type][baseName] = [];
+          byType[entity.type][baseName].push(entity);
+        });
+
+        Object.entries(byType).forEach(([typeId, groups]) => {
+          const type = this.data.entityTypes[typeId];
+          Object.entries(groups).forEach(([baseName, list]) => {
+            if (!baseName) return;
+            const sorted = list.slice().sort((a, b) => a.id.localeCompare(b.id));
+            if (sorted.length === 1) {
+              const single = sorted[0];
+              if (single.autoName !== baseName) {
+                single.autoName = baseName;
+                changed = true;
+              }
+              if (single.name && single.name.startsWith(baseName)) {
+                const tail = single.name.slice(baseName.length);
+                const looksLikeSuffix = (tail.length === 2 && /^\d+$/.test(tail)) || (tail.length === 1 && /^[A-Z]$/.test(tail));
+                if (looksLikeSuffix) {
+                  delete single.name;
+                  changed = true;
+                }
+              }
+              return;
+            }
+            if (type.nameGen.suffixType === 'letter') {
+              let suffix = 'A';
+              sorted.forEach(entity => {
+                const next = baseName + suffix;
+                if (entity.autoName !== next) {
+                  entity.autoName = next;
+                  changed = true;
+                }
+                suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
+              });
+              return;
+            }
+            let idx = 1;
+            sorted.forEach(entity => {
+              const next = baseName + String(idx).padStart(2, '0');
+              if (entity.autoName !== next) {
+                entity.autoName = next;
+                changed = true;
+              }
+              idx += 1;
+            });
+          });
+        });
+        return changed;
+      },
+
+      normalizeNameComponents() {
+        let changed = false;
+        Object.values(this.data.entityTypes || {}).forEach(type => {
+          if (!Array.isArray(type.fields)) return;
+          const entities = Object.values(this.data.entities || {}).filter(entity => entity.type === type.id);
+          const toCamel = (label) => {
+            const parts = (label || '').toString().trim().split(/[^a-zA-Z0-9]+/).filter(Boolean);
+            if (!parts.length) return '';
+            return parts
+              .map((part, idx) => {
+                const lower = part.toLowerCase();
+                if (idx === 0) return lower;
+                return lower.charAt(0).toUpperCase() + lower.slice(1);
+              })
+              .join('');
+          };
+          const hasAnyValue = (key) => entities.some(entity => entity[key] != null && entity[key] !== '');
+          const moveEntityField = (fromKey, toKey) => {
+            entities.forEach(entity => {
+              if (entity[fromKey] != null && entity[fromKey] !== '' && (entity[toKey] == null || entity[toKey] === '')) {
+                entity[toKey] = entity[fromKey];
+                delete entity[fromKey];
+                changed = true;
+              }
+            });
+          };
+          const nameSet = new Set(type.fields.map(field => field.name).filter(Boolean));
+          type.fields.forEach(field => {
+            const current = (field.name || '').toString();
+            const candidate = toCamel(field.label);
+            if (!current && candidate && !nameSet.has(candidate)) {
+              field.name = candidate;
+              nameSet.add(candidate);
+              changed = true;
+              return;
+            }
+            if (current && !hasAnyValue(current) && candidate && candidate !== current && !nameSet.has(candidate) && hasAnyValue(candidate)) {
+              const oldName = current;
+              field.name = candidate;
+              nameSet.delete(oldName);
+              nameSet.add(candidate);
+              if (Array.isArray(type.nameGen?.componentsOrder)) {
+                type.nameGen.componentsOrder = type.nameGen.componentsOrder.map(item => {
+                  if (typeof item === 'string' && item === oldName) return candidate;
+                  if (item && item.type === 'field' && item.name === oldName) return { ...item, name: candidate };
+                  return item;
+                });
+              }
+              moveEntityField(oldName, candidate);
+              changed = true;
+            }
+          });
+          if (!type.enableNameGen) return;
+          const fields = type.fields.filter(f => f.partOfName);
+          const fieldNames = new Set(fields.map(f => f.name));
+          const order = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
+          if (order.length === 0) return;
+
+          const remainingFields = new Set(fieldNames);
+          const normalized = [];
+          for (let i = 0; i < order.length; i++) {
+            const item = order[i];
+            const nextFieldExists = (() => {
+              for (let j = i + 1; j < order.length; j++) {
+                const next = order[j];
+                if (next && next.type === 'field' && fieldNames.has(next.name)) return true;
+                if (typeof next === 'string' && fieldNames.has(next)) return true;
+              }
+              return remainingFields.size > 0;
+            })();
+            if (item && item.type === 'separator') {
+              const last = normalized[normalized.length - 1];
+              if (!last || last.type !== 'field' || !nextFieldExists) continue;
+              normalized.push({ type: 'separator', value: item.value });
+              continue;
+            }
+            const fieldName = typeof item === 'string' ? item : item?.name;
+            if (fieldName && fieldNames.has(fieldName)) {
+              normalized.push({ type: 'field', name: fieldName });
+              remainingFields.delete(fieldName);
+            }
+          }
+          fields.forEach(field => {
+            if (remainingFields.has(field.name)) {
+              normalized.push({ type: 'field', name: field.name });
+            }
+          });
+          if (!normalized.some(item => item.type === 'field') && fields.length > 0) {
+            normalized.length = 0;
+            fields.forEach(field => normalized.push({ type: 'field', name: field.name }));
+          }
+          if (fieldNames.has('firstName') && fieldNames.has('lastName')) {
+            const firstIdx = normalized.findIndex(i => i.type === 'field' && i.name === 'firstName');
+            const lastIdx = normalized.findIndex(i => i.type === 'field' && i.name === 'lastName');
+            if (firstIdx !== -1 && lastIdx !== -1) {
+              const between = normalized.slice(Math.min(firstIdx, lastIdx) + 1, Math.max(firstIdx, lastIdx));
+              const hasSeparatorBetween = between.some(i => i.type === 'separator');
+              if (!hasSeparatorBetween) {
+                normalized.splice(firstIdx + 1, 0, { type: 'separator', value: ' ' });
+              }
+            }
+          }
+          if (normalized.length && normalized[0]?.type === 'separator') {
+            normalized.shift();
+          }
+          if (normalized.length && normalized[normalized.length - 1]?.type === 'separator') {
+            normalized.pop();
+          }
+          if (JSON.stringify(type.nameGen.componentsOrder) !== JSON.stringify(normalized)) {
+            type.nameGen.componentsOrder = normalized;
+            changed = true;
+          }
+        });
+        return changed;
+      },
+
+      normalizeTitleSettings() {
+        let changed = false;
+        Object.values(this.data.entityTypes || {}).forEach(type => {
+          if (!type.enableNameGen || !Array.isArray(type.fields)) return;
+          const hasTitleField = type.fields.some(f => f.useAsTitle);
+          if (type.useAutoNameAsTitle === undefined && !hasTitleField) {
+            type.useAutoNameAsTitle = true;
+            changed = true;
+          }
+        });
+        return changed;
+      },
+      
+      showEntityTypeManager() {
+        const modalHtml = `
+          <div class="modal" id="entityTypeManagerModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('entityTypeManagerModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Manage Entity Types</h3>
+              </div>
+              <div class="modal-body" style="padding-top: 0">
+                <div class="entity-type-list">
+                  ${Object.values(this.data.entityTypes).map(type => `
+                    <div class="category-item entity-type-row">
+                      <div class="category-info">
+                        <span class="material-icons">${type.icon}</span>
+                        <span>${type.label}</span>
+                      </div>
+                      <div class="category-actions">
+                        <button class="btn btn-secondary" title="Edit" onclick="App.editEntityType('${type.id}')">
+                          <span class="material-icons">edit</span>
+                        </button>
+                        <button class="btn btn-danger" title="Delete" onclick="App.deleteEntityType('${type.id}')">
+                          <span class="material-icons">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <div class="modal-actions" style="flex-wrap: wrap; gap: 0.5rem;">
+                <button class="btn btn-secondary" onclick="App.closeEntityTypeManager()">Close</button>
+                <div class="dropdown">
+                  <button type="button" class="btn btn-secondary" onclick="App.toggleDropdown(event, this)">
+                    <span class="material-icons">content_copy</span>
+                    Add from template
+                  </button>
+                  <div class="dropdown-menu" style="display: none; max-height: 280px; overflow-y: auto;">
+                    ${this._getTemplateTypeOptions()}
+                  </div>
+                </div>
+                <button class="btn btn-primary" onclick="App.showEntityTypeForm()">
+                  <span class="material-icons">add</span>
+                  New entity type
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('entityTypeManagerModal');
+        document.querySelectorAll('#entityTypeManagerModal .template-type-link').forEach(link => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const preset = link.dataset.preset;
+            const typeId = link.dataset.type;
+            if (preset && typeId) this.addEntityTypeFromTemplate(preset, typeId);
+          });
+        });
+      },
+
+      _getTemplateTypeOptions() {
+        const out = [];
+        ['it', 'library', 'staff', 'property'].forEach(presetKey => {
+          const preset = this._presets[presetKey];
+          if (!preset || !preset.entityTypes) return;
+          Object.entries(preset.entityTypes).forEach(([typeId, type]) => {
+            out.push(`<a href="#" class="template-type-link" data-preset="${presetKey}" data-type="${typeId}">${type.label}</a>`);
+          });
+        });
+        return out.length ? out.join('') : '<span style="padding: 0.75rem; color: var(--text-secondary);">No templates</span>';
+      },
+      
+      showEntityTypeForm() {
+        const categoryIds = Object.keys(this.data.categories);
+        if (categoryIds.length === 0) {
+          this.showNotification('Add a category first (Settings → Manage Categories)', 'info');
+          return;
+        }
+        const firstCategoryId = categoryIds[0];
+        const emptyType = {
+          label: '',
+          category: firstCategoryId,
+          icon: 'folder',
+          enableNameGen: false,
+          nameGen: { prefix: '', partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] },
+          fields: [],
+          associations: []
+        };
+        this.editEntityType('', emptyType);
+      },
+
+      addEntityTypeFromTemplate(presetKey, typeId) {
+        const preset = this._presets[presetKey];
+        const type = preset && preset.entityTypes && preset.entityTypes[typeId];
+        if (!type) return;
+        const cloned = JSON.parse(JSON.stringify(type));
+        cloned.id = this.generateId();
+        const targetCategoryId = this.data.categories[type.category] ? type.category : null;
+        if (targetCategoryId) {
+          cloned.category = targetCategoryId;
+        } else if (preset.categories && preset.categories[type.category]) {
+          this.data.categories[type.category] = JSON.parse(JSON.stringify(preset.categories[type.category]));
+          cloned.category = type.category;
+        } else {
+          const categoryIds = Object.keys(this.data.categories);
+          if (categoryIds.length === 0) {
+            this.showNotification('Add a category first (Settings → Manage Categories)', 'info');
+            return;
+          }
+          cloned.category = categoryIds[0];
+        }
+        cloned.label = cloned.label + ' (copy)';
+        this.data.entityTypes[cloned.id] = cloned;
+        this.saveData();
+        this.closeModal('entityTypeManagerModal');
+        this.renderSidebar();
+        this.loadView('dashboard');
+        this.showNotification(`Added "${type.label}" from template`, 'success');
+      },
+
+      editEntityType(typeId, typeDataOverride) {
+        const type = typeDataOverride || this.data.entityTypes[typeId];
+        if (!type) return;
+        this._editingEntityType = typeDataOverride || null;
+        if (!typeDataOverride) {
+          const changed = this.normalizeNameComponents();
+          if (changed) this.saveData();
+        }
+        const nameComponentsHtml = (() => {
+          const fields = Array.isArray(type.fields) ? type.fields.filter(f => f.partOfName) : [];
+          const fieldMap = new Map(fields.map(f => [f.name, f]));
+          const order = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
+          const hasFirstLast = fieldMap.has('firstName') && fieldMap.has('lastName');
+          const used = new Set();
+          const parts = [];
+          const renderField = (field) => {
+            used.add(field.name);
+            return `
+              <div class="name-component-item sortable-item" data-component-type="field" data-field-name="${field.name}">
+                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                <span class="name-component-label">${field.label}</span>
+              </div>
+            `;
+          };
+          const renderSeparator = (value) => {
+            const raw = value == null ? '' : String(value);
+            if (!raw) return '';
+            const label = raw === ' ' ? 'Space' : raw === '-' ? 'Dash' : raw === '_' ? 'Underscore' : raw === '.' ? 'Dot' : raw;
+            return `
+              <div class="name-component-item name-separator-item sortable-item" data-component-type="separator" data-separator-value="${encodeURIComponent(raw).replace(/"/g, '&quot;')}">
+                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                <span class="separator-pill">${label}</span>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.name-component-item').remove(); App.updateNamePreview();">Remove</button>
+              </div>
+            `;
+          };
+          if (order.length) {
+            const normalizedOrder = [];
+            let lastWasField = false;
+            let sawSeparator = false;
+            const hasFieldAhead = (startIdx) => {
+              for (let i = startIdx + 1; i < order.length; i += 1) {
+                const next = order[i];
+                const nextName = typeof next === 'string' ? next : next?.name;
+                if (next && next.type === 'field' && fieldMap.has(next.name)) return true;
+                if (typeof next === 'string' && fieldMap.has(nextName)) return true;
+              }
+              return false;
+            };
+            order.forEach((item, idx) => {
+              if (typeof item === 'string') {
+                const field = fieldMap.get(item);
+                if (field) {
+                  normalizedOrder.push({ type: 'field', name: field.name });
+                  lastWasField = true;
+                }
+                return;
+              }
+              if (item && item.type === 'field') {
+                const field = fieldMap.get(item.name);
+                if (field) {
+                  normalizedOrder.push({ type: 'field', name: field.name });
+                  lastWasField = true;
+                }
+              } else if (item && item.type === 'separator') {
+                sawSeparator = true;
+                if (!lastWasField) return;
+                if (!hasFieldAhead(idx)) return;
+                normalizedOrder.push({ type: 'separator', value: item.value });
+                lastWasField = false;
+              }
+            });
+            if (sawSeparator && !normalizedOrder.some(i => i.type === 'separator')) {
+              const fieldItems = normalizedOrder.filter(i => i.type === 'field');
+              if (fieldItems.length >= 2) {
+                const insertAt = normalizedOrder.findIndex(i => i.type === 'field');
+                normalizedOrder.splice(insertAt + 1, 0, { type: 'separator', value: ' ' });
+              }
+            }
+            normalizedOrder.forEach((item) => {
+              if (item.type === 'field') {
+                const field = fieldMap.get(item.name);
+                if (field) parts.push(renderField(field));
+                return;
+              }
+              if (item.type === 'separator') {
+                const sep = renderSeparator(item.value);
+                if (sep) parts.push(sep);
+              }
+            });
+          }
+          if (!order.length && hasFirstLast) {
+            parts.push(renderField(fieldMap.get('firstName')));
+            parts.push(renderSeparator(' '));
+            parts.push(renderField(fieldMap.get('lastName')));
+          }
+          fields.forEach(field => {
+            if (!used.has(field.name)) parts.push(renderField(field));
+          });
+          return parts.join('');
+        })();
+
+        const modalHtml = `
+          <div class="modal" id="entityTypeFormModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeEntityTypeForm()">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>${typeId ? type.label : 'New entity type'}</h3>
+              </div>
+              <div class="modal-body">
+                <form id="entityTypeForm" data-type-id="${typeId || ''}" onsubmit="App.saveEntityType(event, '${typeId || ''}')">
+                  <div class="entity-type-editor">
+                    <div class="carded-section modal-group">
+                      <div class="entity-type-header">
+                        <div class="form-group">
+                          <label for="label">Label *</label>
+                          <input type="text" name="label" value="${type.label}" required>
+                        </div>
+                        <div class="form-group">
+                          <label for="category">Category *</label>
+                          <select name="category" required>
+                            ${Object.values(this.data.categories).map(cat => `
+                              <option value="${cat.id}" ${type.category === cat.id ? 'selected' : ''}>
+                                ${cat.label}
+                              </option>
+                            `).join('')}
+                          </select>
+                        </div>
+                        <div class="form-group">
+                          <label for="icon">Icon</label>
+                          <div class="icon-select" onclick="App.showIconPicker('entityTypeIcon')">
+                            <span class="material-icons">${type.icon}</span>
+                            <input type="hidden" name="icon" id="entityTypeIcon" value="${type.icon}">
+                            <span class="icon-select-text">Click to change icon</span>
+                          </div>
+                        </div>
+                        <div class="form-group name-gen-header">
+                          <div class="name-gen-title">Name/ID generator</div>
+                          <div class="name-gen-options">
+                            <label class="checkbox-label">
+                              <input type="checkbox" name="enableNameGen" ${type.enableNameGen ? 'checked' : ''}
+                                     onchange="App.toggleNameGenSection(this)">
+                              <span>Enable</span>
+                            </label>
+                            <label class="checkbox-label">
+                              <input type="checkbox" name="useAutoNameAsTitle" ${type.useAutoNameAsTitle ? 'checked' : ''} ${type.enableNameGen ? '' : 'disabled'}
+                                     onchange="App.toggleUseAutoNameAsTitle(this)">
+                              <span>Use as title</span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="modal-group carded-section name-generation-settings" style="display: ${type.enableNameGen ? 'block' : 'none'}">
+                      <h4>Name Generation Settings</h4>
+                      <div class="name-generation-grid">
+                        <div class="form-group">
+                          <label for="namePrefix">Name Prefix</label>
+                          <input type="text" name="namePrefix" value="${type.nameGen?.prefix || ''}" onchange="App.updateNamePreview()">
+                        </div>
+                        <div class="form-group">
+                          <label for="suffixType">Suffix Type</label>
+                          <select name="suffixType" onchange="App.updateNamePreview()">
+                            <option value="number" ${type.nameGen?.suffixType === 'number' ? 'selected' : ''}>Numbers (1, 2, 3...)</option>
+                            <option value="letter" ${type.nameGen?.suffixType === 'letter' ? 'selected' : ''}>Letters (A, B, C...)</option>
+                          </select>
+                          <div class="help-text">Only added for duplicate names</div>
+                        </div>
+                      </div>
+                      <div class="name-components-section">
+                        <label>Name Components Order</label>
+                        <div class="name-components-container">
+                          <div id="nameComponentsList" class="sortable-list">
+                            ${nameComponentsHtml}
+                          </div>
+                        </div>
+                      </div>
+                      <div class="name-separator-actions">
+                        <label>Add separator</label>
+                        <div class="separator-buttons">
+                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator(' ')">Space</button>
+                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('-')">Dash</button>
+                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('_')">Underscore</button>
+                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('.')">Dot</button>
+                        </div>
+                        <div class="custom-separator">
+                          <input type="text" id="customSeparatorInput" placeholder="Custom separator">
+                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator(document.getElementById('customSeparatorInput').value)">Insert</button>
+                        </div>
+                        <p class="help-text">Separators appear where they sit in the list. Drag to place between name parts.</p>
+                      </div>
+                      <div class="name-preview">
+                        <label>Preview</label>
+                        <div class="preview-box">
+                          <div class="preview-label">Example name</div>
+                          <div id="namePreview" class="preview-value"></div>
+                        </div>
+                        <div class="preview-box preview-secondary">
+                          <div class="preview-label">If duplicate (adds suffix)</div>
+                          <div id="suffixPreview" class="preview-value"></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="modal-group carded-section">
+                      <h4>Fields</h4>
+                      <div class="sortable-list" id="fieldsContainer">
+                        ${type.fields.map((field, index) => `
+                            <div class="field-card sortable-item" data-index="${index}" data-field-name="${field.name}">
+                              <div class="field-label-row" style="display:flex;align-items:center;gap:.7em;">
+                                <span class="material-icons drag-handle" title="Drag to reorder" style="margin-right:.2em;">drag_indicator</span>
+                                <strong style="flex:1;text-align:left;font-weight:500;">${field.label}</strong>
+                                <button type="button" class="collapse-btn" title="Expand/collapse field" onclick="this.closest('.field-card').classList.toggle('collapsed');event.stopPropagation();">
+                                    <span class="material-icons">unfold_less</span>
+                                </button>
+                              </div>
+                              <div class="field-details">
+                                <div class="form-group">
+                                  <label>Label *</label>
+                                  <input type="text" name="fields[${index}].label" value="${field.label}" required>
+                                  <input type="hidden" name="fields[${index}].name" value="${field.label?.toLowerCase().replace(/\\s+/g, '_') || ''}">
+                                </div>
+                                <div class="form-group">
+                                  <label>Type *</label>
+                                  <select name="fields[${index}].type" onchange="App.handleFieldTypeChange(this)">
+                                    <option value="text" ${field.type === 'text' ? 'selected' : ''}>Text</option>
+                                    <option value="number" ${field.type === 'number' ? 'selected' : ''}>Number</option>
+                                    <option value="dropdown" ${field.type === 'dropdown' ? 'selected' : ''}>Dropdown</option>
+                                    <option value="textarea" ${field.type === 'textarea' ? 'selected' : ''}>Textarea</option>
+                                    <option value="date" ${field.type === 'date' ? 'selected' : ''}>Date</option>
+                                    <option value="checkbox" ${field.type === 'checkbox' ? 'selected' : ''}>Checkbox</option>
+                                    <option value="qr" ${field.type === 'qr' ? 'selected' : ''}>QR Code</option>
+                                  </select>
+                                </div>
+                                ${field.type === 'dropdown' ? `
+                                  <div class="option-row option-header">
+                                    <span>Display Value</span>
+                                    <span>Name Value</span>
+                                    <span></span>
+                                  </div>
+                                  <div class="option-rows-container" data-field-index="${index}">
+                                  ${(field.options || []).map((opt, oIdx) => `
+                                    <div class="option-row" data-option-index="${oIdx}">
+                                      <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                                      <input type="text" name="fields[${index}].options[${oIdx}].value" value="${opt.value}">
+                                      <input type="text" name="fields[${index}].options[${oIdx}].nameValue" value="${opt.nameValue || ''}">
+                                      <button type="button" class="btn btn-danger" onclick="App.removeOption(${index}, ${oIdx})">
+                                        <span class="material-icons">remove</span>
+                                      </button>
+                                    </div>
+                                  `).join('')}
+                                  </div>
+                                  <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${index})">Add Option</button>
+                                ` : ''}
+                                <div class="checkbox-group" style="display: flex; gap: 1.1em;">
+                                  <label class="checkbox-label">
+                                    <input type="checkbox" name="fields[${index}].required" ${field.required ? 'checked' : ''}>
+                                    <span>Required</span>
+                                  </label>
+                                  <label class="checkbox-label">
+                                    <input type="checkbox" name="fields[${index}].visibleInCard" ${field.visibleInCard ? 'checked' : ''}>
+                                    <span>Visible in Card</span>
+                                  </label>
+                                  <label class="checkbox-label">
+                                    <input type="checkbox" name="fields[${index}].useAsTitle" ${field.useAsTitle ? 'checked' : ''} ${type.useAutoNameAsTitle ? 'disabled' : ''}>
+                                    <span>Use as Title</span>
+                                  </label>
+                                  <label class="checkbox-label">
+                                    <input type="checkbox" name="fields[${index}].partOfName" ${field.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
+                                    <span>Part of Name</span>
+                                  </label>
+                                </div>
+                                <button type="button" class="btn btn-danger" onclick="App.removeField(${index})">
+                                  <span class="material-icons">delete</span> Remove Field
+                                </button>
+                              </div>
+                            </div>
+                        `).join('')}
+                        <button type="button" class="btn btn-add-field" onclick="App.addField()">
+                          <span class="material-icons">add</span> Add Field
+                        </button>
+                      </div>
+                    </div>
+                    <div class="modal-group carded-section">
+                      <h4>Links</h4>
+                      <div class="sortable-list" id="associationsContainer">
+                        ${type.associations?.map((assoc, idx) => `
+                            <div class="assoc-card sortable-item" data-index="${idx}">
+                              <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                              <div class="form-group">
+                                <label>Label *</label>
+                                <input type="text" name="associations[${idx}].label" value="${assoc?.label || ''}" required
+                                  onchange="this.form.querySelector('[name=\'associations[${idx}].name\']').value = this.value?.toLowerCase().replace(/[^a-z0-9]+/g, '_') || ''">
+                                <input type="hidden" name="associations[${idx}].name" value="${assoc?.name || ''}">
+                              </div>
+                              <div class="form-group">
+                                <label>Link type *</label>
+                                <select name="associations[${idx}].association.kind" class="association-kind-select" required onchange="App.updateAssociationKindHelp(this)">
+                                  <option value="belongs_to" ${assoc?.association?.kind === 'belongs_to' ? 'selected' : ''}>Links to one</option>
+                                  <option value="has_many" ${assoc?.association?.kind === 'has_many' ? 'selected' : ''}>Can have many</option>
+                                  <option value="hierarchy" ${assoc?.association?.kind === 'hierarchy' ? 'selected' : ''}>Parent/child (same type)</option>
+                                </select>
+                                <div class="association-kind-help">
+                                  <p class="help-text" data-kind="belongs_to">This item links to a single item of the target type (e.g. a Book is lent to one Borrower).</p>
+                                  <p class="help-text" data-kind="has_many">This item can link to several items of the target type (e.g. one Person has many Devices).</p>
+                                  <p class="help-text" data-kind="hierarchy">This item can have a parent or children of the same type (e.g. a folder inside a folder).</p>
+                                </div>
+                              </div>
+                              <div class="form-group">
+                                <label>Links to *</label>
+                                <select name="associations[${idx}].association.targetType" required>
+                                  ${Object.values(this.data.entityTypes).map(type => `
+                                    <option value="${type.id}" ${assoc?.association?.targetType === type.id ? 'selected' : ''}>
+                                      ${type.label}
+                                    </option>
+                                  `).join('')}
+                                </select>
+                              </div>
+                              <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${idx})">
+                                <span class="material-icons">delete</span> Remove link
+                              </button>
+                            </div>
+                        `).join('')}
+                        <button type="button" class="btn btn-add-field" onclick="App.addAssociation()">
+                          <span class="material-icons">add</span> Add link
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('entityTypeFormModal')">
+                  Cancel
+                </button>
+                <button type="submit" form="entityTypeForm" class="btn btn-primary">
+                  <span class="material-icons">save</span>
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('entityTypeFormModal');
+        this.updateNamePreview();
+        this.initNameComponentsDragDrop();
+        const useAutoTitle = document.querySelector('input[name="useAutoNameAsTitle"]');
+        if (useAutoTitle) this.toggleUseAutoNameAsTitle(useAutoTitle);
+        document.querySelectorAll('#entityTypeFormModal .association-kind-select').forEach(s => this.updateAssociationKindHelp(s));
+        
+        // Initialize option containers sortable
+        this.initAllOptionSortables();
+      },
+      
+      initAllOptionSortables() {
+        // Initialize all option sortables
+        document.querySelectorAll('.option-rows-container').forEach(container => {
+          this.initOptionsSortable(container);
+        });
+      },
+      
+      renderFieldEditor(field, index, enableNameGen) {
+        const partOfNameDisabled = enableNameGen === false;
+        return `
+          <div class="field-editor" data-index="${index}" data-field-name="${field.name || ''}">
+            <div class="form-group">
+              <label>Label *</label>
+              <input type="text" name="fields[${index}].label" value="${field.label}" required>
+              <input type="hidden" name="fields[${index}].name" value="${field.name || ''}">
+            </div>
+            
+            <div class="form-group">
+              <label>Type *</label>
+              <select name="fields[${index}].type" onchange="App.handleFieldTypeChange(this)">
+                <option value="text" ${field.type === 'text' ? 'selected' : ''}>Text</option>
+                <option value="number" ${field.type === 'number' ? 'selected' : ''}>Number</option>
+                <option value="dropdown" ${field.type === 'dropdown' ? 'selected' : ''}>Dropdown</option>
+                <option value="textarea" ${field.type === 'textarea' ? 'selected' : ''}>Textarea</option>
+                <option value="date" ${field.type === 'date' ? 'selected' : ''}>Date</option>
+                <option value="checkbox" ${field.type === 'checkbox' ? 'selected' : ''}>Checkbox</option>
+                <option value="qr" ${field.type === 'qr' ? 'selected' : ''}>QR Code</option>
+              </select>
+            </div>
+            
+            ${field.type === 'dropdown' ? `
+              <div class="form-group field-options">
+                <label>Options</label>
+                <div class="option-row option-header">
+                  <span>Display Value</span>
+                  <span>Name Value</span>
+                  <span></span>
+                </div>
+                <div class="option-rows-container" data-field-index="${index}">
+                  ${(field.options && field.options.length ? field.options : [{ value: '', nameValue: '' }]).map((opt, optIndex) => `
+                    <div class="option-row" data-option-index="${optIndex}">
+                      <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                      <input type="text" name="fields[${index}].options[${optIndex}].value" placeholder="Value" value="${(opt.value || '').replace(/"/g, '&quot;')}">
+                      <input type="text" name="fields[${index}].options[${optIndex}].nameValue" placeholder="Name Value" value="${(opt.nameValue || '').replace(/"/g, '&quot;')}" title="Value used in generated names">
+                      <button type="button" class="btn btn-danger" onclick="App.removeOption(${index}, ${optIndex})">
+                        <span class="material-icons">remove</span>
+                      </button>
+                    </div>
+                  `).join('')}
+                </div>
+                <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${index})">Add Option</button>
+              </div>
+            ` : ''}
+            
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" name="fields[${index}].required" 
+                       ${field.required ? 'checked' : ''}>
+                <span>Required</span>
+              </label>
+              
+              <label class="checkbox-label">
+                <input type="checkbox" name="fields[${index}].visibleInCard" 
+                       ${field.visibleInCard ? 'checked' : ''}>
+                <span>Visible in Card</span>
+              </label>
+
+              <label class="checkbox-label">
+                <input type="checkbox" name="fields[${index}].useAsTitle" 
+                       ${field.useAsTitle ? 'checked' : ''}>
+                <span>Use as Title</span>
+              </label>
+              
+              <label class="checkbox-label">
+                <input type="checkbox" name="fields[${index}].partOfName" 
+                       ${field.partOfName ? 'checked' : ''} 
+                       ${partOfNameDisabled ? 'disabled' : ''}
+                       onchange="App.updateNamePreview()">
+                <span>Part of Name</span>
+              </label>
+            </div>
+            
+            <button type="button" class="btn btn-danger" onclick="App.removeField(${index})">
+              <span class="material-icons">delete</span>
+              Remove Field
+            </button>
+          </div>
+        `;
+      },
+      
+      saveEntityType(event, typeId) {
+        event.preventDefault();
+        const form = event.target;
+        const formData = new FormData(form);
+        
+        // Process fields and associations separately
+        const fields = this.processFieldsData(formData);
+        const associations = this.processAssociationsData(formData);
+        
+        const data = {
+          label: formData.get('label'),
+          category: formData.get('category'),
+          icon: formData.get('icon'),
+          enableNameGen: formData.get('enableNameGen') === 'on',
+          useAutoNameAsTitle: formData.get('useAutoNameAsTitle') === 'on',
+          nameGen: {
+            prefix: formData.get('namePrefix') || '',
+            partOfNamePrefix: true,
+            suffixType: formData.get('suffixType') || 'number',
+            componentsOrder: []
+          },
+          fields: fields, 
+          associations: associations
+        };
+
+        if (data.enableNameGen) {
+          const list = form.querySelector('#nameComponentsList');
+          if (list) {
+            const rawItems = Array.from(list.querySelectorAll('.name-component-item')).map(item => {
+              const type = item.dataset.componentType;
+              if (type === 'field') {
+                const name = item.dataset.fieldName;
+                return name ? { type: 'field', name } : null;
+              }
+              if (type === 'separator') {
+                const encoded = item.dataset.separatorValue != null ? String(item.dataset.separatorValue) : '';
+                const value = encoded ? decodeURIComponent(encoded) : '';
+                return value ? { type: 'separator', value } : null;
+              }
+              return null;
+            }).filter(Boolean);
+            const normalized = [];
+            let lastWasField = false;
+            let sawSeparator = false;
+            rawItems.forEach((item, idx) => {
+              if (item.type === 'field') {
+                normalized.push(item);
+                lastWasField = true;
+                return;
+              }
+              if (item.type === 'separator') {
+                sawSeparator = true;
+                if (!lastWasField) return;
+                const hasFieldAhead = rawItems.slice(idx + 1).some(next => next.type === 'field');
+                if (!hasFieldAhead) return;
+                normalized.push(item);
+                lastWasField = false;
+              }
+            });
+            if (sawSeparator && !normalized.some(i => i.type === 'separator')) {
+              const fieldCount = normalized.filter(i => i.type === 'field').length;
+              if (fieldCount >= 2) {
+                const firstFieldIdx = normalized.findIndex(i => i.type === 'field');
+                normalized.splice(firstFieldIdx + 1, 0, { type: 'separator', value: ' ' });
+              }
+            }
+            data.nameGen.componentsOrder = normalized;
+          }
+        }
+
+        if (data.useAutoNameAsTitle) {
+          data.fields = data.fields.map(field => ({ ...field, useAsTitle: false }));
+        } else {
+          const titleFields = data.fields.filter(f => f.useAsTitle);
+          if (titleFields.length > 1) {
+            const [keep, ...rest] = titleFields;
+            data.fields = data.fields.map(field => {
+              if (rest.some(r => r.name === field.name)) return { ...field, useAsTitle: false };
+              return field;
+            });
+          }
+        }
+        
+        if (typeId) {
+          // Update existing type
+          this.data.entityTypes[typeId] = {
+            ...this.data.entityTypes[typeId],
+            ...data
+          };
+        } else {
+          // Create new type
+          const newId = this.generateId();
+          this.data.entityTypes[newId] = {
+            id: newId,
+            ...data
+          };
+        }
+        
+        this.saveData();
+        this.closeEntityTypeForm();
+        this.closeEntityTypeManager();
+        this.loadView('dashboard');
+        this.showNotification(`Entity type ${typeId ? 'updated' : 'created'} successfully`, 'success');
+      },
+      
+      processFieldsData(formData) {
+        const fields = [];
+        const entries = Array.from(formData.entries());
+        
+        // Group entries by field index
+        const fieldGroups = {};
+        entries.forEach(([key, value]) => {
+          if (key.startsWith('fields[')) {
+            const match = key.match(/fields\[(\d+)\]\.(.+)/);
+            if (match) {
+              const [, index, prop] = match;
+              if (!fieldGroups[index]) fieldGroups[index] = {};
+              fieldGroups[index][prop] = value;
+            }
+          }
+        });
+        
+        // Process each field group (preserve index order)
+        const sortedIndices = Object.keys(fieldGroups).map(Number).sort((a, b) => a - b);
+        sortedIndices.forEach(i => {
+          const group = fieldGroups[i];
+          if (!group) return;
+          const explicitName = (group.name || '').toString().trim();
+          const rawName = (group.label || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '_').trim();
+          const name = explicitName || rawName || ('field_' + fields.length);
+          
+          const field = {
+            name: name,
+            label: group.label,
+            type: group.type,
+            required: group.required === 'on',
+            visibleInCard: group.visibleInCard === 'on',
+            useAsTitle: group.useAsTitle === 'on',
+            partOfName: group.partOfName === 'on'
+          };
+          
+          if (field.type === 'dropdown') {
+            field.options = [];
+            // Process options if they exist
+            const optionEntries = entries.filter(([key]) => 
+              key.startsWith(`fields[${i}].options[`));
+            
+            const optionGroups = {};
+            optionEntries.forEach(([key, value]) => {
+              const match = key.match(/options\[(\d+)\]\.(.+)/);
+              if (match) {
+                const [, index, prop] = match;
+                if (!optionGroups[index]) optionGroups[index] = {};
+                optionGroups[index][prop] = value;
+              }
+            });
+            
+            field.options = Object.values(optionGroups)
+              .filter(opt => opt.value)
+              .map(opt => ({
+                value: opt.value,
+                nameValue: opt.nameValue || opt.value
+              }));
+          }
+          
+          fields.push(field);
+        });
+        
+        return fields;
+      },
+      
+      processAssociationsData(formData) {
+        const associations = [];
+        const entries = Array.from(formData.entries());
+        
+        // Process associations
+        const associationEntries = entries.filter(([key]) => key.startsWith('associations['));
+        
+        const associationGroups = {};
+        associationEntries.forEach(([key, value]) => {
+          const match = key.match(/associations\[(\d+)\]\.(.+)/);
+          if (match) {
+            const [, index, prop] = match;
+            if (!associationGroups[index]) associationGroups[index] = { association: {} };
+            if (prop.startsWith('association.')) {
+              associationGroups[index].association[prop.split('.')[1]] = value;
+            } else {
+              associationGroups[index][prop] = value;
+            }
+          }
+        });
+        
+        Object.values(associationGroups).forEach(group => {
+          if (group.name && group.label) {
+            associations.push({
+              name: group.name,
+              label: group.label,
+              type: 'association',
+              association: group.association
+            });
+          }
+        });
+        
+        return associations;
+      },
+      
+      closeEntityTypeForm() {
+        this._editingEntityType = null;
+        this.closeModal('entityTypeFormModal');
+      },
+
+      updateAssociationKindHelp(selectEl) {
+        const help = selectEl.closest('.form-group')?.querySelector('.association-kind-help');
+        if (!help) return;
+        help.querySelectorAll('.help-text').forEach(p => {
+          p.classList.toggle('visible', p.dataset.kind === selectEl.value);
+        });
+      },
+      
+      closeEntityTypeManager() {
+        this.closeModal('entityTypeManagerModal');
+      },
+      
+      deleteEntityType(typeId) {
+        const type = this.data.entityTypes[typeId];
+        if (!type) return;
+        
+        const hasEntities = Object.values(this.data.entities)
+          .some(entity => entity.type === typeId);
+        
+        const confirmModal = `
+          <div class="modal" id="confirmDeleteTypeModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('confirmDeleteTypeModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Confirm Delete Type</h3>
+              </div>
+              ${hasEntities ? `
+                <p class="text-danger">Warning: There are entities of this type. Deleting it will also delete all associated entities.</p>
+              ` : ''}
+              <p>Are you sure you want to delete the entity type "${type.label}"?</p>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteTypeModal')">Cancel</button>
+                <button class="btn btn-danger" onclick="App.confirmDeleteEntityType('${typeId}')">Delete</button>
+              </div>
+            </div>
+          </div>
+        `;
+        
+        const div = document.createElement('div');
+        div.innerHTML = confirmModal;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('confirmDeleteTypeModal');
+      },
+      
+      confirmDeleteEntityType(typeId) {
+        // Delete all entities of this type
+        Object.entries(this.data.entities).forEach(([entityId, entity]) => {
+          if (entity.type === typeId) {
+            delete this.data.entities[entityId];
+          }
+        });
+        
+        // Delete the entity type
+        delete this.data.entityTypes[typeId];
+        
+        this.saveData();
+        document.getElementById('confirmDeleteTypeModal').remove();
+        this.closeEntityTypeManager();
+        this.loadView('dashboard');
+        this.showNotification('Entity type deleted successfully', 'success');
+      },
+      
+      initNameComponentsDragDrop() {
+        const nameComponentsList = document.getElementById('nameComponentsList');
+        if (nameComponentsList) {
+          new Sortable(nameComponentsList, {
+            animation: 150,
+            handle: '.drag-handle',
+            onEnd: () => this.updateNamePreview()
+          });
+        }
+      },
+
+      addNameSeparator(value) {
+        const separator = value == null ? '' : String(value);
+        if (!separator) return;
+        const list = document.getElementById('nameComponentsList');
+        if (!list) return;
+        const label = separator === ' ' ? 'Space' : separator === '-' ? 'Dash' : separator === '_' ? 'Underscore' : separator === '.' ? 'Dot' : separator;
+        const div = document.createElement('div');
+        div.className = 'name-component-item name-separator-item sortable-item';
+        div.dataset.componentType = 'separator';
+        div.dataset.separatorValue = encodeURIComponent(separator);
+        div.innerHTML = `
+          <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+          <span class="separator-pill">${label}</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.name-component-item').remove(); App.updateNamePreview();">Remove</button>
+        `;
+        const fields = list.querySelectorAll('[data-component-type="field"]');
+        if (fields.length >= 2) {
+          list.insertBefore(div, fields[1]);
+        } else if (fields.length === 1) {
+          list.insertBefore(div, fields[0].nextSibling);
+        } else {
+          list.appendChild(div);
+        }
+        const customInput = document.getElementById('customSeparatorInput');
+        if (customInput) customInput.value = '';
+        this.updateNamePreview();
+      },
+      
+      updateNamePreview() {
+        const preview = document.getElementById('namePreview');
+        const suffixPreview = document.getElementById('suffixPreview');
+        if (!preview || !suffixPreview) return;
+
+        const prefix = document.querySelector('[name="namePrefix"]')?.value || '';
+        const suffixType = document.querySelector('[name="suffixType"]')?.value || 'number';
+        const type = this.getCurrentEditingType();
+        if (!type) return;
+
+        const list = document.getElementById('nameComponentsList');
+        if (!list) return;
+
+        const fieldCards = Array.from(document.querySelectorAll('.field-card, .field-editor'));
+        const activeFields = new Map();
+
+        fieldCards.forEach((fieldCard) => {
+          const partOfNameCheckbox = fieldCard.querySelector('input[name^="fields"][name$=".partOfName"]');
+          if (!partOfNameCheckbox?.checked) return;
+          const nameInput = fieldCard.querySelector('input[name^="fields"][name$=".name"]');
+          const labelInput = fieldCard.querySelector('input[name^="fields"][name$=".label"]');
+          const typeSelect = fieldCard.querySelector('select[name^="fields"][name$=".type"]');
+          const fieldName = nameInput?.value || fieldCard.dataset.fieldName || '';
+          if (!fieldName) return;
+          activeFields.set(fieldName, {
+            label: labelInput?.value || fieldName,
+            type: typeSelect?.value || 'text',
+            card: fieldCard
+          });
+        });
+
+        const existingFieldItems = new Map();
+        list.querySelectorAll('[data-component-type="field"]').forEach(item => {
+          existingFieldItems.set(item.dataset.fieldName, item);
+        });
+
+        existingFieldItems.forEach((item, fieldName) => {
+          if (!activeFields.has(fieldName)) item.remove();
+        });
+
+        activeFields.forEach((field, fieldName) => {
+          const item = existingFieldItems.get(fieldName);
+          if (!item) {
+            const div = document.createElement('div');
+            div.className = 'name-component-item sortable-item';
+            div.dataset.componentType = 'field';
+            div.dataset.fieldName = fieldName;
+            div.innerHTML = `
+              <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+              <span class="name-component-label">${field.label}</span>
+            `;
+            list.appendChild(div);
+          } else {
+            const labelEl = item.querySelector('.name-component-label');
+            if (labelEl) labelEl.textContent = field.label;
+          }
+        });
+
+        const listItems = Array.from(list.querySelectorAll('.name-component-item'));
+        const isFieldItem = (item) => item.dataset.componentType === 'field' && item.dataset.fieldName;
+        const isSeparatorItem = (item) => item.dataset.componentType === 'separator';
+        const hasFieldAhead = (startIdx) => {
+          for (let i = startIdx + 1; i < listItems.length; i += 1) {
+            if (isFieldItem(listItems[i])) return true;
+          }
+          return false;
+        };
+        const normalizedItems = [];
+        const pendingLeadingSeparators = [];
+        let seenField = false;
+        listItems.forEach((item, idx) => {
+          if (isFieldItem(item)) {
+            normalizedItems.push(item);
+            seenField = true;
+            if (pendingLeadingSeparators.length && hasFieldAhead(idx)) {
+              pendingLeadingSeparators.forEach(sep => normalizedItems.push(sep));
+            }
+            pendingLeadingSeparators.length = 0;
+            return;
+          }
+          if (isSeparatorItem(item)) {
+            if (!seenField) {
+              pendingLeadingSeparators.push(item);
+              return;
+            }
+            if (!hasFieldAhead(idx)) return;
+            normalizedItems.push(item);
+          }
+        });
+        const needsReorder = normalizedItems.length !== listItems.length
+          || normalizedItems.some((item, idx) => item !== listItems[idx]);
+        if (normalizedItems.length && needsReorder) {
+          list.innerHTML = '';
+          normalizedItems.forEach(item => list.appendChild(item));
+        }
+        const components = Array.from(list.querySelectorAll('.name-component-item')).map(item => {
+          if (item.dataset.componentType === 'separator') {
+            const encoded = item.dataset.separatorValue || '';
+            return { type: 'separator', value: encoded ? decodeURIComponent(encoded) : '' };
+          }
+          return { type: 'field', name: item.dataset.fieldName };
+        });
+
+        const parts = [];
+        let pendingSeparator = null;
+
+        components.forEach((component) => {
+          if (component.type === 'separator') {
+            pendingSeparator = component.value != null ? String(component.value) : '';
+            return;
+          }
+          const field = activeFields.get(component.name);
+          if (!field) return;
+          let sampleValue = field.label || '';
+          if (field.type === 'dropdown') {
+            const optionRows = field.card.querySelectorAll('.option-row');
+            if (optionRows.length > 0) {
+              const lastOptionRow = optionRows[optionRows.length - 1];
+              const nameValueInput = lastOptionRow?.querySelector('input[name$=".nameValue"]');
+              const valueInput = lastOptionRow?.querySelector('input[name$=".value"]');
+              sampleValue = (nameValueInput && nameValueInput.value) || (valueInput && valueInput.value) || sampleValue;
+            }
+          }
+          if (!sampleValue) return;
+          if (parts.length > 0 && pendingSeparator != null) {
+            parts.push(pendingSeparator);
+          }
+          pendingSeparator = null;
+          parts.push(sampleValue);
+        });
+
+        const previewText = (prefix || '') + parts.join('');
+        preview.textContent = previewText || 'No name components selected';
+
+        const suffix = suffixType === 'number' ? '01' : 'A';
+        suffixPreview.textContent = previewText ? (previewText + suffix) : 'No name components selected';
+      },
+      
+      getCurrentEditingType() {
+        if (this._editingEntityType) return this._editingEntityType;
+        const form = document.getElementById('entityTypeForm');
+        if (!form) return null;
+        const typeId = form.getAttribute('data-type-id');
+        return this.data.entityTypes[typeId];
+      },
+
+      toggleNameGenSection(enableNameGenCheckbox) {
+        const form = enableNameGenCheckbox?.closest('form');
+        if (!form) return;
+        const section = form.querySelector('.name-generation-settings');
+        if (section) section.style.display = enableNameGenCheckbox.checked ? 'block' : 'none';
+        form.querySelectorAll('input[name$=".partOfName"]').forEach(input => {
+          input.disabled = !enableNameGenCheckbox.checked;
+        });
+        const useTitle = form.querySelector('input[name="useAutoNameAsTitle"]');
+        if (useTitle) useTitle.disabled = !enableNameGenCheckbox.checked;
+        this.updateNamePreview();
+      },
+
+      toggleUseAutoNameAsTitle(checkbox) {
+        const form = checkbox?.closest('form');
+        if (!form) return;
+        const disableFields = checkbox.checked;
+        form.querySelectorAll('input[name$=".useAsTitle"]').forEach(input => {
+          input.disabled = disableFields;
+          if (disableFields) input.checked = false;
+        });
+      },
+      
+      addField() {
+        const fieldsContainer = document.getElementById('fieldsContainer');
+        if (!fieldsContainer) return;
+        
+        const newIndex = fieldsContainer.querySelectorAll('.field-card, .field-editor').length;
+        
+        const newField = {
+          name: '',
+          label: '',
+          type: 'text',
+          required: false,
+          visibleInCard: true,
+          partOfName: false
+        };
+        
+        const form = document.getElementById('entityTypeForm');
+        const enableNameGen = form?.querySelector('input[name=enableNameGen]')?.checked ?? false;
+        const fieldHtml = this.renderFieldEditor(newField, newIndex, enableNameGen);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = fieldHtml;
+        const newFieldElement = tempDiv.firstElementChild;
+        fieldsContainer.appendChild(newFieldElement);
+        
+        // Scroll the new field into view if it exists
+        if (newFieldElement) {
+          newFieldElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      },
+      
+      handleFieldTypeChange(select) {
+        const fieldEditor = select.closest('.field-editor') || select.closest('.field-card');
+        const fieldIndex = fieldEditor.dataset.index;
+        const existingBlock = fieldEditor.querySelector('.field-options');
+        
+        if (select.value === 'dropdown') {
+          if (!existingBlock) {
+            const div = document.createElement('div');
+            div.className = 'form-group field-options';
+            div.innerHTML = `
+              <label>Options</label>
+              <div class="option-row option-header">
+                <span>Display Value</span>
+                <span>Name Value</span>
+                <span></span>
+              </div>
+              <div class="option-rows-container" data-field-index="${fieldIndex}">
+                <div class="option-row" data-option-index="0">
+                  <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                  <input type="text" name="fields[${fieldIndex}].options[0].value" placeholder="Value">
+                  <input type="text" name="fields[${fieldIndex}].options[0].nameValue" placeholder="Name Value" title="Value used in generated names">
+                  <button type="button" class="btn btn-danger" onclick="App.removeOption(${fieldIndex}, 0)">
+                    <span class="material-icons">remove</span>
+                  </button>
+                </div>
+              </div>
+              <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${fieldIndex})">Add Option</button>
+            `;
+            select.closest('.form-group').insertAdjacentElement('afterend', div);
+            const container = div.querySelector('.option-rows-container');
+            if (container) this.initOptionsSortable(container);
+          }
+        } else if (existingBlock) {
+          existingBlock.remove();
+        }
+      },
+      
+      addOption(fieldIndex) {
+        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
+          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
+        if (!fieldEl) {
+          console.error(`Could not find field with index: ${fieldIndex}`);
+          return;
+        }
+        const optionsContainer = fieldEl.querySelector('.option-rows-container');
+        if (!optionsContainer) {
+          console.error(`Could not find options container in field with index: ${fieldIndex}`);
+          return;
+        }
+        
+        // Get all existing option rows to determine the next index
+        const existingOptions = optionsContainer.querySelectorAll('.option-row');
+        const newOptionIndex = existingOptions.length;
+        
+        // Create the new option row
+        const optionRow = document.createElement('div');
+        optionRow.className = 'option-row';
+        optionRow.dataset.optionIndex = newOptionIndex;
+        optionRow.innerHTML = `
+          <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+          <input type="text" name="fields[${fieldIndex}].options[${newOptionIndex}].value" placeholder="Value">
+          <input type="text" name="fields[${fieldIndex}].options[${newOptionIndex}].nameValue" placeholder="Name Value" title="Value used in generated names">
+          <button type="button" class="btn btn-danger" onclick="App.removeOption(${fieldIndex}, ${newOptionIndex})">
+            <span class="material-icons">remove</span>
+          </button>
+        `;
+        
+        // Add the new row to the container
+        optionsContainer.appendChild(optionRow);
+        
+        // Initialize or refresh sortable on this container
+        this.initOptionsSortable(optionsContainer);
+      },
+      
+      removeOption(fieldIndex, optionIndex) {
+        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
+          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
+        if (!fieldEl) return;
+        const optionsContainer = fieldEl.querySelector('.option-rows-container');
+        if (!optionsContainer) {
+          return;
+        }
+        
+        const optionRows = optionsContainer.querySelectorAll('.option-row');
+        // Find the option with matching data-option-index
+        const optionToRemove = Array.from(optionRows).find(row => 
+          row.dataset.optionIndex === optionIndex.toString());
+          
+        if (optionToRemove) {
+          optionToRemove.remove();
+          // Update indices
+          this.updateOptionIndices(fieldIndex);
+        }
+      },
+      
+      initOptionsSortable(container) {
+        if (!container || !window.Sortable) return;
+        
+        // Check if sortable is already initialized
+        if (container._sortable) {
+          // Refresh sortable instance
+          container._sortable.option('onEnd', (evt) => this.handleOptionReorder(evt));
+          return;
+        }
+        
+        // Initialize sortable
+        container._sortable = new Sortable(container, {
+          animation: 150,
+          handle: '.drag-handle',
+          onEnd: (evt) => this.handleOptionReorder(evt)
+        });
+      },
+      
+      handleOptionReorder(evt) {
+        const container = evt.to;
+        const fieldIndex = container.dataset.fieldIndex;
+        
+        if (fieldIndex) {
+          this.updateOptionIndices(fieldIndex);
+        }
+      },
+      
+      updateOptionIndices(fieldIndex) {
+        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
+          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
+        if (!fieldEl) return;
+        const optionsContainer = fieldEl.querySelector('.option-rows-container');
+        if (!optionsContainer) return;
+        
+        // Update all input name attributes to match their new positions
+        const optionRows = optionsContainer.querySelectorAll('.option-row');
+        optionRows.forEach((row, idx) => {
+          row.dataset.optionIndex = idx;
+          
+          // Update input names
+          const inputs = row.querySelectorAll('input');
+          inputs.forEach(input => {
+            // Replace the option index in the name attribute
+            const newName = input.name.replace(/options\[\d+\]/, `options[${idx}]`);
+            input.name = newName;
+          });
+          
+          // Update remove button onclick
+          const removeBtn = row.querySelector('.btn-danger');
+          if (removeBtn) {
+            removeBtn.setAttribute('onclick', `App.removeOption(${fieldIndex}, ${idx})`);
+          }
+        });
+      },
+      
+      renderAssociationEditor(assoc, index) {
+        return `
+          <div class="field-editor" data-index="${index}">
+            <div class="form-group">
+              <label>Label *</label>
+              <input type="text" name="associations[${index}].label" value="${assoc?.label || ''}" required
+                     onchange="this.form.querySelector('[name=\'associations[${index}].name\']').value = this.value?.toLowerCase().replace(/[^a-z0-9]+/g, '_') || ''">
+              <input type="hidden" name="associations[${index}].name" value="${assoc?.name || ''}">
+            </div>
+            
+            <div class="form-group">
+              <label>Link type *</label>
+              <select name="associations[${index}].association.kind" class="association-kind-select" required onchange="App.updateAssociationKindHelp(this)">
+                <option value="belongs_to" ${assoc?.association?.kind === 'belongs_to' ? 'selected' : ''}>Links to one</option>
+                <option value="has_many" ${assoc?.association?.kind === 'has_many' ? 'selected' : ''}>Can have many</option>
+                <option value="hierarchy" ${assoc?.association?.kind === 'hierarchy' ? 'selected' : ''}>Parent/child (same type)</option>
+              </select>
+              <div class="association-kind-help">
+                <p class="help-text" data-kind="belongs_to">This item links to a single item of the target type (e.g. a Book is lent to one Borrower).</p>
+                <p class="help-text" data-kind="has_many">This item can link to several items of the target type (e.g. one Person has many Devices).</p>
+                <p class="help-text" data-kind="hierarchy">This item can have a parent or children of the same type (e.g. a folder inside a folder).</p>
+              </div>
+            </div>
+            
+            <div class="form-group">
+              <label>Links to *</label>
+              <select name="associations[${index}].association.targetType" required>
+                ${Object.values(this.data.entityTypes).map(type => `
+                  <option value="${type.id}" ${assoc?.association?.targetType === type.id ? 'selected' : ''}>
+                    ${type.label}
+                  </option>
+                `).join('')}
+              </select>
+            </div>
+            
+            <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${index})">
+              <span class="material-icons">delete</span>
+              Remove link
+            </button>
+          </div>
+        `;
+      },
+      
+      addAssociation() {
+        const container = document.getElementById('associationsContainer');
+        if (!container) return;
+        
+        const newIndex = container.querySelectorAll('.field-editor').length;
+        
+        const newAssoc = {
+          name: '',
+          label: '',
+          type: 'association',
+          association: {
+            kind: 'belongs_to',
+            targetType: Object.keys(this.data.entityTypes)[0] || ''
+          }
+        };
+        
+        const assocHtml = this.renderAssociationEditor(newAssoc, newIndex);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = assocHtml;
+        const newAssocElement = tempDiv.firstElementChild;
+        container.appendChild(newAssocElement);
+        
+        // Scroll the new association into view if it exists
+        if (newAssocElement) {
+          newAssocElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      },
+      
+      removeAssociation(index) {
+        const editor = document.querySelector(`#associationsContainer .field-editor[data-index="${index}"]`);
+        editor.remove();
+        
+        // Update indices for remaining associations
+        document.querySelectorAll('#associationsContainer .field-editor').forEach((editor, newIndex) => {
+          editor.dataset.index = newIndex;
+          editor.querySelectorAll('[name^="associations["]').forEach(input => {
+            input.name = input.name.replace(/associations\[\d+\]/, `associations[${newIndex}]`);
+          });
+        });
+      },
+      
+      toggleDropdown(event, button) {
+        event.stopPropagation();
+        const dropdown = button.nextElementSibling;
+        if (!dropdown || !dropdown.classList.contains('dropdown-menu')) return;
+        const allDropdowns = document.querySelectorAll('.dropdown-menu');
+        allDropdowns.forEach(menu => {
+          if (menu !== dropdown) menu.style.display = 'none';
+        });
+        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        if (dropdown.style.display === 'block') {
+          dropdown.querySelectorAll('a').forEach(link => {
+            link.addEventListener('click', () => { dropdown.style.display = 'none'; }, { once: true });
+          });
+        }
+      },
+
+      showWhatsNew() {
+        loadVersionHistory().then(() => {
+          const changes = window.VERSION_CHANGES || [];
+          const modalHtml = `
+          <div class="modal" id="whatsNewModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('whatsNewModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>What's New</h3>
+              </div>
+              <div class="changelog-container">
+                ${changes.map(v => `
+                  <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                      <strong style="color: var(--accent-color);">Version ${v.version}</strong>
+                      <span style="color: var(--text-secondary);">${v.date}</span>
+                    </div>
+                    <ul style="list-style: none; padding-left: 1rem; margin: 0;">
+                      ${v.changes.map(change => `
+                        <li style="margin-bottom: 0.5rem; position: relative;">
+                          <span style="position: absolute; left: -1rem; color: var(--accent-color);">•</span>
+                          ${change}
+                        </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+                `).join('')}
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-primary" onclick="document.getElementById('whatsNewModal').remove()">
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+          const div = document.createElement('div');
+          div.innerHTML = modalHtml;
+          document.body.appendChild(div.firstElementChild);
+          this.showModal('whatsNewModal');
+        });
+      },
+
+      showChangelog() {
+        loadVersionHistory().then(() => {
+          const changes = window.VERSION_CHANGES || [];
+          const modalHtml = `
+          <div class="modal" id="changelogModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('changelogModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Changelog</h3>
+              </div>
+              <div class="changelog-container">
+                ${changes.map(v => `
+                  <div class="update-section">
+                    <div>
+                      <strong>Version ${v.version}</strong>
+                      <span>${v.date}</span>
+                    </div>
+                    <ul>
+                      ${v.changes.map(change => `
+                        <li>
+                          <span>•</span>
+                          ${change}
+                        </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+                `).join('')}
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="document.getElementById('changelogModal').remove()">
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+          const div = document.createElement('div');
+          div.innerHTML = modalHtml;
+          document.body.appendChild(div.firstElementChild);
+          this.showModal('changelogModal');
+        });
+      },
+
+      showFaqModal() {
+        const faq = typeof window.ELISTLY_FAQ !== 'undefined' ? window.ELISTLY_FAQ : [];
+        const bodyHtml = faq.length === 0
+          ? '<p class="empty-state">No FAQ content available.</p>'
+          : faq.map(section => `
+            <div class="faq-section">
+              <h4 class="faq-section-title">${section.section}</h4>
+              ${(section.items || []).map(item => `
+                <div class="faq-item">
+                  <div class="faq-q">${item.q}</div>
+                  <div class="faq-a">${item.a}</div>
+                </div>
+              `).join('')}
+            </div>
+          `).join('');
+        const modalHtml = `
+          <div class="modal" id="faqModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('faqModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Help</h3>
+              </div>
+              <div class="faq-container">${bodyHtml}</div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="document.getElementById('faqModal').remove()">Close</button>
+              </div>
+            </div>
+          </div>
+        `;
+        const existing = document.getElementById('faqModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('faqModal');
+      },
+
+      toggleNameLock(button) {
+        const input = document.getElementById('nameInput');
+        const isLocked = button.querySelector('.material-icons').textContent === 'lock';
+        
+        if (isLocked) {
+          // Unlock
+          input.removeAttribute('readonly');
+          button.querySelector('.material-icons').textContent = 'lock_open';
+          button.title = 'Lock name generation';
+          input.closest('.form-group').querySelector('.help-text').textContent = 'Manual name entry enabled';
+          input.dataset.unlocked = 'true';
+        } else {
+          // Lock
+          input.setAttribute('readonly', '');
+          button.querySelector('.material-icons').textContent = 'lock';
+          button.title = 'Unlock to edit name manually';
+          input.closest('.form-group').querySelector('.help-text').textContent = 'Name will be auto-generated based on fields';
+          input.dataset.unlocked = 'false';
+          
+          // Regenerate name
+          const form = button.closest('form');
+          const typeId = form.getAttribute('data-type-id');
+          const formData = new FormData(form);
+          const data = Object.fromEntries(formData.entries());
+          const entityId = form.getAttribute('data-entity-id');
+          input.value = App.generateAutoName(typeId, data, entityId);
+        }
+      },
+      
+      updateDashboardSettings(setting, value) {
+        if (!this.data.settings.dashboard) {
+          this.data.settings.dashboard = {};
+        }
+        
+        this.data.settings.dashboard[setting] = value;
+        
+        // If changing view mode to categoryCards, force groupByCategory to true
+        if (setting === 'viewMode' && value === 'categoryCards') {
+          this.data.settings.dashboard.groupByCategory = true;
+        }
+        
+        this.saveData();
+        
+        // Refresh dashboard if we're on it
+        const url = new URL(window.location);
+        const currentView = url.searchParams.get('view') || 'dashboard';
+        if (currentView === 'dashboard') {
+          this.loadView('dashboard');
+        }
+      },
+      
+      updateGroupByVisibility(viewMode) {
+        const groupByCategory = document.querySelector('.group-by-category');
+        const checkbox = groupByCategory.querySelector('input');
+        
+        if (viewMode === 'categoryCards') {
+          groupByCategory.style.opacity = '0.5';
+          checkbox.disabled = true;
+          checkbox.checked = true;
+        } else {
+          groupByCategory.style.opacity = '1';
+          checkbox.disabled = false;
+        }
+      },
+      
+      initDashboardSettings() {
+        // Initialize category order sorting
+        const categoryOrderList = document.getElementById('categoryOrderList');
+        if (categoryOrderList) {
+          new Sortable(categoryOrderList, {
+            animation: 150,
+            handle: '.material-icons',
+            onEnd: (evt) => {
+              const items = categoryOrderList.querySelectorAll('.category-order-item');
+              const order = Array.from(items).map(item => item.dataset.categoryId);
+              this.updateDashboardSettings('categoryOrder', order);
+            }
+          });
+        }
+        
+        // Initialize group by category visibility
+        const viewModeSelect = document.querySelector('select[name="dashboardViewMode"]');
+        if (viewModeSelect) {
+          const currentViewMode = viewModeSelect.value;
+          this.updateGroupByVisibility(currentViewMode);
+          this.updateViewModeHint(currentViewMode);
+        }
+      },
+
+      updateViewModeHint(mode) {
+        const container = document.querySelector('.view-mode-hints');
+        if (!container) return;
+        container.querySelectorAll('.view-mode-hint').forEach(el => {
+          el.style.display = el.dataset.mode === mode ? 'block' : 'none';
+        });
+      },
+      initEntityFormNameGen() {
+        const input = document.getElementById('nameInput');
+        if (!input) return;
+        const form = input.closest('form');
+        const typeId = form.getAttribute('data-type-id');
+        // initial generation
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+        const entityId = form.getAttribute('data-entity-id');
+        input.value = this.generateAutoName(typeId, data, entityId);
+        // attach listeners to regenerate on field changes
+        form.querySelectorAll('input[name], select[name]').forEach(elem => {
+          if (elem.name !== 'name') {
+            elem.addEventListener('change', () => {
+              if (input.dataset.unlocked !== 'true') {
+                const fd = new FormData(form);
+                const d = Object.fromEntries(fd.entries());
+                const entityId = form.getAttribute('data-entity-id');
+                input.value = this.generateAutoName(typeId, d, entityId);
+              }
+            });
+          }
+        });
+      },
+      removeField(index) {
+        const fieldEditor = document.querySelector(`.field-editor[data-index="${index}"]`) ||
+                            document.querySelector(`.field-card[data-index="${index}"]`);
+        if (!fieldEditor) return;
+        
+        fieldEditor.remove();
+        
+        // Update indices for remaining fields
+        document.querySelectorAll('.field-editor, .field-card').forEach((editor, newIndex) => {
+          editor.dataset.index = newIndex;
+          editor.querySelectorAll('[name^="fields["]').forEach(input => {
+            input.name = input.name.replace(/fields\[\d+\]/, `fields[${newIndex}]`);
+          });
+        });
+      },
+      resetApp() {
+        this.closeModal('settingsModal');
+        const existing = document.getElementById('resetAppModal');
+        if (existing) existing.remove();
+        const modalHtml = `
+          <div class="modal" id="resetAppModal" data-persistent>
+            <div class="modal-content" style="max-width: 440px;">
+              <button class="modal-close" onclick="document.getElementById('resetAppModal').remove()">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Reset app</h3>
+              </div>
+              <div class="modal-body">
+                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete all your data</strong>—categories, entity types, entities, and settings—from this device and from your account in the database. This cannot be undone.</p>
+                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>DELETE</strong> below.</p>
+                <input type="text" id="resetAppConfirmInput" class="reset-confirm-input" placeholder="Type DELETE to confirm" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('resetAppModal').remove()">Cancel</button>
+                <button type="button" class="btn btn-danger" id="resetAppConfirmBtn" disabled>Reset app</button>
+              </div>
+            </div>
+          </div>`;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml.trim();
+        document.body.appendChild(div.firstElementChild);
+        const modal = document.getElementById('resetAppModal');
+        const input = document.getElementById('resetAppConfirmInput');
+        const btn = document.getElementById('resetAppConfirmBtn');
+        const doReset = async () => {
+          if (supabaseClient) {
+            const { data: { user } } = await supabaseClient.auth.getUser();
+            if (user) {
+              await supabaseClient.from('app_data').upsert({ user_id: user.id, payload: {} }, { onConflict: 'user_id' });
+            }
+            Storage._cached = null;
+          }
+          localStorage.removeItem(Storage.KEY);
+          location.reload();
+        };
+        input.addEventListener('input', () => {
+          btn.disabled = input.value.trim() !== 'DELETE';
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && input.value.trim() === 'DELETE') doReset();
+        });
+        btn.addEventListener('click', doReset);
+        this.showModal('resetAppModal');
+        setTimeout(() => input.focus(), 100);
+      },
+
+      showAddPresetModal() {
+        this.closeModal('settingsModal');
+        const presets = SETUP_IDS.filter(function (id) { return id !== 'blank'; }).map(function (id) { return PRESETS[id]; }).filter(Boolean);
+        const modalHtml = `
+          <div class="modal" id="addPresetModal">
+            <div class="modal-content" style="max-width: 440px;">
+              <button class="modal-close" onclick="App.closeModal('addPresetModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Add preset</h3>
+              </div>
+              <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Add categories and entity types from a template. Your existing data is kept.</p>
+              <div class="button-stack" style="margin: 0;">
+                ${presets.map(p => `
+                  <button type="button" class="btn btn-secondary" style="justify-content: flex-start; text-align: left;" onclick="App.applyPreset('${p.id}', false); App.closeModal('addPresetModal');">
+                    <span class="material-icons" style="margin-right: 0.5rem;">folder</span>
+                    <span>${p.label}</span>
+                  </button>
+                `).join('')}
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('addPresetModal')">Cancel</button>
+              </div>
+            </div>
+          </div>`;
+        const existing = document.getElementById('addPresetModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('addPresetModal');
+      },
+
+      showRestoreDefaultsModal() {
+        this.closeModal('settingsModal');
+        const defaultEntityTypes = Object.keys(this.defaultData.entityTypes);
+        const modifiedEntityTypes = defaultEntityTypes.filter(typeId => {
+          if (!this.data.entityTypes[typeId]) return true;
+          const defaultType = this.defaultData.entityTypes[typeId];
+          const userType = this.data.entityTypes[typeId];
+          const defaultFieldNames = defaultType.fields.map(f => f.name);
+          const userFieldNames = userType.fields.map(f => f.name);
+          if (defaultFieldNames.length !== userFieldNames.length || defaultFieldNames.some(name => !userFieldNames.includes(name))) return true;
+          for (const defaultField of defaultType.fields) {
+            if (defaultField.type === 'dropdown') {
+              const userField = userType.fields.find(f => f.name === defaultField.name);
+              if (!userField || !userField.options) return true;
+              if (defaultField.options.length !== userField.options.length) return true;
+              for (let i = 0; i < defaultField.options.length; i++) {
+                if (defaultField.options[i].value !== userField.options[i].value || defaultField.options[i].nameValue !== userField.options[i].nameValue) return true;
+              }
+            }
+          }
+          return false;
+        });
+        const modalHtml = `
+          <div class="modal" id="restoreDefaultsModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('restoreDefaultsModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Restore Defaults</h3>
+              </div>
+              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                <p>Select the default elements you want to restore to their original state. This will overwrite any customizations you've made to these elements.</p>
+                <form id="restoreDefaultsForm">
+                  <div class="restore-defaults-section">
+                    <h4>Entity Types</h4>
+                    <div style="padding-bottom: 8px;">
+                      <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllEntityTypes" onclick="App.toggleAllCheckboxes('entity-type-checkbox', this.checked)">
+                        <span>Select All Entity Types</span>
+                      </label>
+                    </div>
+                    <div class="restore-defaults-grid">
+                      ${defaultEntityTypes.map(typeId => {
+                        const defaultType = this.defaultData.entityTypes[typeId];
+                        const isModified = modifiedEntityTypes.includes(typeId);
+                        const isDeleted = !this.data.entityTypes[typeId];
+                        return `<div class="restore-item entity-type-card ${isModified ? 'modified' : ''}" data-entity-type="${typeId}" style="position:relative;">
+                          <div class="entity-type-header" style="display:flex;align-items:center;justify-content:space-between;">
+                            <div style="display:flex;align-items:center;gap:0.7em;">
+                              <span class="material-icons">${defaultType.icon}</span>
+                              <label class="checkbox-label" style="margin-bottom:0;">
+                                <input type="checkbox" name="restoreEntityTypes" value="${typeId}" class="entity-type-checkbox">
+                                <span>${defaultType.label}</span>
+                              </label>
+                              ${isDeleted ? '<span class="modify-badge deleted">Deleted</span>' : isModified ? '<span class="modify-badge">Modified</span>' : '<span class="modify-badge original">Original</span>'}
+                            </div>
+                            <span class="material-icons expand-entity-type" data-entity-type="${typeId}" style="cursor:pointer;user-select:none;">expand_more</span>
+                          </div>
+                          <div class="entity-fields-list" data-entity-type-fields="${typeId}" style="display:none;margin-top:0.5em;"></div>
+                        </div>`;
+                      }).join('')}
+                    </div>
+                  </div>
+                  <div class="restore-defaults-section">
+                    <h4>Categories</h4>
+                    <div style="padding-bottom: 8px;">
+                      <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllCategories" onclick="App.toggleAllCheckboxes('category-checkbox', this.checked)">
+                        <span>Select All Categories</span>
+                      </label>
+                    </div>
+                    <div class="restore-defaults-grid">
+                      ${Object.keys(this.defaultData.categories).map(catId => {
+                        const defaultCat = this.defaultData.categories[catId];
+                        const userCat = this.data.categories[catId];
+                        const isModified = !userCat || userCat.label !== defaultCat.label || userCat.icon !== defaultCat.icon;
+                        return `<div class="restore-item ${isModified ? 'modified' : ''}">
+                          <label class="checkbox-label">
+                            <input type="checkbox" name="restoreCategories" value="${catId}" class="category-checkbox">
+                            <span>${defaultCat.label}</span>
+                          </label>
+                          ${!userCat ? '<span class="modify-badge deleted">Deleted</span>' : isModified ? '<span class="modify-badge">Modified</span>' : '<span class="modify-badge original">Original</span>'}
+                        </div>`;
+                      }).join('')}
+                    </div>
+                  </div>
+                  <div class="restore-defaults-section">
+                    <h4>Default Entities</h4>
+                    <div style="padding-bottom: 8px;">
+                      <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllEntities" onclick="App.toggleAllCheckboxes('entity-checkbox', this.checked)">
+                        <span>Select All Example Entities</span>
+                      </label>
+                    </div>
+                    <div class="restore-defaults-grid">
+                      ${Object.keys(this.defaultData.entities).map(entityId => {
+                        const defaultEntity = this.defaultData.entities[entityId];
+                        const userEntity = this.data.entities[entityId];
+                        const entityType = this.defaultData.entityTypes[defaultEntity.type];
+                        const isModified = !userEntity;
+                        return `<div class="restore-item ${isModified ? 'modified' : ''}">
+                          <label class="checkbox-label">
+                            <input type="checkbox" name="restoreEntities" value="${entityId}" class="entity-checkbox">
+                            <span>${defaultEntity.name || defaultEntity.autoName}</span>
+                          </label>
+                          ${!userEntity ? '<span class="modify-badge deleted">Deleted</span>' : '<span class="modify-badge original">Original</span>'}
+                        </div>`;
+                      }).join('')}
+                    </div>
+                  </div>
+                </form>
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('restoreDefaultsModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="App.processRestoreDefaults()">
+                  <span class="material-icons">settings_backup_restore</span>Restore Selected
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('restoreDefaultsModal');
+
+        // Add expand/collapse logic for entity type cards
+        document.querySelectorAll('.expand-entity-type').forEach(icon => {
+          icon.addEventListener('click', function(e) {
+            const typeId = this.dataset.entityType;
+            const fieldsList = document.querySelector(`.entity-fields-list[data-entity-type-fields="${typeId}"]`);
+            if (!fieldsList) return;
+            if (fieldsList.style.display === 'none' || !fieldsList.style.display) {
+              // Populate fields if not already
+              if (!fieldsList.innerHTML) {
+                App.renderRestoreFieldsList(typeId, fieldsList);
+              }
+              fieldsList.style.display = 'block';
+              this.textContent = 'expand_less';
+            } else {
+              fieldsList.style.display = 'none';
+              this.textContent = 'expand_more';
+            }
+          });
+        });
+      },
+      processRestoreDefaults() {
+        const form = document.getElementById('restoreDefaultsForm');
+        if (!form) return;
+        // Restore entity types, fields, and options
+        const selectedEntityTypes = Array.from(form.querySelectorAll('input[name="restoreEntityTypes"]:checked')).map(input => input.value);
+        for (const typeId of selectedEntityTypes) {
+          if (this.defaultData.entityTypes[typeId]) {
+            this.data.entityTypes[typeId] = JSON.parse(JSON.stringify(this.defaultData.entityTypes[typeId]));
+          }
+        }
+        // Restore fields within entity types
+        const fieldCheckboxes = Array.from(form.querySelectorAll('input[class="field-checkbox"]:checked'));
+        for (const fieldCheckbox of fieldCheckboxes) {
+          const [_, typeId] = fieldCheckbox.name.match(/^restoreField_(.+)$/) || [];
+          const fieldName = fieldCheckbox.value;
+          if (typeId && fieldName && this.defaultData.entityTypes[typeId]) {
+            const defaultField = this.defaultData.entityTypes[typeId].fields.find(f => f.name === fieldName);
+            if (defaultField) {
+              const userType = this.data.entityTypes[typeId];
+              if (userType) {
+                const idx = userType.fields.findIndex(f => f.name === fieldName);
+                if (idx !== -1) {
+                  userType.fields[idx] = JSON.parse(JSON.stringify(defaultField));
+                } else {
+                  userType.fields.push(JSON.parse(JSON.stringify(defaultField)));
+                }
+              }
+            }
+          }
+        }
+        // Restore options within dropdown fields
+        const optionCheckboxes = Array.from(form.querySelectorAll('input[class="option-checkbox"]:checked'));
+        for (const optionCheckbox of optionCheckboxes) {
+          const match = optionCheckbox.name.match(/^restoreOption_(.+)_(.+)$/);
+          if (match) {
+            const typeId = match[1];
+            const fieldName = match[2];
+            const optionIdx = parseInt(optionCheckbox.value, 10);
+            const defaultField = this.defaultData.entityTypes[typeId]?.fields.find(f => f.name === fieldName);
+            const userType = this.data.entityTypes[typeId];
+            if (defaultField && userType) {
+              const userField = userType.fields.find(f => f.name === fieldName);
+              if (userField && defaultField.options && defaultField.options[optionIdx]) {
+                if (!userField.options) userField.options = [];
+                userField.options[optionIdx] = JSON.parse(JSON.stringify(defaultField.options[optionIdx]));
+              }
+            }
+          }
+        }
+        // Restore categories
+        const selectedCategories = Array.from(form.querySelectorAll('input[name="restoreCategories"]:checked')).map(input => input.value);
+        for (const catId of selectedCategories) {
+          if (this.defaultData.categories[catId]) {
+            this.data.categories[catId] = JSON.parse(JSON.stringify(this.defaultData.categories[catId]));
+          }
+        }
+        // Restore entities
+        const selectedEntities = Array.from(form.querySelectorAll('input[name="restoreEntities"]:checked')).map(input => input.value);
+        for (const entityId of selectedEntities) {
+          if (this.defaultData.entities[entityId]) {
+            this.data.entities[entityId] = JSON.parse(JSON.stringify(this.defaultData.entities[entityId]));
+          }
+        }
+        this.saveData();
+        this.closeModal('restoreDefaultsModal');
+        const totalRestored = selectedEntityTypes.length + fieldCheckboxes.length + optionCheckboxes.length + selectedCategories.length + selectedEntities.length;
+        this.showNotification(`Restored ${totalRestored} default ${totalRestored === 1 ? 'item' : 'items'} successfully`, 'success');
+        this.loadView('dashboard');
+      },
+      toggleAllCheckboxes(className, checked) {
+        document.querySelectorAll(`.${className}`).forEach(checkbox => {
+          checkbox.checked = checked;
+        });
+      },
+      renderRestoreFieldsList(typeId, container) {
+        const defaultType = this.defaultData.entityTypes[typeId];
+        const userType = this.data.entityTypes[typeId];
+        if (!defaultType || !userType) return;
+        container.innerHTML = defaultType.fields.map((field, fIdx) => {
+          const userField = userType.fields.find(f => f.name === field.name);
+          let badgeHtml = '';
+          if (!userField) {
+            badgeHtml = `<span class='modify-badge deleted'>Removed</span>`;
+          } else if (JSON.stringify(userField) !== JSON.stringify(field)) {
+            badgeHtml = `<span class='modify-badge'>Modified</span>`;
+          } else {
+            badgeHtml = `<span class='modify-badge original'>Original</span>`;
+          }
+          let optionHtml = '';
+          if (field.type === 'dropdown') {
+            optionHtml = `<div class='restore-dropdown-options' style='margin-left:1.5em;margin-top:0.3em;'>
+              <div style='display:flex;align-items:center;gap:0.5em;cursor:pointer;' class='expand-dropdown-options' data-field-name='${field.name}'>
+                <span class='material-icons'>expand_more</span>
+                <span style='font-size:0.95em;'>Dropdown Options</span>
+              </div>
+              <div class='restore-options-list' data-options-list='${field.name}' style='display:none;'>
+                ${field.options.map((opt, oIdx) => {
+                  const userOpt = userField && userField.options ? userField.options[oIdx] : undefined;
+                  let optBadge = '';
+                  if (!userOpt) {
+                    optBadge = `<span class='modify-badge deleted'>Removed</span>`;
+                  } else if (userOpt.value !== opt.value || userOpt.nameValue !== opt.nameValue) {
+                    optBadge = `<span class='modify-badge'>Modified</span>`;
+                  } else {
+                    optBadge = `<span class='modify-badge original'>Original</span>`;
+                  }
+                  return `<div class='restore-option-item' style='margin-left:1.5em;'>
+                    <label class='checkbox-label'>
+                      <input type='checkbox' name='restoreOption_${typeId}_${field.name}' value='${oIdx}' class='option-checkbox'>
+                      <span>${opt.value} (${opt.nameValue})</span>
+                    </label>
+                    ${optBadge}
+                  </div>`;
+                }).join('')}
+              </div>
+            </div>`;
+          }
+          return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
+            <div style='display:flex;align-items:center;gap:0.7em;'>
+              <label class='checkbox-label' style='margin-bottom:0;'>
+                <input type='checkbox' name='restoreField_${typeId}' value='${field.name}' class='field-checkbox'>
+                <span>${field.label}</span>
+              </label>
+              ${badgeHtml}
+            </div>
+            ${optionHtml}
+          </div>`;
+        }).join('');
+        // Add expand/collapse for dropdown options
+        container.querySelectorAll('.expand-dropdown-options').forEach(expand => {
+          expand.addEventListener('click', function() {
+            const fieldName = this.dataset.fieldName;
+            const optionsList = container.querySelector(`[data-options-list='${fieldName}']`);
+            const icon = this.querySelector('.material-icons');
+            if (optionsList.style.display === 'none' || !optionsList.style.display) {
+              optionsList.style.display = 'block';
+              icon.textContent = 'expand_less';
+            } else {
+              optionsList.style.display = 'none';
+              icon.textContent = 'expand_more';
+            }
+          });
+        });
+      },
+      showExportModal() {
+        // Build export selection modal
+        const defaultEntityTypes = Object.keys(this.data.entityTypes);
+        const modalHtml = `
+          <div class="modal" id="exportModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('exportModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Export Data</h3>
+              </div>
+              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                <p>Select the elements you want to export. Only selected items will be included in the export file.</p>
+                <form id="exportForm">
+                  <div class="restore-defaults-section">
+                    <h4>Entity Types</h4>
+                    <div style="padding-bottom: 8px;">
+                      <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllExportEntityTypes" onclick="App.toggleAllCheckboxes('export-entity-type-checkbox', this.checked)">
+                        <span>Select All Entity Types</span>
+                      </label>
+                    </div>
+                    <div class="restore-defaults-grid">
+                      ${defaultEntityTypes.map(typeId => {
+                        const type = this.data.entityTypes[typeId];
+                        return `<div class="restore-item entity-type-card" data-entity-type="${typeId}" style="position:relative;">
+                          <div class="entity-type-header" style="display:flex;align-items:center;justify-content:space-between;">
+                            <div style="display:flex;align-items:center;gap:0.7em;">
+                        <span class="material-icons">${type.icon}</span>
+                              <label class="checkbox-label" style="margin-bottom:0;">
+                                <input type="checkbox" name="exportEntityTypes" value="${typeId}" class="export-entity-type-checkbox">
+                        <span>${type.label}</span>
+                              </label>
+                      </div>
+                            <span class="material-icons expand-entity-type" data-entity-type="${typeId}" style="cursor:pointer;user-select:none;">expand_more</span>
+                      </div>
+                          <div class="entity-fields-list" data-entity-type-fields="${typeId}" style="display:none;margin-top:0.5em;"></div>
+                        </div>`;
+                      }).join('')}
+                    </div>
+                </div>
+                  <div class="restore-defaults-section">
+                    <h4>Categories</h4>
+                    <div style="padding-bottom: 8px;">
+                      <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllExportCategories" onclick="App.toggleAllCheckboxes('export-category-checkbox', this.checked)">
+                        <span>Select All Categories</span>
+                      </label>
+              </div>
+                    <div class="restore-defaults-grid">
+                      ${Object.keys(this.data.categories).map(catId => {
+                        const cat = this.data.categories[catId];
+                        return `<div class="restore-item">
+                          <label class="checkbox-label">
+                            <input type="checkbox" name="exportCategories" value="${catId}" class="export-category-checkbox">
+                            <span>${cat.label}</span>
+                          </label>
+                        </div>`;
+                      }).join('')}
+                        </div>
+                      </div>
+                  <div class="restore-defaults-section">
+                    <h4>Entities</h4>
+                    <div style="padding-bottom: 8px;">
+                                  <label class="checkbox-label">
+                        <input type="checkbox" id="selectAllExportEntities" onclick="App.toggleAllCheckboxes('export-entity-checkbox', this.checked)">
+                        <span>Select All Entities</span>
+                                  </label>
+                    </div>
+                    <div class="restore-defaults-grid">
+                      ${Object.keys(this.data.entities).map(entityId => {
+                        const entity = this.data.entities[entityId];
+                        return `<div class="restore-item">
+                                  <label class="checkbox-label">
+                            <input type="checkbox" name="exportEntities" value="${entityId}" class="export-entity-checkbox">
+                            <span>${this.getEntityCardTitle(entity)}</span>
+                                  </label>
+                        </div>`;
+                      }).join('')}
+                    </div>
+                  </div>
+                  <div class="restore-defaults-section">
+                    <h4>Settings</h4>
+                    <div class="restore-item">
+                                  <label class="checkbox-label">
+                        <input type="checkbox" name="exportSettings" value="settings" class="export-settings-checkbox" checked>
+                        <span>Settings</span>
+                                  </label>
+                    </div>
+                  </div>
+                </form>
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('exportModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="App.processExport()">
+                  <span class="material-icons">download</span>Export Selected
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('exportModal');
+
+        // Add expand/collapse logic for entity type cards
+        document.querySelectorAll('.expand-entity-type').forEach(icon => {
+          icon.addEventListener('click', function(e) {
+            const typeId = this.dataset.entityType;
+            const fieldsList = document.querySelector(`.entity-fields-list[data-entity-type-fields="${typeId}"]`);
+            if (!fieldsList) return;
+            if (fieldsList.style.display === 'none' || !fieldsList.style.display) {
+              if (!fieldsList.innerHTML) {
+                App.renderExportFieldsList(typeId, fieldsList);
+              }
+              fieldsList.style.display = 'block';
+              this.textContent = 'expand_less';
+            } else {
+              fieldsList.style.display = 'none';
+              this.textContent = 'expand_more';
+            }
+          });
+        });
+      },
+
+      renderExportFieldsList(typeId, container) {
+        const type = this.data.entityTypes[typeId];
+        if (!type) return;
+        container.innerHTML = (type.fields || []).map((field, fIdx) => {
+          let optionHtml = '';
+          if (field.type === 'dropdown') {
+            optionHtml = `<div class='restore-dropdown-options' style='margin-left:1.5em;margin-top:0.3em;'>
+              <div style='display:flex;align-items:center;gap:0.5em;cursor:pointer;' class='expand-dropdown-options' data-field-name='${field.name}'>
+                <span class='material-icons'>expand_more</span>
+                <span style='font-size:0.95em;'>Dropdown Options</span>
+              </div>
+              <div class='restore-options-list' data-options-list='${field.name}' style='display:none;'>
+                ${(field.options || []).map((opt, oIdx) => {
+                  return `<div class='restore-option-item' style='margin-left:1.5em;'>
+                    <label class='checkbox-label'>
+                      <input type='checkbox' name='exportOption_${typeId}_${field.name}' value='${oIdx}' class='export-option-checkbox' checked>
+                      <span>${opt.value} (${opt.nameValue})</span>
+                    </label>
+                  </div>`;
+                }).join('')}
+              </div>
+            </div>`;
+          }
+          return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
+            <div style='display:flex;align-items:center;gap:0.7em;'>
+              <label class='checkbox-label' style='margin-bottom:0;'>
+                <input type='checkbox' name='exportField_${typeId}' value='${field.name}' class='export-field-checkbox' checked>
+                <span>${field.label}</span>
+              </label>
+            </div>
+            ${optionHtml}
+          </div>`;
+        }).join('');
+        // Add expand/collapse for dropdown options
+        container.querySelectorAll('.expand-dropdown-options').forEach(expand => {
+          expand.addEventListener('click', function() {
+            const fieldName = this.dataset.fieldName;
+            const optionsList = container.querySelector(`[data-options-list='${fieldName}']`);
+            const icon = this.querySelector('.material-icons');
+            if (optionsList.style.display === 'none' || !optionsList.style.display) {
+              optionsList.style.display = 'block';
+              icon.textContent = 'expand_less';
+            } else {
+              optionsList.style.display = 'none';
+              icon.textContent = 'expand_more';
+            }
+          });
+        });
+      },
+
+      processExport() {
+        const form = document.getElementById('exportForm');
+        if (!form) return;
+        // Gather selected entity types, fields, options
+        const selectedEntityTypes = Array.from(form.querySelectorAll('input[name="exportEntityTypes"]:checked')).map(input => input.value);
+        const selectedCategories = Array.from(form.querySelectorAll('input[name="exportCategories"]:checked')).map(input => input.value);
+        const selectedEntities = Array.from(form.querySelectorAll('input[name="exportEntities"]:checked')).map(input => input.value);
+        const exportSettings = form.querySelector('input[name="exportSettings"]:checked');
+
+        // For entity types, also check for selected fields/options
+        const exportEntityTypes = {};
+        selectedEntityTypes.forEach(typeId => {
+          const type = JSON.parse(JSON.stringify(this.data.entityTypes[typeId]));
+          // Only include selected fields
+          const fieldCheckboxes = Array.from(form.querySelectorAll(`input[name='exportField_${typeId}']:checked`));
+          if (fieldCheckboxes.length > 0) {
+            type.fields = type.fields.filter(f => fieldCheckboxes.some(cb => cb.value === f.name));
+            // For dropdown fields, filter options
+            type.fields.forEach(field => {
+              if (field.type === 'dropdown') {
+                const optionCheckboxes = Array.from(form.querySelectorAll(`input[name='exportOption_${typeId}_${field.name}']:checked`));
+                if (optionCheckboxes.length > 0) {
+                  field.options = field.options.filter((opt, idx) => optionCheckboxes.some(cb => parseInt(cb.value) === idx));
+                }
+              }
+            });
+          }
+          exportEntityTypes[typeId] = type;
+        });
+
+        // Build export object
+        const exportObj = {
+          version: this.data.version,
+          entityTypes: exportEntityTypes,
+          categories: {},
+          entities: {},
+          settings: exportSettings ? JSON.parse(JSON.stringify(this.data.settings)) : undefined
+        };
+        selectedCategories.forEach(catId => {
+          exportObj.categories[catId] = JSON.parse(JSON.stringify(this.data.categories[catId]));
+        });
+        selectedEntities.forEach(entityId => {
+          exportObj.entities[entityId] = JSON.parse(JSON.stringify(this.data.entities[entityId]));
+        });
+
+        // Remove empty sections
+        if (Object.keys(exportObj.categories).length === 0) delete exportObj.categories;
+        if (Object.keys(exportObj.entities).length === 0) delete exportObj.entities;
+        if (Object.keys(exportObj.entityTypes).length === 0) delete exportObj.entityTypes;
+        if (!exportObj.settings) delete exportObj.settings;
+
+        // Download
+        const data = JSON.stringify(exportObj, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `entity-manager-export-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        this.closeModal('exportModal');
+      },
+      showImportModal() {
+        // Modal HTML for modular import
+        const modalHtml = `
+          <div class="modal" id="importModal">
+            <div class="modal-content">
+              <button class="modal-close" onclick="App.closeModal('importModal')">
+                <span class="material-icons">close</span>
+              </button>
+              <div class="modal-header">
+                <h3>Import Data</h3>
+              </div>
+              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                <p>Select a JSON file to preview and import data. You can choose which items to import.</p>
+                <input type="file" id="importFileInput" accept=".json" style="margin-bottom:1em;">
+                <div id="importPreviewArea" class="import-preview-area" style="margin-top:1em;"></div>
+              </div>
+              <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="App.closeModal('importModal')">Cancel</button>
+                <button class="btn btn-primary" id="processImportBtn" disabled onclick="App.processImport()">
+                  <span class="material-icons">download</span>Import Selected
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        const div = document.createElement('div');
+        div.innerHTML = modalHtml;
+        document.body.appendChild(div.firstElementChild);
+        this.showModal('importModal');
+
+        // File input logic
+        const fileInput = document.getElementById('importFileInput');
+        fileInput.addEventListener('change', function(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = function(ev) {
+            try {
+              const imported = JSON.parse(ev.target.result);
+              App.renderImportPreview(imported);
+              document.getElementById('processImportBtn').disabled = false;
+              App._importDataPreview = imported;
+            } catch (err) {
+              document.getElementById('importPreviewArea').innerHTML = '<div class="text-danger">Invalid JSON file.</div>';
+              document.getElementById('processImportBtn').disabled = true;
+              App._importDataPreview = null;
+            }
+          };
+          reader.readAsText(file);
+        });
+      },
+
+      renderImportPreview(imported) {
+        // Render a modular preview of what will be imported (entity types, categories, entities, settings)
+        let html = '';
+        // Entity Types
+        if (imported.entityTypes && Object.keys(imported.entityTypes).length > 0) {
+          html += `<div class='restore-defaults-section'><h4>Entity Types</h4><div class='restore-defaults-grid'>`;
+          for (const [typeId, type] of Object.entries(imported.entityTypes)) {
+            let badge = '';
+            if (!this.data.entityTypes[typeId]) {
+              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+            } else if (JSON.stringify(this.data.entityTypes[typeId]) !== JSON.stringify(type)) {
+              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+            } else {
+              badge = `<span class='modify-badge original'>Unchanged</span>`;
+            }
+            html += `<div class='restore-item'>
+              <label class='checkbox-label'>
+                <input type='checkbox' name='importEntityTypes' value='${typeId}' class='import-entity-type-checkbox' checked>
+                <span>${type.label}</span>
+              </label>
+              ${badge}
+            </div>`;
+          }
+          html += `</div></div>`;
+        }
+        // Categories
+        if (imported.categories && Object.keys(imported.categories).length > 0) {
+          html += `<div class='restore-defaults-section'><h4>Categories</h4><div class='restore-defaults-grid'>`;
+          for (const [catId, cat] of Object.entries(imported.categories)) {
+            let badge = '';
+            if (!this.data.categories[catId]) {
+              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+            } else if (JSON.stringify(this.data.categories[catId]) !== JSON.stringify(cat)) {
+              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+            } else {
+              badge = `<span class='modify-badge original'>Unchanged</span>`;
+            }
+            html += `<div class='restore-item'>
+              <label class='checkbox-label'>
+                <input type='checkbox' name='importCategories' value='${catId}' class='import-category-checkbox' checked>
+                <span>${cat.label}</span>
+              </label>
+              ${badge}
+            </div>`;
+          }
+          html += `</div></div>`;
+        }
+        // Entities
+        if (imported.entities && Object.keys(imported.entities).length > 0) {
+          html += `<div class='restore-defaults-section'><h4>Entities</h4><div class='restore-defaults-grid'>`;
+          for (const [entityId, entity] of Object.entries(imported.entities)) {
+            let badge = '';
+            if (!this.data.entities[entityId]) {
+              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+            } else if (JSON.stringify(this.data.entities[entityId]) !== JSON.stringify(entity)) {
+              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+            } else {
+              badge = `<span class='modify-badge original'>Unchanged</span>`;
+            }
+            html += `<div class='restore-item'>
+              <label class='checkbox-label'>
+                <input type='checkbox' name='importEntities' value='${entityId}' class='import-entity-checkbox' checked>
+                <span>${this.getEntityCardTitle(entity)}</span>
+              </label>
+              ${badge}
+            </div>`;
+          }
+          html += `</div></div>`;
+        }
+        // Settings
+        if (imported.settings) {
+          let badge = '';
+          if (!this.data.settings) {
+            badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+          } else if (JSON.stringify(this.data.settings) !== JSON.stringify(imported.settings)) {
+            badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+          } else {
+            badge = `<span class='modify-badge original'>Unchanged</span>`;
+          }
+          html += `<div class='restore-defaults-section'><h4>Settings</h4><div class='restore-item'>
+            <label class='checkbox-label'>
+              <input type='checkbox' name='importSettings' value='settings' class='import-settings-checkbox' checked>
+              <span>Settings</span>
+            </label>
+            ${badge}
+          </div></div>`;
+        }
+        document.getElementById('importPreviewArea').innerHTML = html || '<div>No importable data found in file.</div>';
+      },
+
+      processImport() {
+        const form = document.getElementById('importModal');
+        if (!this._importDataPreview) return;
+        // Get selected checkboxes
+        const selectedEntityTypes = Array.from(document.querySelectorAll('input[name="importEntityTypes"]:checked')).map(input => input.value);
+        const selectedCategories = Array.from(document.querySelectorAll('input[name="importCategories"]:checked')).map(input => input.value);
+        const selectedEntities = Array.from(document.querySelectorAll('input[name="importEntities"]:checked')).map(input => input.value);
+        const importSettings = document.querySelector('input[name="importSettings"]:checked');
+        const imported = this._importDataPreview;
+        let importedCount = 0;
+        // Entity Types
+        if (imported.entityTypes) {
+          for (const typeId of selectedEntityTypes) {
+            if (imported.entityTypes[typeId]) {
+              this.data.entityTypes[typeId] = JSON.parse(JSON.stringify(imported.entityTypes[typeId]));
+              importedCount++;
+            }
+          }
+        }
+        // Categories
+        if (imported.categories) {
+          for (const catId of selectedCategories) {
+            if (imported.categories[catId]) {
+              this.data.categories[catId] = JSON.parse(JSON.stringify(imported.categories[catId]));
+              importedCount++;
+            }
+          }
+        }
+        // Entities
+        if (imported.entities) {
+          for (const entityId of selectedEntities) {
+            if (imported.entities[entityId]) {
+              this.data.entities[entityId] = JSON.parse(JSON.stringify(imported.entities[entityId]));
+              importedCount++;
+            }
+          }
+        }
+        // Settings
+        if (importSettings && imported.settings) {
+          this.data.settings = JSON.parse(JSON.stringify(imported.settings));
+          importedCount++;
+        }
+        this.saveData();
+        this.closeModal('importModal');
+        this.loadView('dashboard');
+        this.showNotification(`Imported ${importedCount} item${importedCount === 1 ? '' : 's'} successfully`, 'success');
+        this._importDataPreview = null;
+      }
+    };
+
+  window.App = App;
+
+  // Kick off the app once scripts and DOM are ready
+  document.addEventListener('DOMContentLoaded', () => App.init());
+

@@ -1,0 +1,20 @@
+# Secrets and config (keys must not be committed)
+config.js
+.env
+.env.local
+.env.*.local
+*.pem
+secrets/
+
+# Supabase local (if you use supabase CLI)
+.supabase/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+
+# Dependencies (if added later)
+node_modules/
