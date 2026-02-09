@@ -1069,7 +1069,12 @@ const App = {
           sb.className = sb.className.replace('show','');
         }, this.data.settings.notifications?.duration || 3000);
       },
-      
+
+      /** Profile/account UI uses this; delegates to showNotification. */
+      showSnackbar(msg, isError = false) {
+        this.showNotification(msg, isError ? 'error' : 'success');
+      },
+
       /* VERSION UPDATE MODAL */
       showUpdateModal() {
         loadVersionHistory().then(() => {
