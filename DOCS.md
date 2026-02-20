@@ -361,9 +361,12 @@ See **`DEPLOY.md`** for a concise checklist.
 | `version-history.js` | Changelog entries (`window.VERSION_CHANGES`); used by Changelog and What’s New. |
 | `refresh.html` | Utility page that clears localStorage and links back to the app. |
 | `scripts/write-config.js` | Build script: writes `config.js` from env vars (e.g. `SUPABASE_URL`, `SUPABASE_ANON_KEY`). |
+| `scripts/check-no-inline-css.sh` | Guard script: fails if inline `style=` attributes are present in runtime HTML/JS files. |
 | `supabase/schema.sql` | Tables `app_data` and `admin_users`; RLS for `app_data`. Admins: add user id to `admin_users`. |
 | `supabase/functions/` | Optional Edge Functions (e.g. health). |
 | `worker/` | Cloudflare Worker for delete-account and admin API; `wrangler.toml`, `src/index.js`. |
+
+Developer rule: inline CSS is not allowed in `app.html`, `app.js`, `index.html`, or `refresh.html`. Keep styles consolidated in `styles.css` and run `scripts/check-no-inline-css.sh` to verify.
 
 ---
 

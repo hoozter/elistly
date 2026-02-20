@@ -190,16 +190,16 @@ const App = {
           const main = document.getElementById('mainContent');
           if (main) {
             main.innerHTML = `
-              <div class="card" style="max-width: 480px; margin: 2rem auto;">
+              <div class="card setup-required-card">
                 <div class="card-header"><h2><span class="material-icons">settings</span> Setup required</h2></div>
-                <p style="margin: 0 0 1rem 0; color: var(--text-secondary); line-height: 1.5;">Elistly requires an account and a database. To use this app, configure Supabase:</p>
-                <ol style="margin: 0 0 1rem 0; padding-left: 1.5rem; color: var(--text-primary); line-height: 1.6;">
+                <p class="setup-required-copy">Elistly requires an account and a database. To use this app, configure Supabase:</p>
+                <ol class="setup-required-list">
                   <li>Copy <code>config.example.js</code> to <code>config.js</code></li>
                   <li>Create a Supabase project and run the SQL in <code>supabase/schema.sql</code></li>
                   <li>In Supabase → Project Settings → API, copy <strong>Project URL</strong> and <strong>anon public</strong> key into <code>config.js</code></li>
                   <li>Reload this page</li>
                 </ol>
-                <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">See the README for full instructions.</p>
+                <p class="setup-required-note">See the README for full instructions.</p>
               </div>`;
           }
           return;
@@ -388,6 +388,7 @@ const App = {
         this.buildIconGrid();
         this.renderSidebar();
         this.loadView('dashboard');
+        this.ensureMainContentScrollable();
 
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
@@ -407,9 +408,17 @@ const App = {
       showModal(modalId) {
         const modal = document.getElementById(modalId);
         if (modal) {
+          modal.classList.remove('hidden');
           modal.style.display = 'flex';
           modal.classList.add('show');
         }
+      },
+
+      ensureMainContentScrollable() {
+        const main = document.getElementById('mainContent');
+        if (!main) return;
+        if (main.style.overflowY !== 'auto') main.style.overflowY = 'auto';
+        if (main.style.minHeight !== '0px') main.style.minHeight = '0';
       },
 
       showConfirmModal({ title, message, confirmLabel, cancelLabel, confirmVariant, onConfirm, onCancel }) {
@@ -462,7 +471,7 @@ const App = {
         const existing = document.getElementById('authSignInModal');
         if (existing) existing.remove();
         const html = `
-<div class="modal auth-modal" id="authSignInModal" style="display: flex;" data-persistent>
+<div class="modal auth-modal inline-flex-display" id="authSignInModal" data-persistent>
   <div class="auth-modal-card">
     <div class="auth-modal-brand">
       <img src="img/elistly-logo-white.svg" alt="" class="auth-modal-logo">
@@ -479,8 +488,8 @@ const App = {
         <input type="password" id="authSignInPassword" class="auth-input" required placeholder="••••••••" autocomplete="current-password">
         <a href="#" class="auth-forgot" onclick="event.preventDefault(); App.showForgotPasswordModal();">Forgot password?</a>
       </div>
-      <div id="authSignInError" class="auth-error" style="display: none;"></div>
-      <div id="authSignInResendBlock" class="auth-resend-block" style="display: none;">
+      <div id="authSignInError" class="auth-error hidden"></div>
+      <div id="authSignInResendBlock" class="auth-resend-block hidden">
         <p class="auth-resend-text">Didn't get the email? <button type="button" class="btn-link" id="authSignInResendBtn">Resend confirmation email</button></p>
       </div>
       <button type="submit" class="btn btn-primary auth-submit" id="authSignInBtn">Sign in</button>
@@ -498,7 +507,7 @@ const App = {
         const existing = document.getElementById('authSignUpModal');
         if (existing) existing.remove();
         const html = `
-<div class="modal auth-modal" id="authSignUpModal" style="display: flex;" data-persistent>
+<div class="modal auth-modal inline-flex-display" id="authSignUpModal" data-persistent>
   <div class="auth-modal-card">
     <div class="auth-modal-brand">
       <img src="img/elistly-logo-white.svg" alt="" class="auth-modal-logo">
@@ -522,7 +531,7 @@ const App = {
         <label for="authSignUpConfirm">Confirm password</label>
         <input type="password" id="authSignUpConfirm" class="auth-input" required placeholder="••••••••" autocomplete="new-password">
       </div>
-      <div id="authSignUpError" class="auth-error" style="display: none;"></div>
+      <div id="authSignUpError" class="auth-error hidden"></div>
       <button type="submit" class="btn btn-primary auth-submit" id="authSignUpBtn">Create account</button>
     </form>
     <p class="auth-modal-footer">Already have an account? <button type="button" class="btn-link" onclick="App.closeModal('authSignUpModal'); App.showSignInModal();">Sign in</button></p>
@@ -538,7 +547,7 @@ const App = {
         const existing = document.getElementById('authForgotModal');
         if (existing) existing.remove();
         const html = `
-<div class="modal auth-modal" id="authForgotModal" style="display: flex;" data-persistent>
+<div class="modal auth-modal inline-flex-display" id="authForgotModal" data-persistent>
   <div class="auth-modal-card">
     <div class="auth-modal-brand">
       <span class="material-icons auth-modal-icon">lock_reset</span>
@@ -550,8 +559,8 @@ const App = {
         <label for="authForgotEmail">Email</label>
         <input type="email" id="authForgotEmail" class="auth-input" required placeholder="you@example.com" autocomplete="email">
       </div>
-      <div id="authForgotError" class="auth-error" style="display: none;"></div>
-      <div id="authForgotSuccess" class="auth-success" style="display: none;"></div>
+      <div id="authForgotError" class="auth-error hidden"></div>
+      <div id="authForgotSuccess" class="auth-success hidden"></div>
       <button type="submit" class="btn btn-primary auth-submit" id="authForgotBtn">Send reset link</button>
     </form>
     <p class="auth-modal-footer"><button type="button" class="btn-link" onclick="App.closeModal('authForgotModal'); App.showSignInModal();">Back to sign in</button></p>
@@ -658,7 +667,7 @@ const App = {
           return;
         }
         const html = `
-<div class="modal auth-modal" id="authConfirmEmailModal" style="display: flex;" data-persistent>
+<div class="modal auth-modal inline-flex-display" id="authConfirmEmailModal" data-persistent>
   <div class="auth-modal-card">
     <div class="auth-modal-brand">
       <span class="material-icons auth-modal-icon">mark_email_read</span>
@@ -693,6 +702,7 @@ const App = {
         const menu = document.getElementById('profileMenu');
         const btn = document.getElementById('profileBtn');
         if (!wrap || !menu || !btn) return;
+        wrap.classList.remove('hidden');
         wrap.style.display = '';
         const fromProfile = await this.getDisplayName(user.id);
         var rawDisplay = fromProfile || (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
@@ -907,7 +917,7 @@ const App = {
         const presetIcons = { blank: 'add_circle_outline', library: 'menu_book', it: 'devices', staff: 'group', property: 'apartment' };
         const presets = SETUP_IDS.map(function (id) { return PRESETS[id]; }).filter(Boolean);
         const modalHtml = `
-          <div class="modal onboarding-modal" id="onboardingModal" style="display: flex;" data-persistent>
+          <div class="modal onboarding-modal inline-flex-display" id="onboardingModal" data-persistent>
             <div class="modal-content">
               <div class="modal-header">
                 <h3>Welcome to Elistly</h3>
@@ -1203,21 +1213,21 @@ const App = {
           if (relevantVersions.length === 0) return;
 
           const modalHtml = `
-          <div class="modal" id="updateModal" style="display: flex;">
+          <div class="modal inline-flex-display" id="updateModal">
             <div class="modal-content">
               <h3>Update Available (v${CURRENT_VERSION})</h3>
-              <p style="margin-bottom: 1.5rem;">A new version is available with improvements to the core application.</p>
+              <p class="u-mb-150">A new version is available with improvements to the core application.</p>
               
-              <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem;">
+              <div class="update-section update-section update-section-emphasis">
                 <h4>What's New</h4>
-                <ul style="list-style: none; padding: 0;">
+                <ul class="update-list update-list-reset">
                   ${relevantVersions.map(v => `
-                    <li style="margin-bottom: 1rem;">
-                      <strong style="display: block; margin-bottom: 0.5rem; color: var(--accent-color);">Version ${v.version}</strong>
-                      <ul style="list-style: none; padding-left: 1rem;">
+                    <li class="u-mb-100">
+                      <strong class="update-version-heading">Version ${v.version}</strong>
+                      <ul class="update-list update-list-indented">
                         ${v.changes.map(change => `
-                          <li style="margin-bottom: 0.5rem; position: relative;">
-                            <span style="position: absolute; left: -1rem; color: var(--accent-color);">â€¢</span>
+                          <li class="update-list-item">
+                            <span class="update-list-bullet">â€¢</span>
                             ${change}
                           </li>
                         `).join('')}
@@ -1227,7 +1237,7 @@ const App = {
                 </ul>
               </div>
               
-              <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem;">
+              <div class="update-section update-section update-section-emphasis">
                 <h4>Update Options</h4>
                 <div class="form-group">
                   <label class="checkbox-label">
@@ -1284,10 +1294,10 @@ const App = {
       
       showUpdateSuccessModal(details) {
         const modalHtml = `
-          <div class="modal" id="updateSuccessModal" style="display: flex;">
+          <div class="modal inline-flex-display" id="updateSuccessModal">
             <div class="modal-content">
-              <div style="text-align: center; margin-bottom: 2rem;">
-                <span class="material-icons" style="font-size: 48px; color: var(--success-color);">check_circle</span>
+              <div class="update-success-header">
+                <span class="material-icons update-success-icon">check_circle</span>
                 <h3>Update Complete!</h3>
                 <p>System successfully updated to v${CURRENT_VERSION}</p>
               </div>
@@ -1727,7 +1737,7 @@ const App = {
         const currentName = (w && w.name) || 'Inventory';
         const html = `
           <div class="modal" id="renameWorkspaceModal">
-            <div class="modal-content" style="max-width: 360px;">
+            <div class="modal-content modal-content-compact">
               <button class="modal-close" onclick="App.closeModal('renameWorkspaceModal')"><span class="material-icons">close</span></button>
               <div class="modal-header"><h3>Rename inventory</h3></div>
               <div class="modal-body">
@@ -1860,6 +1870,7 @@ const App = {
           this.updateURL({ view: 'admin', category: null });
           const mainContent = document.getElementById('mainContent');
           if (mainContent) this.renderAdminPage();
+          this.ensureMainContentScrollable();
           this.renderSidebar();
           return;
         }
@@ -1874,6 +1885,7 @@ const App = {
         } else {
           this.renderCategoryView(view);
         }
+        this.ensureMainContentScrollable();
         this.renderSidebar();
       },
 
@@ -1959,11 +1971,11 @@ const App = {
                 <h2><span class="material-icons">event_busy</span> Due & overdue</h2>
               </div>
               ${overdue.length > 0 ? `
-                <h3 class="overdue-section-title"><span class="material-icons" style="color: var(--danger-color);">warning</span> Overdue</h3>
+                <h3 class="overdue-section-title"><span class="material-icons text-danger">warning</span> Overdue</h3>
                 <div class="entity-list">${overdue.map(e => renderRow(e)).join('')}</div>
               ` : ''}
               ${dueSoon.length > 0 ? `
-                <h3 class="overdue-section-title"><span class="material-icons" style="color: var(--warning-color);">schedule</span> Due in the next 7 days</h3>
+                <h3 class="overdue-section-title"><span class="material-icons text-warning">schedule</span> Due in the next 7 days</h3>
                 <div class="entity-list">${dueSoon.map(e => renderRow(e)).join('')}</div>
               ` : ''}
               ${overdue.length === 0 && dueSoon.length === 0 ? `
@@ -1972,6 +1984,7 @@ const App = {
             </div>
           </div>`;
         mainContent.innerHTML = html;
+        this.ensureMainContentScrollable();
       },
 
       /** Admin page: list accounts and delete. Requires this.data.isAdmin and apiUrl. */
@@ -2006,7 +2019,7 @@ const App = {
               </button>
             </div>
             <div class="card-body">
-              <p class="profile-help" style="margin-bottom: 1rem;">List of user accounts. Deleting an account removes their auth user and app data permanently.</p>
+              <p class="profile-help u-mb-100">List of user accounts. Deleting an account removes their auth user and app data permanently.</p>
               <div id="adminUsersList"><p class="empty-state">Loading…</p></div>
             </div>
           </div>`;
@@ -2017,7 +2030,7 @@ const App = {
           const listEl = document.getElementById('adminUsersList');
           if (!listEl) return;
           if (!r.ok) {
-            listEl.innerHTML = `<p class="empty-state" style="color: var(--danger-color);">${body.error || 'Failed to load users'}</p>`;
+            listEl.innerHTML = `<p class="empty-state text-danger">${body.error || 'Failed to load users'}</p>`;
             return;
           }
           const users = body.users || [];
@@ -2051,7 +2064,7 @@ const App = {
           });
         } catch (e) {
           const listEl = document.getElementById('adminUsersList');
-          if (listEl) listEl.innerHTML = `<p class="empty-state" style="color: var(--danger-color);">${e.message || 'Request failed'}</p>`;
+          if (listEl) listEl.innerHTML = `<p class="empty-state text-danger">${e.message || 'Request failed'}</p>`;
         }
       },
 
@@ -2308,7 +2321,7 @@ const App = {
                   <span class="material-icons">${category.icon}</span>
                   ${category.label}
                 </h2>
-                <div class="button-group" style="display: flex; gap: 0.5rem;">
+                <div class="button-group button-group-row">
                   ${categoryEntityTypes.length > 0 ? (
                     categoryEntityTypes.length === 1
                       ? `
@@ -2323,7 +2336,7 @@ const App = {
                         <span class="material-icons">add</span>
                         Add New
                       </button>
-                      <div class="dropdown-menu" style="display: none;">
+                      <div class="dropdown-menu hidden">
                         ${categoryEntityTypes.map(type => `
                           <a href="#" onclick="event.preventDefault(); App.showEntityForm('${type.id}')">
                             <span class="material-icons">${type.icon}</span>
@@ -2344,6 +2357,7 @@ const App = {
         `;
         
         mainContent.innerHTML = html;
+        this.ensureMainContentScrollable();
       },
       
       handleSearch(query) {
@@ -2426,7 +2440,7 @@ const App = {
                         <label>Accent color</label>
                         <div class="color-control">
                           <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('accent')">
-                            <span class="color-swatch accent-color-swatch" style="background-color: ${localStorage.getItem('accentColor') || '#2a7ebf'}"></span>
+                            <span class="color-swatch accent-color-swatch accent-color-swatch-inline"></span>
                           </button>
                           <span class="color-hex accent-color-hex">${localStorage.getItem('accentColor') || '#2a7ebf'}</span>
                         </div>
@@ -2435,7 +2449,7 @@ const App = {
                         <label>Header color</label>
                         <div class="color-control">
                           <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('header')">
-                            <span class="color-swatch header-color-swatch" style="background-color: ${localStorage.getItem('headerColor') || '#1a1b1e'}"></span>
+                            <span class="color-swatch header-color-swatch header-color-swatch-inline"></span>
                           </button>
                           <span class="color-hex header-color-hex">${localStorage.getItem('headerColor') || '#1a1b1e'}</span>
                         </div>
@@ -2470,7 +2484,7 @@ const App = {
                       <h4>Dashboard Layout</h4>
                     </div>
                     <div class="section-content">
-                      <p class="help-text" style="margin-bottom: 0.75rem;">Choose how the main dashboard and category views show items. What appears on each card is set per entity type under Manage entity types → Visible in Card.</p>
+                      <p class="help-text u-mb-075">Choose how the main dashboard and category views show items. What appears on each card is set per entity type under Manage entity types → Visible in Card.</p>
                       <div class="form-group">
                         <label>View mode</label>
                         <select name="dashboardViewMode" onchange="App.updateDashboardSettings('viewMode', this.value); App.updateGroupByVisibility(this.value); App.updateViewModeHint(this.value)">
@@ -2678,7 +2692,7 @@ const App = {
                       </div>
                     </div>
                     ${secondaryRows}
-                    <div id="profileChangeEmailBlock" class="profile-change-email-block" style="display: none;">
+                    <div id="profileChangeEmailBlock" class="profile-change-email-block hidden">
                       <input type="email" id="profileNewEmail" placeholder="New primary email" class="profile-input">
                       <div class="profile-inline-actions">
                         <button type="button" class="btn btn-primary btn-sm" id="profileConfirmNewEmail">Send confirmation</button>
@@ -2688,7 +2702,7 @@ const App = {
                     <div class="profile-add-email-block">
                       <button type="button" class="btn btn-primary btn-sm" id="profileAddEmailBtn">Add another email</button>
                     </div>
-                    <div id="profileAddEmailForm" class="profile-add-email-form" style="display: none;">
+                    <div id="profileAddEmailForm" class="profile-add-email-form hidden">
                       <input type="email" id="profileNewSecondaryEmail" placeholder="Secondary email address" class="profile-input">
                       <div class="profile-inline-actions">
                         <button type="button" class="btn btn-primary btn-sm" id="profileAddSecondarySubmit">Add</button>
@@ -3005,12 +3019,12 @@ const App = {
                   <p class="profile-help profile-2fa-intro">Two‑factor authentication uses an authenticator app to generate sign‑in codes.</p>
                   <button type="button" class="btn btn-primary" id="twoFAStartTotp">Start setup</button>
                 </div>
-                <div id="twoFAStepTotp" class="profile-2fa-step profile-2fa-totp-setup" style="display: none;">
+                <div id="twoFAStepTotp" class="profile-2fa-step profile-2fa-totp-setup hidden">
                   <div id="twoFATOTPLoading" class="profile-2fa-totp-loading">
                     <span class="profile-2fa-spinner"></span>
                     <p class="profile-help">Setting up authenticator…</p>
                   </div>
-                  <div id="twoFATOTPContent" class="profile-2fa-totp-content" style="display: none;">
+                  <div id="twoFATOTPContent" class="profile-2fa-totp-content hidden">
                     <p class="profile-help">Scan the QR code with your authenticator app, or enter the code manually if you're on the same device.</p>
                     <div id="twoFATOTPQR" class="profile-totp-qr"></div>
                     <div class="profile-2fa-secret-row">
@@ -3025,7 +3039,7 @@ const App = {
                       <input type="text" id="twoFATOTPCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
                       <button type="button" class="btn btn-primary" id="twoFATOTPVerify">Verify and enable</button>
                     </div>
-                    <p id="twoFATOTPError" class="profile-error" style="display: none;"></p>
+                    <p id="twoFATOTPError" class="profile-error hidden"></p>
                     <button type="button" class="btn btn-secondary btn-sm profile-2fa-back" id="twoFABackFromTotp">Back</button>
                   </div>
                 </div>
@@ -3155,7 +3169,7 @@ const App = {
                   <input type="text" id="mfaVerifyCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
                   <button type="button" class="btn btn-primary" id="mfaVerifySubmit">Verify</button>
                 </div>
-                <p id="mfaVerifyError" class="profile-error" style="display: none;"></p>
+                <p id="mfaVerifyError" class="profile-error hidden"></p>
               </div>
               <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" id="mfaVerifyCancel">Cancel</button>
@@ -3310,9 +3324,9 @@ const App = {
                     ${type.enableNameGen ? `
                       <div class="form-group">
                         <label>Name</label>
-                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <div class="name-lock-row">
                           <input type="text" name="name" id="nameInput" value="${type.enableNameGen ? (entity?.autoName || entity?.name || '') : (entity?.name || '')}"
-                                 data-unlocked="false" readonly style="flex: 1;">
+                                 data-unlocked="false" readonly class="name-lock-input">
                           <button type="button" class="btn btn-secondary" onclick="App.toggleNameLock(this)"
                                   title="Unlock to edit name manually">
                             <span class="material-icons">lock</span>
@@ -3653,7 +3667,7 @@ const App = {
               <div class="modal-header">
                 <h3>Manage Categories</h3>
               </div>
-              <div class="modal-body" style="padding-top: 0">
+              <div class="modal-body modal-body-no-top">
                 <div class="category-list">
                   ${Object.values(this.data.categories).map(category => `
                     <div class="category-item">
@@ -3701,7 +3715,7 @@ const App = {
         const entityTypesSection = isEdit && entityTypes.length ? `
                 <div class="form-group modal-group carded-section">
                   <h4>Entity types in this category</h4>
-                  <p class="profile-help" style="margin-top: 0;">Select which entity types appear under this category. You can also assign categories from each entity type's settings.</p>
+                  <p class="profile-help u-mt-0">Select which entity types appear under this category. You can also assign categories from each entity type's settings.</p>
                   <div class="category-entity-types-checkboxes">
                     ${entityTypes.map(t => {
                       const checked = this.getEntityTypeCategoryIds(t).includes(categoryId);
@@ -4176,7 +4190,7 @@ const App = {
               <div class="modal-header">
                 <h3>Manage Entity Types</h3>
               </div>
-              <div class="modal-body" style="padding-top: 0">
+              <div class="modal-body modal-body-no-top">
                 <div class="entity-type-list">
                   ${Object.values(this.data.entityTypes).map(type => `
                     <div class="category-item entity-type-row">
@@ -4196,14 +4210,14 @@ const App = {
                   `).join('')}
                 </div>
               </div>
-              <div class="modal-actions" style="flex-wrap: wrap; gap: 0.5rem;">
+              <div class="modal-actions modal-actions-wrap">
                 <button class="btn btn-secondary" onclick="App.closeEntityTypeManager()">Close</button>
                 <div class="dropdown">
                   <button type="button" class="btn btn-secondary" onclick="App.toggleDropdown(event, this)">
                     <span class="material-icons">content_copy</span>
                     Add from template
                   </button>
-                  <div class="dropdown-menu" style="display: none; max-height: 280px; overflow-y: auto;">
+                  <div class="dropdown-menu dropdown-menu-scroll hidden">
                     ${this._getTemplateTypeOptions()}
                   </div>
                 </div>
@@ -4238,7 +4252,7 @@ const App = {
             out.push(`<a href="#" class="template-type-link" data-preset="${presetKey}" data-type="${typeId}">${type.label}</a>`);
           });
         });
-        return out.length ? out.join('') : '<span style="padding: 0.75rem; color: var(--text-secondary);">No templates</span>';
+        return out.length ? out.join('') : '<span class="template-empty-state">No templates</span>';
       },
       
       showEntityTypeForm() {
@@ -4411,7 +4425,7 @@ const App = {
                         </div>
                         <div class="form-group">
                           <label>Categories</label>
-                          <p class="profile-help" style="margin-top: 0;">Choose one or more categories where this entity type appears. You can also assign entity types from each category's settings.</p>
+                          <p class="profile-help u-mt-0">Choose one or more categories where this entity type appears. You can also assign entity types from each category's settings.</p>
                           <div class="category-entity-types-checkboxes">
                             ${Object.values(this.data.categories).map(cat => {
                               const typeCatIds = this.getEntityTypeCategoryIds(type);
@@ -4448,7 +4462,7 @@ const App = {
                         </div>
                       </div>
                     </div>
-                    <div class="modal-group carded-section name-generation-settings" style="display: ${type.enableNameGen ? 'block' : 'none'}">
+                    <div class="modal-group carded-section name-generation-settings${type.enableNameGen ? '' : ' hidden'}">
                       <h4>Name Generation Settings</h4>
                       <div class="name-generation-grid">
                         <div class="form-group">
@@ -4503,9 +4517,9 @@ const App = {
                       <div class="sortable-list" id="fieldsContainer">
                         ${type.fields.map((field, index) => `
                             <div class="field-card sortable-item" data-index="${index}" data-field-name="${field.name}">
-                              <div class="field-label-row" style="display:flex;align-items:center;gap:.7em;">
-                                <span class="material-icons drag-handle" title="Drag to reorder" style="margin-right:.2em;">drag_indicator</span>
-                                <strong style="flex:1;text-align:left;font-weight:500;">${field.label}</strong>
+                              <div class="field-label-row field-label-row-inline">
+                                <span class="material-icons drag-handle drag-handle-tight" title="Drag to reorder">drag_indicator</span>
+                                <strong class="field-label-strong">${field.label}</strong>
                                 <button type="button" class="collapse-btn" title="Expand/collapse field" onclick="this.closest('.field-card').classList.toggle('collapsed');event.stopPropagation();">
                                     <span class="material-icons">unfold_less</span>
                                 </button>
@@ -4548,7 +4562,7 @@ const App = {
                                   </div>
                                   <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${index})">Add Option</button>
                                 ` : ''}
-                                <div class="checkbox-group" style="display: flex; gap: 1.1em;">
+                                <div class="checkbox-group checkbox-group-inline">
                                   <label class="checkbox-label">
                                     <input type="checkbox" class="elistly-checkbox" name="fields[${index}].required" ${field.required ? 'checked' : ''}>
                                     <span>Required</span>
@@ -5520,15 +5534,15 @@ const App = {
               </div>
               <div class="changelog-container">
                 ${changes.map(v => `
-                  <div class="update-section" style="background: var(--bg-tertiary); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                      <strong style="color: var(--accent-color);">Version ${v.version}</strong>
-                      <span style="color: var(--text-secondary);">${v.date}</span>
+                  <div class="update-section update-section update-section-emphasis update-section-tight">
+                    <div class="update-version-row">
+                      <strong class="text-accent">Version ${v.version}</strong>
+                      <span class="text-secondary">${v.date}</span>
                     </div>
-                    <ul style="list-style: none; padding-left: 1rem; margin: 0;">
+                    <ul class="update-list update-list-indented update-list-no-margin">
                       ${v.changes.map(change => `
-                        <li style="margin-bottom: 0.5rem; position: relative;">
-                          <span style="position: absolute; left: -1rem; color: var(--accent-color);">•</span>
+                        <li class="update-list-item">
+                          <span class="update-list-bullet">•</span>
                           ${change}
                         </li>
                       `).join('')}
@@ -5871,7 +5885,7 @@ const App = {
         if (existing) existing.remove();
         const modalHtml = `
           <div class="modal" id="resetDataModal" data-persistent>
-            <div class="modal-content" style="max-width: 440px;">
+            <div class="modal-content modal-content-narrow">
               <button class="modal-close" onclick="document.getElementById('resetDataModal').remove()">
                 <span class="material-icons">close</span>
               </button>
@@ -5879,9 +5893,9 @@ const App = {
                 <h3>Reset data</h3>
               </div>
               <div class="modal-body">
-                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete all your app data</strong>—categories, entity types, entities, and settings—from this device and from your account in the database. Your account will remain. This cannot be undone.</p>
-                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>RESET</strong> below.</p>
-                <input type="text" id="resetDataConfirmInput" class="reset-confirm-input" placeholder="Type RESET to reset your data" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
+                <p class="u-mb-100 u-mt-0">This will <strong>permanently delete all your app data</strong>—categories, entity types, entities, and settings—from this device and from your account in the database. Your account will remain. This cannot be undone.</p>
+                <p class="confirm-helper-text">To continue, type <strong>RESET</strong> below.</p>
+                <input type="text" id="resetDataConfirmInput" class="reset-confirm-input" placeholder="Type RESET to reset your data" autocomplete="off">
               </div>
               <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('resetDataModal').remove()">Cancel</button>
@@ -5928,7 +5942,7 @@ const App = {
         if (existing) existing.remove();
         const modalHtml = `
           <div class="modal" id="deleteAccountModal" data-persistent>
-            <div class="modal-content" style="max-width: 440px;">
+            <div class="modal-content modal-content-narrow">
               <button class="modal-close" onclick="document.getElementById('deleteAccountModal').remove()">
                 <span class="material-icons">close</span>
               </button>
@@ -5936,9 +5950,9 @@ const App = {
                 <h3>Delete account</h3>
               </div>
               <div class="modal-body">
-                <p style="margin: 0 0 1rem 0;">This will <strong>permanently delete your account</strong> and all your data. You will not be able to sign in again. This cannot be undone.</p>
-                <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">To continue, type <strong>DELETE</strong> below.</p>
-                <input type="text" id="deleteAccountConfirmInput" class="reset-confirm-input" placeholder="Type DELETE to confirm" autocomplete="off" style="width: 100%; padding: 0.5rem 0.75rem; margin: 0; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--input-bg); color: var(--text-primary); font-size: 1rem;">
+                <p class="u-mb-100 u-mt-0">This will <strong>permanently delete your account</strong> and all your data. You will not be able to sign in again. This cannot be undone.</p>
+                <p class="confirm-helper-text">To continue, type <strong>DELETE</strong> below.</p>
+                <input type="text" id="deleteAccountConfirmInput" class="reset-confirm-input" placeholder="Type DELETE to confirm" autocomplete="off">
               </div>
               <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" onclick="document.getElementById('deleteAccountModal').remove()">Cancel</button>
@@ -5998,18 +6012,18 @@ const App = {
         const presets = SETUP_IDS.filter(function (id) { return id !== 'blank'; }).map(function (id) { return PRESETS[id]; }).filter(Boolean);
         const modalHtml = `
           <div class="modal" id="addPresetModal">
-            <div class="modal-content" style="max-width: 440px;">
+            <div class="modal-content modal-content-narrow">
               <button class="modal-close" onclick="App.closeModal('addPresetModal')">
                 <span class="material-icons">close</span>
               </button>
               <div class="modal-header">
                 <h3>Add preset</h3>
               </div>
-              <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.95rem;">Add categories and entity types from a template. Your existing data is kept.</p>
-              <div class="button-stack" style="margin: 0;">
+              <p class="preset-modal-copy">Add categories and entity types from a template. Your existing data is kept.</p>
+              <div class="button-stack u-m-0">
                 ${presets.map(p => `
-                  <button type="button" class="btn btn-secondary" style="justify-content: flex-start; text-align: left;" onclick="App.applyPreset('${p.id}', false); App.closeModal('addPresetModal');">
-                    <span class="material-icons" style="margin-right: 0.5rem;">folder</span>
+                  <button type="button" class="btn btn-secondary btn-left" onclick="App.applyPreset('${p.id}', false); App.closeModal('addPresetModal');">
+                    <span class="material-icons u-mr-050">folder</span>
                     <span>${p.label}</span>
                   </button>
                 `).join('')}
@@ -6058,12 +6072,12 @@ const App = {
               <div class="modal-header">
                 <h3>Restore Defaults</h3>
               </div>
-              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+              <div class="modal-body modal-body-scroll">
                 <p>Select the default elements you want to restore to their original state. This will overwrite any customizations you've made to these elements.</p>
                 <form id="restoreDefaultsForm">
                   <div class="restore-defaults-section">
                     <h4>Entity Types</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                       <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllEntityTypes" onclick="App.toggleAllCheckboxes('entity-type-checkbox', this.checked)">
                         <span>Select All Entity Types</span>
@@ -6074,26 +6088,26 @@ const App = {
                         const defaultType = this.defaultData.entityTypes[typeId];
                         const isModified = modifiedEntityTypes.includes(typeId);
                         const isDeleted = !this.data.entityTypes[typeId];
-                        return `<div class="restore-item entity-type-card ${isModified ? 'modified' : ''}" data-entity-type="${typeId}" style="position:relative;">
-                          <div class="entity-type-header" style="display:flex;align-items:center;justify-content:space-between;">
-                            <div style="display:flex;align-items:center;gap:0.7em;">
+                        return `<div class="restore-item entity-type-card u-pos-relative ${isModified ? 'modified' : ''}" data-entity-type="${typeId}">
+                          <div class="entity-type-header u-flex-between-center">
+                            <div class="u-flex-center-gap-07">
                               <span class="material-icons">${defaultType.icon}</span>
-                              <label class="checkbox-label" style="margin-bottom:0;">
+                              <label class="checkbox-label u-mb-0">
                                 <input type="checkbox" class="elistly-checkbox entity-type-checkbox" name="restoreEntityTypes" value="${typeId}">
                                 <span>${defaultType.label}</span>
                               </label>
                               ${isDeleted ? '<span class="modify-badge deleted">Deleted</span>' : isModified ? '<span class="modify-badge">Modified</span>' : '<span class="modify-badge original">Original</span>'}
                             </div>
-                            <span class="material-icons expand-entity-type" data-entity-type="${typeId}" style="cursor:pointer;user-select:none;">expand_more</span>
+                            <span class="material-icons expand-entity-type expand-toggle" data-entity-type="${typeId}">expand_more</span>
                           </div>
-                          <div class="entity-fields-list" data-entity-type-fields="${typeId}" style="display:none;margin-top:0.5em;"></div>
+                          <div class="entity-fields-list hidden u-mt-050" data-entity-type-fields="${typeId}"></div>
                         </div>`;
                       }).join('')}
                     </div>
                   </div>
                   <div class="restore-defaults-section">
                     <h4>Categories</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                       <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllCategories" onclick="App.toggleAllCheckboxes('category-checkbox', this.checked)">
                         <span>Select All Categories</span>
@@ -6116,7 +6130,7 @@ const App = {
                   </div>
                   <div class="restore-defaults-section">
                     <h4>Default Entities</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                       <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllEntities" onclick="App.toggleAllCheckboxes('entity-checkbox', this.checked)">
                         <span>Select All Example Entities</span>
@@ -6264,12 +6278,12 @@ const App = {
           }
           let optionHtml = '';
           if (field.type === 'dropdown') {
-            optionHtml = `<div class='restore-dropdown-options' style='margin-left:1.5em;margin-top:0.3em;'>
-              <div style='display:flex;align-items:center;gap:0.5em;cursor:pointer;' class='expand-dropdown-options' data-field-name='${field.name}'>
+            optionHtml = `<div class='restore-dropdown-options u-ml-150 u-mt-030'>
+              <div class='expand-dropdown-options u-flex-center-gap-05 expand-toggle' data-field-name='${field.name}'>
                 <span class='material-icons'>expand_more</span>
-                <span style='font-size:0.95em;'>Dropdown Options</span>
+                <span class='u-fs-095'>Dropdown Options</span>
               </div>
-              <div class='restore-options-list' data-options-list='${field.name}' style='display:none;'>
+              <div class='restore-options-list' data-options-list='${field.name}' class='hidden'>
                 ${field.options.map((opt, oIdx) => {
                   const userOpt = userField && userField.options ? userField.options[oIdx] : undefined;
                   let optBadge = '';
@@ -6280,7 +6294,7 @@ const App = {
                   } else {
                     optBadge = `<span class='modify-badge original'>Original</span>`;
                   }
-                  return `<div class='restore-option-item' style='margin-left:1.5em;'>
+                  return `<div class='restore-option-item u-ml-150'>
                     <label class='checkbox-label'>
                       <input type='checkbox' name='restoreOption_${typeId}_${field.name}' value='${oIdx}' class='elistly-checkbox option-checkbox'>
                       <span>${opt.value} (${opt.nameValue})</span>
@@ -6291,9 +6305,9 @@ const App = {
               </div>
             </div>`;
           }
-          return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
-            <div style='display:flex;align-items:center;gap:0.7em;'>
-              <label class='checkbox-label' style='margin-bottom:0;'>
+          return `<div class='restore-field-item restore-field-item-card'>
+            <div class='u-flex-center-gap-07'>
+              <label class='checkbox-label u-mb-0'>
                 <input type='checkbox' name='restoreField_${typeId}' value='${field.name}' class='elistly-checkbox field-checkbox'>
                 <span>${field.label}</span>
               </label>
@@ -6330,12 +6344,12 @@ const App = {
               <div class="modal-header">
                 <h3>Export Data</h3>
               </div>
-              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+              <div class="modal-body modal-body-scroll">
                 <p>Select the elements you want to export. Only selected items will be included in the export file.</p>
                 <form id="exportForm">
                   <div class="restore-defaults-section">
                     <h4>Entity Types</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                       <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntityTypes" onclick="App.toggleAllCheckboxes('export-entity-type-checkbox', this.checked)">
                         <span>Select All Entity Types</span>
@@ -6344,25 +6358,25 @@ const App = {
                     <div class="restore-defaults-grid">
                       ${defaultEntityTypes.map(typeId => {
                         const type = this.data.entityTypes[typeId];
-                        return `<div class="restore-item entity-type-card" data-entity-type="${typeId}" style="position:relative;">
-                          <div class="entity-type-header" style="display:flex;align-items:center;justify-content:space-between;">
-                            <div style="display:flex;align-items:center;gap:0.7em;">
+                        return `<div class="restore-item entity-type-card u-pos-relative" data-entity-type="${typeId}">
+                          <div class="entity-type-header u-flex-between-center">
+                            <div class="u-flex-center-gap-07">
                         <span class="material-icons">${type.icon}</span>
-                              <label class="checkbox-label" style="margin-bottom:0;">
+                              <label class="checkbox-label u-mb-0">
                                 <input type="checkbox" class="elistly-checkbox export-entity-type-checkbox" name="exportEntityTypes" value="${typeId}">
                         <span>${type.label}</span>
                               </label>
                       </div>
-                            <span class="material-icons expand-entity-type" data-entity-type="${typeId}" style="cursor:pointer;user-select:none;">expand_more</span>
+                            <span class="material-icons expand-entity-type expand-toggle" data-entity-type="${typeId}">expand_more</span>
                       </div>
-                          <div class="entity-fields-list" data-entity-type-fields="${typeId}" style="display:none;margin-top:0.5em;"></div>
+                          <div class="entity-fields-list hidden u-mt-050" data-entity-type-fields="${typeId}"></div>
                         </div>`;
                       }).join('')}
                     </div>
                 </div>
                   <div class="restore-defaults-section">
                     <h4>Categories</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                       <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllExportCategories" onclick="App.toggleAllCheckboxes('export-category-checkbox', this.checked)">
                         <span>Select All Categories</span>
@@ -6382,7 +6396,7 @@ const App = {
                       </div>
                   <div class="restore-defaults-section">
                     <h4>Entities</h4>
-                    <div style="padding-bottom: 8px;">
+                    <div class="u-pb-8">
                                   <label class="checkbox-label">
                         <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntities" onclick="App.toggleAllCheckboxes('export-entity-checkbox', this.checked)">
                         <span>Select All Entities</span>
@@ -6451,14 +6465,14 @@ const App = {
         container.innerHTML = (type.fields || []).map((field, fIdx) => {
           let optionHtml = '';
           if (field.type === 'dropdown') {
-            optionHtml = `<div class='restore-dropdown-options' style='margin-left:1.5em;margin-top:0.3em;'>
-              <div style='display:flex;align-items:center;gap:0.5em;cursor:pointer;' class='expand-dropdown-options' data-field-name='${field.name}'>
+            optionHtml = `<div class='restore-dropdown-options u-ml-150 u-mt-030'>
+              <div class='expand-dropdown-options u-flex-center-gap-05 expand-toggle' data-field-name='${field.name}'>
                 <span class='material-icons'>expand_more</span>
-                <span style='font-size:0.95em;'>Dropdown Options</span>
+                <span class='u-fs-095'>Dropdown Options</span>
               </div>
-              <div class='restore-options-list' data-options-list='${field.name}' style='display:none;'>
+              <div class='restore-options-list' data-options-list='${field.name}' class='hidden'>
                 ${(field.options || []).map((opt, oIdx) => {
-                  return `<div class='restore-option-item' style='margin-left:1.5em;'>
+                  return `<div class='restore-option-item u-ml-150'>
                     <label class='checkbox-label'>
                       <input type='checkbox' name='exportOption_${typeId}_${field.name}' value='${oIdx}' class='elistly-checkbox export-option-checkbox' checked>
                       <span>${opt.value} (${opt.nameValue})</span>
@@ -6468,9 +6482,9 @@ const App = {
               </div>
             </div>`;
           }
-          return `<div class='restore-field-item' style='margin-bottom:0.7em;background:var(--bg-secondary);border-radius:8px;padding:0.7em 1em 0.7em 1em;margin-bottom:0.7em;'>
-            <div style='display:flex;align-items:center;gap:0.7em;'>
-              <label class='checkbox-label' style='margin-bottom:0;'>
+          return `<div class='restore-field-item restore-field-item-card'>
+            <div class='u-flex-center-gap-07'>
+              <label class='checkbox-label u-mb-0'>
                 <input type='checkbox' name='exportField_${typeId}' value='${field.name}' class='elistly-checkbox export-field-checkbox' checked>
                 <span>${field.label}</span>
               </label>
@@ -6570,10 +6584,10 @@ const App = {
               <div class="modal-header">
                 <h3>Import Data</h3>
               </div>
-              <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+              <div class="modal-body modal-body-scroll">
                 <p>Select a JSON file to preview and import data. You can choose which items to import.</p>
-                <input type="file" id="importFileInput" accept=".json" style="margin-bottom:1em;">
-                <div id="importPreviewArea" class="import-preview-area" style="margin-top:1em;"></div>
+                <input type="file" id="importFileInput" accept=".json" class="u-mb-100">
+                <div id="importPreviewArea" class="import-preview-area u-mt-100"></div>
               </div>
               <div class="modal-actions">
                 <button class="btn btn-secondary" onclick="App.closeModal('importModal')">Cancel</button>
@@ -6620,9 +6634,9 @@ const App = {
           for (const [typeId, type] of Object.entries(imported.entityTypes)) {
             let badge = '';
             if (!this.data.entityTypes[typeId]) {
-              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
             } else if (JSON.stringify(this.data.entityTypes[typeId]) !== JSON.stringify(type)) {
-              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
             } else {
               badge = `<span class='modify-badge original'>Unchanged</span>`;
             }
@@ -6642,9 +6656,9 @@ const App = {
           for (const [catId, cat] of Object.entries(imported.categories)) {
             let badge = '';
             if (!this.data.categories[catId]) {
-              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
             } else if (JSON.stringify(this.data.categories[catId]) !== JSON.stringify(cat)) {
-              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
             } else {
               badge = `<span class='modify-badge original'>Unchanged</span>`;
             }
@@ -6664,9 +6678,9 @@ const App = {
           for (const [entityId, entity] of Object.entries(imported.entities)) {
             let badge = '';
             if (!this.data.entities[entityId]) {
-              badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
             } else if (JSON.stringify(this.data.entities[entityId]) !== JSON.stringify(entity)) {
-              badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
             } else {
               badge = `<span class='modify-badge original'>Unchanged</span>`;
             }
@@ -6684,9 +6698,9 @@ const App = {
         if (imported.settings) {
           let badge = '';
           if (!this.data.settings) {
-            badge = `<span class='modify-badge original' style='background:var(--success-color);color:#fff;'>New</span>`;
+            badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
           } else if (JSON.stringify(this.data.settings) !== JSON.stringify(imported.settings)) {
-            badge = `<span class='modify-badge' style='background:var(--accent-color);color:#fff;'>Will Overwrite</span>`;
+            badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
           } else {
             badge = `<span class='modify-badge original'>Unchanged</span>`;
           }
@@ -6755,4 +6769,3 @@ const App = {
 
   // Kick off the app once scripts and DOM are ready
   document.addEventListener('DOMContentLoaded', () => App.init());
-
