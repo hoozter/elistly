@@ -6,6 +6,15 @@
   'use strict';
   window.VERSION_CHANGES = [
     {
+      version: '1.12.1',
+      date: '2026-02-21',
+      changes: [
+        'Fix hidden modal overlays blocking clicks by making static modals hidden by default in the app and landing pages',
+        'App shell: set #iconPickerModal and #confirmModal to hidden by default; Landing shell: set #landingLegalModal to hidden by default',
+        'This preserves the no-inline-CSS rule while fixing interaction regressions where header/sign-in controls could be blocked by invisible modal overlays'
+      ]
+    },
+    {
       version: '1.12.0',
       date: '2026-02-09',
       changes: [
