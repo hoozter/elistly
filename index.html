@@ -5,6 +5,11 @@
   <title>Elistly – Modular inventory and entity management</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Track what matters—devices, people, books, properties—in one place. Flexible categories, multiple workspaces, export and sync.">
+  <meta name="theme-color" content="#1a1b1e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
   <script>
   (function() {
     var theme = localStorage.getItem('theme');
@@ -17,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=14" />
+  <link rel="stylesheet" href="styles.css?v=15" />
 </head>
 <body class="landing-page">
   <div class="landing-container">
@@ -88,9 +93,6 @@
           <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
         </section>
       </div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="landingLegalCloseBtn">Close</button>
-      </div>
     </div>
   </div>
   <script>
@@ -98,14 +100,14 @@
     var link = document.getElementById('landingLegalLink');
     var modal = document.getElementById('landingLegalModal');
     var close1 = document.getElementById('landingLegalClose');
-    var close2 = document.getElementById('landingLegalCloseBtn');
     function openLegal() { modal.style.display = 'flex'; modal.setAttribute('aria-hidden', 'false'); }
     function closeLegal() { modal.style.display = 'none'; modal.setAttribute('aria-hidden', 'true'); }
     if (link) link.addEventListener('click', function(e) { e.preventDefault(); openLegal(); });
     if (close1) close1.addEventListener('click', closeLegal);
-    if (close2) close2.addEventListener('click', closeLegal);
+    if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) closeLegal(); });
   })();
   </script>
+  <script src="pwa-register.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 </body>
 </html>

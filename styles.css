@@ -2985,6 +2985,18 @@ select option:hover {
 /* ========== Responsive: mobile tweaks (640px) ========== */
 @media (max-width: 640px) {
   :root { --gap: 0.75rem; }
+  body:not(.landing-page) .app-footer {
+    display: none;
+  }
+  body:not(.landing-page) .app-footer.mobile-footer-visible {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    box-shadow: 0 -6px 16px var(--shadow-color);
+  }
   header {
     padding: 0.5rem 0.75rem;
   }

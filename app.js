@@ -40,17 +40,56 @@ const MATERIAL_ICONS = [
 
 // Supabase client (when config present). Used by Storage and Auth.
 var supabaseClient = null;
-(function () {
+const SUPABASE_SCRIPT_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
+  'https://unpkg.com/@supabase/supabase-js@2'
+];
+
+function loadExternalScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      if (existing.dataset.loaded === 'true') return resolve();
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.onload = () => {
+      script.dataset.loaded = 'true';
+      resolve();
+    };
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
   var url = typeof window !== 'undefined' && window.SUPABASE_URL;
   var anonKey = typeof window !== 'undefined' && window.SUPABASE_ANON_KEY;
-  if (url && anonKey && typeof window.supabase !== 'undefined') {
-    try {
-      supabaseClient = window.supabase.createClient(url, anonKey);
-    } catch (e) {
-      console.warn('Elistly: Supabase client init failed', e);
+  if (!url || !anonKey) return null;
+
+  if (typeof window.supabase === 'undefined') {
+    for (const src of SUPABASE_SCRIPT_SOURCES) {
+      try {
+        await loadExternalScript(src);
+        if (typeof window.supabase !== 'undefined') break;
+      } catch (_) {}
     }
   }
-})();
+  if (typeof window.supabase === 'undefined') return null;
+
+  try {
+    supabaseClient = window.supabase.createClient(url, anonKey);
+  } catch (e) {
+    console.warn('Elistly: Supabase client init failed', e);
+    supabaseClient = null;
+  }
+  return supabaseClient;
+}
 
 // Storage layer: localStorage or Supabase (one row per user in app_data)
 const Storage = {
@@ -176,6 +215,8 @@ const App = {
   _presets: PRESETS,
       
       async init() {
+        await ensureSupabaseClient();
+
         this.data = {
           version: CURRENT_VERSION,
           settings: { defaultView: 'dashboard', materialIcons: MATERIAL_ICONS },
@@ -188,10 +229,9 @@ const App = {
 
         if (!supabaseClient) {
           const main = document.getElementById('mainContent');
-          if (main) {
-            main.innerHTML = `
-              <div class="card setup-required-card">
-                <div class="card-header"><h2><span class="material-icons">settings</span> Setup required</h2></div>
+          const hasConfigKeys = !!(window.SUPABASE_URL && window.SUPABASE_ANON_KEY);
+          const hasSupabaseSdk = typeof window.supabase !== 'undefined';
+          let setupHtml = `
                 <p class="setup-required-copy">Elistly requires an account and a database. To use this app, configure Supabase:</p>
                 <ol class="setup-required-list">
                   <li>Copy <code>config.example.js</code> to <code>config.js</code></li>
@@ -199,7 +239,22 @@ const App = {
                   <li>In Supabase → Project Settings → API, copy <strong>Project URL</strong> and <strong>anon public</strong> key into <code>config.js</code></li>
                   <li>Reload this page</li>
                 </ol>
-                <p class="setup-required-note">See the README for full instructions.</p>
+                <p class="setup-required-note">See the README for full instructions.</p>`;
+          if (hasConfigKeys && !hasSupabaseSdk) {
+            setupHtml = `
+                <p class="setup-required-copy">Supabase configuration was found, but the Supabase SDK did not load.</p>
+                <ol class="setup-required-list">
+                  <li>Check your internet connection</li>
+                  <li>Disable content blockers for this site (they may block CDN scripts)</li>
+                  <li>Hard reload the page</li>
+                </ol>
+                <p class="setup-required-note">Tip: open DevTools → Network and verify the <code>@supabase/supabase-js</code> script is loading.</p>`;
+          }
+          if (main) {
+            main.innerHTML = `
+              <div class="card setup-required-card">
+                <div class="card-header"><h2><span class="material-icons">settings</span> Setup required</h2></div>
+                ${setupHtml}
               </div>`;
           }
           return;
@@ -844,6 +899,49 @@ const App = {
             document.body.classList.remove('search-expanded');
           }
         });
+
+        this.setupMobileFooterVisibility();
+      },
+
+      setupMobileFooterVisibility() {
+        const footer = document.querySelector('.app-footer');
+        const mainContent = document.getElementById('mainContent');
+        const mediaQuery = window.matchMedia('(max-width: 640px)');
+        if (!footer || !mainContent || !mediaQuery) return;
+
+        let lastScrollTop = 0;
+        let rafId = null;
+
+        const isAtBottom = () => (mainContent.scrollTop + mainContent.clientHeight) >= (mainContent.scrollHeight - 4);
+
+        const updateFooterState = () => {
+          if (!mediaQuery.matches) {
+            footer.classList.remove('mobile-footer-visible');
+            lastScrollTop = Math.max(mainContent.scrollTop, 0);
+            return;
+          }
+          const currentScrollTop = Math.max(mainContent.scrollTop, 0);
+          const isScrollingUp = currentScrollTop < (lastScrollTop - 2);
+          footer.classList.toggle('mobile-footer-visible', isAtBottom() && isScrollingUp);
+          lastScrollTop = currentScrollTop;
+        };
+
+        const queueUpdate = () => {
+          if (rafId !== null) return;
+          rafId = window.requestAnimationFrame(() => {
+            rafId = null;
+            updateFooterState();
+          });
+        };
+
+        mainContent.addEventListener('scroll', queueUpdate, { passive: true });
+        window.addEventListener('resize', queueUpdate);
+        if (typeof mediaQuery.addEventListener === 'function') {
+          mediaQuery.addEventListener('change', queueUpdate);
+        } else if (typeof mediaQuery.addListener === 'function') {
+          mediaQuery.addListener(queueUpdate);
+        }
+        updateFooterState();
       },
 
       closeSidebar() {
@@ -2748,7 +2846,6 @@ const App = {
               </div>
               <div class="modal-actions">
                 <button type="button" class="btn btn-primary" id="profileSaveBtn">Save</button>
-                <button type="button" class="btn btn-secondary" onclick="App.closeModal('profileModal')">Close</button>
               </div>
             </div>
           </div>
@@ -3361,7 +3458,6 @@ const App = {
                 
                 <div class="modal-actions">
                   <div id="entityViewActions" class="${isEdit ? '' : 'hidden'}">
-                    <button type="button" class="btn btn-secondary" onclick="App.closeModal('entityModal')">Close</button>
                     <button type="button" class="btn btn-primary" onclick="App.showEntityEditMode(true)">
                       <span class="material-icons">edit</span>
                       Edit
@@ -3688,7 +3784,6 @@ const App = {
                 </div>
               </div>
               <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeCategoryManager()">Close</button>
                 <button class="btn btn-primary" onclick="App.showCategoryForm()">
                   <span class="material-icons">add</span>
                   New Category
@@ -4211,7 +4306,6 @@ const App = {
                 </div>
               </div>
               <div class="modal-actions modal-actions-wrap">
-                <button class="btn btn-secondary" onclick="App.closeEntityTypeManager()">Close</button>
                 <div class="dropdown">
                   <button type="button" class="btn btn-secondary" onclick="App.toggleDropdown(event, this)">
                     <span class="material-icons">content_copy</span>
@@ -5595,11 +5689,6 @@ const App = {
                   </div>
                 `).join('')}
               </div>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="document.getElementById('changelogModal').remove()">
-                  Close
-                </button>
-              </div>
             </div>
           </div>
         `;
@@ -5635,9 +5724,6 @@ const App = {
                 <h3>Help</h3>
               </div>
               <div class="faq-container">${bodyHtml}</div>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="document.getElementById('faqModal').remove()">Close</button>
-              </div>
             </div>
           </div>
         `;
@@ -5682,9 +5768,6 @@ const App = {
                   <h4>Source code</h4>
                   <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
                 </section>
-              </div>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('legalModal')">Close</button>
               </div>
             </div>
           </div>
@@ -6027,9 +6110,6 @@ const App = {
                     <span>${p.label}</span>
                   </button>
                 `).join('')}
-              </div>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('addPresetModal')">Cancel</button>
               </div>
             </div>
           </div>`;
