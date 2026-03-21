@@ -516,6 +516,25 @@ body.landing-page {
   flex-direction: column;
   background: var(--bg-primary);
 }
+.landing-profile-anchor {
+  position: fixed;
+  inset: 0.75rem 0.75rem auto auto;
+  right: 0.75rem !important;
+  left: auto !important;
+  z-index: 50;
+  color: var(--text-primary);
+}
+#landingProfileBtn.header-icon-btn {
+  margin: 0 !important;
+  transform: none !important;
+  position: relative;
+  left: 0 !important;
+  right: 0 !important;
+}
+#landingProfileMenu.dropdown-menu {
+  right: 0;
+  left: auto;
+}
 .landing-container {
   flex: 1;
   display: flex;
@@ -628,6 +647,11 @@ body.landing-page {
 }
 
 @media (max-width: 560px) {
+  .landing-profile-anchor {
+    inset: 0.55rem 0.55rem auto auto;
+    right: 0.55rem !important;
+    left: auto !important;
+  }
   .landing-container { padding: 2rem var(--gap) 2.5rem; }
   .landing-logo { height: 52px; margin-bottom: 0.5rem; }
   .landing-headline { font-size: 1.75rem; max-width: none; }
@@ -2811,6 +2835,61 @@ input.elistly-checkbox:disabled {
 .header-color-swatch-inline { background-color: var(--header-bg); }
 .template-empty-state { padding: 0.75rem; color: var(--text-secondary); }
 .name-generation-settings-state { display: block; }
+.name-generation-settings.hidden { display: none; }
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  cursor: pointer;
+  user-select: none;
+}
+.ui-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.ui-switch-slider {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  position: relative;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+.ui-switch-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+.ui-switch input:checked + .ui-switch-slider {
+  background: rgba(var(--accent-color-rgb), 0.22);
+  border-color: rgba(var(--accent-color-rgb), 0.5);
+}
+.ui-switch input:checked + .ui-switch-slider::after {
+  transform: translateX(18px);
+  background: var(--accent-color);
+}
+.ui-switch input:focus-visible + .ui-switch-slider {
+  outline: 2px solid rgba(var(--accent-color-rgb), 0.65);
+  outline-offset: 2px;
+}
+.ui-switch input:disabled + .ui-switch-slider {
+  opacity: 0.6;
+}
+.ui-switch-label {
+  color: var(--text-primary);
+  font-weight: 500;
+}
 .field-label-row-inline { display: flex; align-items: center; gap: 0.7em; }
 .drag-handle-tight { margin-right: 0.2em; }
 .field-label-strong { flex: 1; text-align: left; font-weight: 500; }

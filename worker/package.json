@@ -4,6 +4,9 @@
   "scripts": {
     "deploy": "wrangler deploy"
   },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4"
+  },
   "devDependencies": {
     "wrangler": "^3.91.0"
   }

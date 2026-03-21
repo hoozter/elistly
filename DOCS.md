@@ -78,7 +78,7 @@ After you choose a non-blank preset, the app may offer to **load sample data** (
 
 ### Clearing local data
 
-**`refresh.html`** clears the app’s localStorage key in this browser and shows a link back to the app. It does **not** delete your data in the database. When you open the app again and sign in, your data will load from the database. To permanently delete all your app data (keep account) use **Profile → Reset data**; to delete your account and all data use **Profile → Delete account** (see [Account and Supabase](#8-account-and-supabase)).
+The app no longer ships a separate `refresh.html` utility page. To clear local data, use **Profile → Reset data** for account-backed data or clear browser storage manually during development.
 
 ---
 
@@ -224,7 +224,7 @@ After an **app version upgrade**, you may be prompted to **restore default entit
 
 ### Account required
 
-Elistly always runs with an account. You must configure Supabase (`config.js` with `SUPABASE_URL` and `SUPABASE_ANON_KEY`). If config is missing, the app shows a “Setup required” message and does not load data. Once configured, you sign in and your data is stored in the database; the app syncs with it and is designed to work offline and sync when back online (e.g. installable web app on Android).
+Elistly always runs with an account. You must configure a backend provider in `config.js` with `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, and `ELISTLY_PUBLIC_KEY`. Legacy `SUPABASE_URL` and `SUPABASE_ANON_KEY` are still supported during migration. If config is missing, the app shows a “Setup required” message and does not load data.
 
 ### What Supabase does
 
@@ -277,7 +277,7 @@ Admin features let designated users list and delete accounts. They require the *
 
 ### Worker environment
 
-The Worker needs **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`** (to verify user JWTs), and **`SUPABASE_SERVICE_ROLE_KEY`**. See **`CLOUDFLARE_DEPLOY.md`** for full deploy steps.
+The Worker needs **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, **`ELISTLY_PUBLIC_KEY`** (to verify user JWTs), and **`ELISTLY_SERVICE_ROLE_KEY`**. Legacy `SUPABASE_*` names are still supported. See **`CLOUDFLARE_DEPLOY.md`** for full deploy steps.
 
 ---
 
@@ -318,12 +318,12 @@ The app is **responsive**:
 
 ### Local / static
 
-- The app must have Supabase configured (see README). Run it by opening **index.html** (or serving the folder). Copy `config.example.js` to `config.js` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
+- The app must have backend config set (see README). Run it by opening **index.html** (or serving the folder). Copy `config.example.js` to `config.js` and set `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, and `ELISTLY_PUBLIC_KEY`.
 
 ### Supabase backend
 
 1. Create a Supabase project.
-2. In the SQL Editor, run the contents of **`supabase/schema.sql`**. This creates `app_data` and RLS policies (safe to re-run).
+2. In the SQL Editor, run the contents of **`supabase/schema.sql`**. This creates `app_data`, `profiles`, and `admin_users`, plus the RLS policies, and is safe to re-run.
 3. (Optional) Configure Auth: email confirmation, MFA, etc. See Supabase docs.
 4. In the app, set `config.js` (or inject config at build time) with Project URL and anon key.
 
@@ -332,11 +332,11 @@ See **`DEPLOY.md`** for a concise checklist.
 ### Cloudflare Pages (frontend)
 
 - Connect the repo to Cloudflare Pages. Build command: **`node scripts/write-config.js`**. Output directory: **`/`** (or your static output).
-- Set environment variables **`SUPABASE_URL`** and **`SUPABASE_ANON_KEY`** so the build script can write `config.js` from env. No secrets in the repo.
+- Set environment variables **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, and **`ELISTLY_PUBLIC_KEY`** so the build script can write `config.js` from env. Legacy `SUPABASE_*` names still work. No secrets in the repo.
 
 ### Cloudflare Worker (API)
 
-- Used for **delete account** and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, **`SUPABASE_SERVICE_ROLE_KEY`**. The app needs **`ELISTLY_API_URL`** in config (set in Pages as the env var **`ELISTLY_API_URL`**) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
+- Used for **app data**, **profile data**, **delete account**, and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, **`ELISTLY_PUBLIC_KEY`**, **`ELISTLY_SERVICE_ROLE_KEY`**. The app needs **`ELISTLY_API_URL`** in config (set in Pages as the env var **`ELISTLY_API_URL`**) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
 
 ### Supabase Edge Functions
 
@@ -353,20 +353,20 @@ See **`DEPLOY.md`** for a concise checklist.
 | `app.js` | Main application logic: data, UI, auth, export/import, entity types, categories. |
 | `styles.css` | All styles; theme variables, layout, responsive rules. |
 | `img/` | Logo variants (SVG/PNG), app screenshot (`elistly-app.png`) for landing page. |
-| `config.example.js` | Template for config; copy to `config.js` (gitignored) and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, optional `ELISTLY_API_URL`. |
-| `config.js` | `window.SUPABASE_URL`, `window.SUPABASE_ANON_KEY`, `window.ELISTLY_API_URL` (gitignored; created at build or by hand). |
+| `config.example.js` | Template for config; copy to `config.js` (gitignored) and set `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, `ELISTLY_PUBLIC_KEY`, optional `ELISTLY_API_URL`. |
+| `config.js` | `window.ELISTLY_BACKEND_PROVIDER`, `window.ELISTLY_BACKEND_URL`, `window.ELISTLY_PUBLIC_KEY`, `window.ELISTLY_API_URL` (gitignored; created at build or by hand). |
 | `setup-blank.js`, `setup-library.js`, etc. | Starter presets; register in `window.ELISTLY_PRESETS`. |
 | `sample-data.js` | Optional sample entities per preset; used for “Load sample data?”. |
 | `faq.js` | In-app FAQ content (`window.ELISTLY_FAQ`); used by the Help modal. |
 | `version-history.js` | Changelog entries (`window.VERSION_CHANGES`); used by Changelog and What’s New. |
-| `refresh.html` | Utility page that clears localStorage and links back to the app. |
-| `scripts/write-config.js` | Build script: writes `config.js` from env vars (e.g. `SUPABASE_URL`, `SUPABASE_ANON_KEY`). |
+| `scripts/write-config.js` | Build script: writes `config.js` from env vars (for example `ELISTLY_BACKEND_URL`, `ELISTLY_PUBLIC_KEY`). |
 | `scripts/check-no-inline-css.sh` | Guard script: fails if inline `style=` attributes are present in runtime HTML/JS files. |
-| `supabase/schema.sql` | Tables `app_data` and `admin_users`; RLS for `app_data`. Admins: add user id to `admin_users`. |
+| `neon/schema.sql` | Neon-ready schema using `auth.user_id()` RLS for `app_data` and `profiles`. |
+| `supabase/schema.sql` | Tables `app_data`, `profiles`, and `admin_users`; RLS for `app_data` and `profiles`. Admins: add user id to `admin_users`. |
 | `supabase/functions/` | Optional Edge Functions (e.g. health). |
 | `worker/` | Cloudflare Worker for delete-account and admin API; `wrangler.toml`, `src/index.js`. |
 
-Developer rule: inline CSS is not allowed in `app.html`, `app.js`, `index.html`, or `refresh.html`. Keep styles consolidated in `styles.css` and run `scripts/check-no-inline-css.sh` to verify.
+Developer rule: inline CSS is not allowed in `app.html`, `app.js`, or `index.html`. Keep styles consolidated in `styles.css` and run `scripts/check-no-inline-css.sh` to verify.
 
 ---
 

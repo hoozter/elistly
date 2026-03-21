@@ -1,39 +1,29 @@
 /**
- * Elistly API Worker – health, account delete, admin (list/delete users).
- * Env: SUPABASE_URL, SUPABASE_ANON_KEY (for verifying user JWT), SUPABASE_SERVICE_ROLE_KEY.
+ * Elistly API Worker – stable app-owned API surface for auth-adjacent features,
+ * user data, profile data, and admin actions.
+ *
+ * Backend: Neon (PostgreSQL via @neondatabase/serverless HTTP driver)
+ * Auth: Neon Auth (Stack Auth) – JWT verified by decoding sub claim
+ * Required env vars: NEON_DATABASE_URL
  */
 
-const SUPABASE_AUTH = '/auth/v1';
-const SUPABASE_REST = '/rest/v1';
+import { neon } from "@neondatabase/serverless";
 
-async function getAuthUser(env, bearerToken) {
-  if (!bearerToken || !bearerToken.startsWith('Bearer ')) return null;
+function getAuthUser(bearerToken) {
+  if (!bearerToken?.startsWith("Bearer ")) return null;
   const token = bearerToken.slice(7).trim();
-  if (!token) return null;
-  const url = `${env.SUPABASE_URL}${SUPABASE_AUTH}/user`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: env.SUPABASE_ANON_KEY
-    }
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data && data.id ? data : null;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.sub ? { id: payload.sub, ...payload } : null;
+  } catch { return null; }
 }
 
-async function isAdmin(env, userId) {
-  const url = `${env.SUPABASE_URL}${SUPABASE_REST}/admin_users?user_id=eq.${userId}&select=user_id`;
-  const res = await fetch(url, {
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      'Content-Type': 'application/json'
-    }
-  });
-  if (!res.ok) return false;
-  const rows = await res.json();
-  return Array.isArray(rows) && rows.length > 0;
+async function readJsonBody(req) {
+  try {
+    return await req.json();
+  } catch (_) {
+    return null;
+  }
 }
 
 function corsHeaders(origin) {
@@ -41,7 +31,7 @@ function corsHeaders(origin) {
   return {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': o,
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Cache-Control': 'no-store, no-cache'
   };
@@ -66,77 +56,153 @@ export default {
       }
 
       if (path === '/health' || path === '/') {
-        return jsonResponse({ ok: true, service: 'elistly-api' }, 200, origin);
+        return jsonResponse({ ok: true, service: 'elistly-api', provider: 'neon' }, 200, origin);
       }
 
       if (path === '/debug-env') {
         const keys = typeof env === 'object' && env !== null ? Object.keys(env) : [];
-        return jsonResponse({ envKeys: keys, hasSupabaseUrl: !!env.SUPABASE_URL }, 200, origin);
+        return jsonResponse(
+          { envKeys: keys, provider: 'neon', hasBackendUrl: !!env.NEON_DATABASE_URL },
+          200,
+          origin
+        );
       }
 
       const authHeader = req.headers.get('Authorization');
+      const sql = neon(env.NEON_DATABASE_URL);
+
+      if (path === '/me' && req.method === 'GET') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        return jsonResponse({
+          user: {
+            id: user.id,
+            email: user.email || null,
+            user_metadata: user.user_metadata || {}
+          }
+        }, 200, origin);
+      }
+
+      if (path === '/app-data' && req.method === 'GET') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const rows = await sql`SELECT payload, updated_at FROM app_data WHERE user_id = ${user.id}`;
+        const row = rows[0] || null;
+        return jsonResponse(
+          { payload: row?.payload ?? null, updated_at: row?.updated_at ?? null },
+          200,
+          origin
+        );
+      }
+
+      if (path === '/app-data' && req.method === 'PUT') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const body = await readJsonBody(req);
+        if (!body || typeof body !== 'object' || !('payload' in body)) {
+          return jsonResponse({ error: 'Invalid payload' }, 400, origin);
+        }
+        const now = new Date().toISOString();
+        const payloadJson = JSON.stringify(body.payload || {});
+        const rows = await sql`
+          INSERT INTO app_data (user_id, payload, updated_at)
+          VALUES (${user.id}, ${payloadJson}::jsonb, ${now})
+          ON CONFLICT (user_id) DO UPDATE
+            SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+          RETURNING payload, updated_at
+        `;
+        const row = rows[0] || {};
+        return jsonResponse({ payload: row.payload ?? {}, updated_at: row.updated_at ?? null }, 200, origin);
+      }
+
+      if (path === '/profile' && req.method === 'GET') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const rows = await sql`SELECT display_name, updated_at FROM profiles WHERE user_id = ${user.id}`;
+        return jsonResponse({ profile: rows[0] || null }, 200, origin);
+      }
+
+      if (path === '/profile' && req.method === 'PUT') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const body = await readJsonBody(req);
+        if (!body || typeof body !== 'object') {
+          return jsonResponse({ error: 'Invalid profile body' }, 400, origin);
+        }
+        const now = new Date().toISOString();
+        const rows = await sql`
+          INSERT INTO profiles (user_id, display_name, updated_at)
+          VALUES (${user.id}, ${body.display_name || null}, ${now})
+          ON CONFLICT (user_id) DO UPDATE
+            SET display_name = EXCLUDED.display_name, updated_at = EXCLUDED.updated_at
+          RETURNING display_name, updated_at
+        `;
+        return jsonResponse({ profile: rows[0] || null }, 200, origin);
+      }
+
+      if (path === '/secondary-email/send' && req.method === 'POST') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        return jsonResponse({ error: 'Not implemented with Neon Auth' }, 501, origin);
+      }
+
+      if (path === '/secondary-email/confirm' && req.method === 'POST') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        return jsonResponse({ error: 'Not implemented with Neon Auth' }, 501, origin);
+      }
 
       if (path === '/admin/me') {
-        const user = await getAuthUser(env, authHeader);
+        const user = getAuthUser(authHeader);
         if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
-        const admin = await isAdmin(env, user.id);
-        return jsonResponse({ admin }, 200, origin);
+        const rows = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
+        return jsonResponse({ admin: rows.length > 0 }, 200, origin);
       }
 
-    if (path === '/users/me' && req.method === 'DELETE') {
-      const user = await getAuthUser(env, authHeader);
-      if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
-      const serviceUrl = env.SUPABASE_URL;
-      const key = env.SUPABASE_SERVICE_ROLE_KEY;
-      const headers = { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
-
-      await fetch(`${serviceUrl}${SUPABASE_REST}/app_data?user_id=eq.${user.id}`, { method: 'DELETE', headers });
-      const deleteAuthRes = await fetch(`${serviceUrl}${SUPABASE_AUTH}/admin/users/${user.id}`, {
-        method: 'DELETE',
-        headers: { apikey: key, Authorization: `Bearer ${key}` }
-      });
-      if (!deleteAuthRes.ok) {
-        const err = await deleteAuthRes.text();
-        return jsonResponse({ error: err || 'Failed to delete account' }, deleteAuthRes.status, origin);
+      if (path === '/users/me' && req.method === 'DELETE') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        await sql`DELETE FROM app_data WHERE user_id = ${user.id}`;
+        await sql`DELETE FROM profiles WHERE user_id = ${user.id}`;
+        await sql`DELETE FROM admin_users WHERE user_id = ${user.id}`;
+        return jsonResponse({ ok: true }, 200, origin);
       }
-      return jsonResponse({ ok: true }, 200, origin);
-    }
 
-    if (path === '/admin/users') {
-      const user = await getAuthUser(env, authHeader);
-      if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
-      if (!(await isAdmin(env, user.id))) return jsonResponse({ error: 'Forbidden' }, 403, origin);
-      if (req.method === 'GET') {
-        const listRes = await fetch(`${env.SUPABASE_URL}${SUPABASE_AUTH}/admin/users`, {
-          headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` }
-        });
-        if (!listRes.ok) return jsonResponse({ error: 'Failed to list users' }, listRes.status, origin);
-        const list = await listRes.json();
-        const users = (list.users || list).map(u => ({
-          id: u.id,
-          email: u.email,
-          created_at: u.created_at,
-          user_metadata: u.user_metadata
-        }));
-        return jsonResponse({ users }, 200, origin);
+      if (path === '/admin/users') {
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const adminCheck = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
+        if (adminCheck.length === 0) return jsonResponse({ error: 'Forbidden' }, 403, origin);
+        if (req.method === 'GET') {
+          let users = [];
+          try {
+            const authUsers = await sql`SELECT id, email, created_at, raw_json FROM neon_auth.users_sync WHERE deleted_at IS NULL`;
+            users = authUsers.map(u => ({
+              id: u.id,
+              email: u.email,
+              created_at: u.created_at,
+              user_metadata: u.raw_json ? (typeof u.raw_json === 'string' ? JSON.parse(u.raw_json) : u.raw_json) : {}
+            }));
+          } catch (_) {
+            users = [];
+          }
+          return jsonResponse({ users }, 200, origin);
+        }
+        return jsonResponse({ error: 'Method not allowed' }, 405, origin);
       }
-      return jsonResponse({ error: 'Method not allowed' }, 405, origin);
-    }
 
-    const deleteUserMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)$/);
-    if (deleteUserMatch && req.method === 'DELETE') {
-      const targetId = deleteUserMatch[1];
-      const user = await getAuthUser(env, authHeader);
-      if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
-      if (!(await isAdmin(env, user.id))) return jsonResponse({ error: 'Forbidden' }, 403, origin);
-      const serviceUrl = env.SUPABASE_URL;
-      const key = env.SUPABASE_SERVICE_ROLE_KEY;
-      const headers = { apikey: key, Authorization: `Bearer ${key}` };
-      await fetch(`${serviceUrl}${SUPABASE_REST}/app_data?user_id=eq.${targetId}`, { method: 'DELETE', headers });
-      const deleteRes = await fetch(`${serviceUrl}${SUPABASE_AUTH}/admin/users/${targetId}`, { method: 'DELETE', headers });
-      if (!deleteRes.ok) return jsonResponse({ error: 'Failed to delete user' }, deleteRes.status, origin);
-      return jsonResponse({ ok: true }, 200, origin);
-    }
+      const deleteUserMatch = path.match(/^\/admin\/users\/([a-zA-Z0-9_-]+)$/);
+      if (deleteUserMatch && req.method === 'DELETE') {
+        const targetId = deleteUserMatch[1];
+        const user = getAuthUser(authHeader);
+        if (!user) return jsonResponse({ error: 'Unauthorized' }, 401, origin);
+        const adminCheck = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
+        if (adminCheck.length === 0) return jsonResponse({ error: 'Forbidden' }, 403, origin);
+        await sql`DELETE FROM app_data WHERE user_id = ${targetId}`;
+        await sql`DELETE FROM profiles WHERE user_id = ${targetId}`;
+        await sql`DELETE FROM admin_users WHERE user_id = ${targetId}`;
+        return jsonResponse({ ok: true }, 200, origin);
+      }
 
       return jsonResponse({ error: 'Not found' }, 404, origin);
     } catch (e) {

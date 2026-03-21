@@ -30,14 +30,30 @@
     },
 
     it: {
-      order: ['person', 'computer'],
+      order: ['team', 'building', 'person', 'networkDevice', 'computer', 'phone'],
+      team: [
+        { name: 'Operations' },
+        { name: 'Support' }
+      ],
+      building: [
+        { name: 'HQ', address: '123 Main St' },
+        { name: 'Branch Office', address: '45 Harbor Ave' }
+      ],
       person: [
-        { firstName: 'Jamie', lastName: 'Smith', email: 'jamie@example.com', role: 'Developer' },
-        { firstName: 'Sam', lastName: 'Jones', email: 'sam@example.com', role: 'Designer' }
+        { firstName: 'Jamie', lastName: 'Smith', email: 'jamie@example.com', workTitle: 'Systems Engineer', memberOfIndex: 0, locatedAtIndex: 0 },
+        { firstName: 'Sam', lastName: 'Jones', email: 'sam@example.com', workTitle: 'Support Specialist', memberOfIndex: 1, locatedAtIndex: 1 }
+      ],
+      networkDevice: [
+        { name: 'Core Router', modelName: 'Asus RT-BE86U', serialNumber: 'SN-RTBE86U-001', linkSpeed: '10 Gbps', locatedAtIndex: 0 },
+        { name: 'Edge Switch', modelName: 'Ubiquiti USW-Pro-24', serialNumber: 'SN-USWPRO24-042', linkSpeed: '1 Gbps', connectedToIndex: 0, locatedAtIndex: 1 }
       ],
       computer: [
-        { indexYear: '2024', cpu: 'Intel Core i7', ram: '16GB' },
-        { indexYear: '2023', cpu: 'Intel Core i5', ram: '8GB' }
+        { indexYear: '2024', cpu: 'Intel Core i7', ram: '16GB', assignedToIndex: 0, locatedAtIndex: 0 },
+        { indexYear: '2023', cpu: 'Intel Core i5', ram: '8GB', assignedToIndex: 1, locatedAtIndex: 1 }
+      ],
+      phone: [
+        { model: 'Galaxy S21', assignedToIndex: 0, locatedAtIndex: 0 },
+        { model: 'iPhone 14', assignedToIndex: 1, locatedAtIndex: 1 }
       ]
     },
 

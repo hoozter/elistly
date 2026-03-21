@@ -28,7 +28,7 @@ Elistly needs Supabase (your backend and database). Without it, the app shows a 
 1. Clone or download the repo.
 2. Copy `config.example.js` to `config.js`.
 3. In [Supabase](https://supabase.com): create a project, run the SQL in `supabase/schema.sql` (SQL Editor).
-4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
+4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `ELISTLY_BACKEND_URL` and `ELISTLY_PUBLIC_KEY` (legacy `SUPABASE_URL` and `SUPABASE_ANON_KEY` still work).
 5. Open `index.html` in a browser (landing page), then click **Start using Elistly** to open the app and sign in. After that, your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. for an installable web app on Android).
 
 ## Basic usage
@@ -51,7 +51,7 @@ For a complete reference—concepts, all features, deployment, and project struc
 ## Deploying
 
 - **Static host** — Upload the repo (after building if you use `scripts/write-config.js` for config). Supabase provides the backend and database.
-- **Supabase** — Run `supabase/schema.sql`; set `config.js` (or inject config in build). See [DOCS.md](DOCS.md) and `DEPLOY.md`.
+- **Supabase / migration baseline** — Run `supabase/schema.sql`; set `config.js` (or inject config in build). See [DOCS.md](DOCS.md), `DEPLOY.md`, and `NEON_MIGRATION.md`.
 - **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps (Pages + Worker, env vars, one-push flow, optional admin).
 
 ## License

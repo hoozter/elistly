@@ -45,6 +45,30 @@ const SUPABASE_SCRIPT_SOURCES = [
   'https://unpkg.com/@supabase/supabase-js@2'
 ];
 
+function getBackendProvider() {
+  if (typeof window === 'undefined') return 'supabase';
+  return (window.ELISTLY_BACKEND_PROVIDER || 'supabase').trim().toLowerCase();
+}
+
+function getBackendUrl() {
+  if (typeof window === 'undefined') return '';
+  return window.ELISTLY_BACKEND_URL || window.SUPABASE_URL || '';
+}
+
+function getBackendPublicKey() {
+  if (typeof window === 'undefined') return '';
+  return window.ELISTLY_PUBLIC_KEY || window.SUPABASE_ANON_KEY || '';
+}
+
+function getApiUrl() {
+  if (typeof window === 'undefined') return '';
+  return (window.ELISTLY_API_URL || '').trim();
+}
+
+function hasApiUrl() {
+  return !!getApiUrl();
+}
+
 function loadExternalScript(src) {
   return new Promise((resolve, reject) => {
     const existing = document.querySelector(`script[src="${src}"]`);
@@ -68,9 +92,10 @@ function loadExternalScript(src) {
 
 async function ensureSupabaseClient() {
   if (supabaseClient) return supabaseClient;
-  var url = typeof window !== 'undefined' && window.SUPABASE_URL;
-  var anonKey = typeof window !== 'undefined' && window.SUPABASE_ANON_KEY;
+  var url = getBackendUrl();
+  var anonKey = getBackendPublicKey();
   if (!url || !anonKey) return null;
+  if (getBackendProvider() !== 'supabase') return null;
 
   if (typeof window.supabase === 'undefined') {
     for (const src of SUPABASE_SCRIPT_SOURCES) {
@@ -91,13 +116,103 @@ async function ensureSupabaseClient() {
   return supabaseClient;
 }
 
+async function getAuthSession() {
+  if (!supabaseClient) return null;
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  return session || null;
+}
+
+async function getAuthUser() {
+  if (!supabaseClient) return null;
+  const { data: { user } } = await supabaseClient.auth.getUser();
+  return user || null;
+}
+
+async function apiRequest(path, options = {}) {
+  const apiUrl = getApiUrl();
+  if (!apiUrl) throw new Error('ELISTLY_API_URL is not configured.');
+  const session = await getAuthSession();
+  const headers = Object.assign({}, options.headers || {});
+  if (session && session.access_token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  let body = options.body;
+  if (body && typeof body !== 'string' && !(body instanceof FormData) && !(body instanceof Blob)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+    body = JSON.stringify(body);
+  }
+  const res = await fetch(`${apiUrl.replace(/\/$/, '')}${path}`, {
+    method: options.method || 'GET',
+    headers,
+    body
+  });
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_) {
+    data = { raw: text };
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
 // Storage layer: localStorage or Supabase (one row per user in app_data)
 const Storage = {
   KEY: 'elistlyData',
+  USER_CACHE_PREFIX: 'elistlyData:user:',
+  USER_UPDATED_PREFIX: 'elistlyData:userUpdated:',
   _cached: null,
 
-  getAppData() {
-    if (supabaseClient) return this.getAppDataAsync();
+  _getUserCacheKey(userId) {
+    return `${this.USER_CACHE_PREFIX}${userId}`;
+  },
+
+  _getUserUpdatedKey(userId) {
+    return `${this.USER_UPDATED_PREFIX}${userId}`;
+  },
+
+  _readUserCache(userId) {
+    try {
+      const raw = localStorage.getItem(this._getUserCacheKey(userId));
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  _readUserUpdatedAt(userId) {
+    try {
+      return localStorage.getItem(this._getUserUpdatedKey(userId)) || '';
+    } catch (e) {
+      return '';
+    }
+  },
+
+  _writeUserCache(userId, payload, updatedAt) {
+    try {
+      localStorage.setItem(this._getUserCacheKey(userId), JSON.stringify(payload || {}));
+      if (updatedAt) localStorage.setItem(this._getUserUpdatedKey(userId), String(updatedAt));
+      localStorage.setItem(this.KEY, JSON.stringify(payload || {}));
+    } catch (e) {
+      console.error('Storage._writeUserCache failed', e);
+    }
+  },
+
+  _migrateLegacyCache(userId) {
+    const existingUserCache = this._readUserCache(userId);
+    if (existingUserCache) return;
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data && typeof data === 'object') {
+        this._writeUserCache(userId, data, '');
+      }
+    } catch (_) {}
+  },
+
+  getAppData(options = {}) {
+    if (supabaseClient) return this.getAppDataAsync(options);
     try {
       const raw = localStorage.getItem(this.KEY);
       return Promise.resolve(raw ? JSON.parse(raw) : null);
@@ -106,17 +221,45 @@ const Storage = {
     }
   },
 
-  async getAppDataAsync() {
+  async getAppDataAsync(options = {}) {
     if (supabaseClient) {
       try {
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const onRemoteSync = typeof options.onRemoteSync === 'function' ? options.onRemoteSync : null;
+        const user = await getAuthUser();
         if (!user) return null;
-        const { data, error } = await supabaseClient.from('app_data').select('payload').eq('user_id', user.id).maybeSingle();
-        if (error) {
-          console.error('Storage.getAppData Supabase error', error);
-          return null;
+
+        this._migrateLegacyCache(user.id);
+        const cachedPayload = this._readUserCache(user.id);
+        const cachedUpdatedAt = this._readUserUpdatedAt(user.id);
+
+        if (cachedPayload) {
+          this._cached = cachedPayload;
+          this.syncRemoteInBackground(user.id, cachedUpdatedAt, onRemoteSync);
+          return this._cached;
         }
-        this._cached = data && data.payload ? data.payload : null;
+
+        let remote = null;
+        if (hasApiUrl()) {
+          const res = await apiRequest('/app-data');
+          if (!res.ok) {
+            console.error('Storage.getAppData API error', res.data);
+            return null;
+          }
+          remote = res.data || {};
+        } else {
+          const { data, error } = await supabaseClient
+            .from('app_data')
+            .select('payload,updated_at')
+            .eq('user_id', user.id)
+            .maybeSingle();
+          if (error) {
+            console.error('Storage.getAppData Supabase error', error);
+            return null;
+          }
+          remote = data || {};
+        }
+        this._cached = remote && remote.payload ? remote.payload : null;
+        this._writeUserCache(user.id, this._cached || {}, remote && remote.updated_at ? remote.updated_at : '');
         return this._cached;
       } catch (e) {
         console.error('Storage.getAppData failed', e);
@@ -129,6 +272,35 @@ const Storage = {
     } catch (e) {
       return null;
     }
+  },
+
+  async syncRemoteInBackground(userId, cachedUpdatedAt, onRemoteSync) {
+    try {
+      let data = null;
+      if (hasApiUrl()) {
+        const res = await apiRequest('/app-data');
+        if (!res.ok) return;
+        data = res.data || null;
+      } else {
+        const response = await supabaseClient
+          .from('app_data')
+          .select('payload,updated_at')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (response.error) return;
+        data = response.data || null;
+      }
+
+      const remoteUpdatedAt = data && data.updated_at ? String(data.updated_at) : '';
+      if (cachedUpdatedAt && remoteUpdatedAt && cachedUpdatedAt === remoteUpdatedAt) return;
+
+      const remotePayload = data && data.payload ? data.payload : null;
+      const changed = JSON.stringify(remotePayload || {}) !== JSON.stringify(this._cached || {});
+      this._cached = remotePayload;
+      this._writeUserCache(userId, remotePayload || {}, remoteUpdatedAt);
+
+      if (changed && onRemoteSync) onRemoteSync(remotePayload);
+    } catch (_) {}
   },
 
   setAppData(data) {
@@ -144,12 +316,26 @@ const Storage = {
   async setAppDataAsync(data) {
     if (supabaseClient) {
       try {
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const user = await getAuthUser();
         if (!user) return;
         this._cached = data;
-        await supabaseClient.from('app_data').upsert({ user_id: user.id, payload: data }, { onConflict: 'user_id' });
+        let row = null;
+        if (hasApiUrl()) {
+          const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
+          if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
+          row = res.data || {};
+        } else {
+          const response = await supabaseClient
+            .from('app_data')
+            .upsert({ user_id: user.id, payload: data }, { onConflict: 'user_id' })
+            .select('updated_at')
+            .maybeSingle();
+          row = response.data || null;
+        }
+        const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
+        this._writeUserCache(user.id, data, updatedAt);
       } catch (e) {
-        console.error('Storage.setAppData Supabase failed', e);
+        console.error('Storage.setAppData failed', e);
       }
       return;
     }
@@ -213,8 +399,12 @@ const App = {
   },
   defaultData,
   _presets: PRESETS,
+  _isReady: false,
+  _pendingRemoteData: null,
       
       async init() {
+        this._isReady = false;
+        this._pendingRemoteData = null;
         await ensureSupabaseClient();
 
         this.data = {
@@ -229,14 +419,15 @@ const App = {
 
         if (!supabaseClient) {
           const main = document.getElementById('mainContent');
-          const hasConfigKeys = !!(window.SUPABASE_URL && window.SUPABASE_ANON_KEY);
+          const hasConfigKeys = !!(getBackendUrl() && getBackendPublicKey());
           const hasSupabaseSdk = typeof window.supabase !== 'undefined';
           let setupHtml = `
-                <p class="setup-required-copy">Elistly requires an account and a database. To use this app, configure Supabase:</p>
+                <p class="setup-required-copy">Elistly requires an account, a database, and a configured backend provider.</p>
                 <ol class="setup-required-list">
                   <li>Copy <code>config.example.js</code> to <code>config.js</code></li>
-                  <li>Create a Supabase project and run the SQL in <code>supabase/schema.sql</code></li>
-                  <li>In Supabase → Project Settings → API, copy <strong>Project URL</strong> and <strong>anon public</strong> key into <code>config.js</code></li>
+                  <li>Set <code>ELISTLY_BACKEND_PROVIDER</code>, <code>ELISTLY_BACKEND_URL</code>, and <code>ELISTLY_PUBLIC_KEY</code> in <code>config.js</code></li>
+                  <li>For the current Supabase-compatible backend, run the SQL in <code>supabase/schema.sql</code></li>
+                  <li>Set <code>ELISTLY_API_URL</code> so the app can use the Worker-backed API surface</li>
                   <li>Reload this page</li>
                 </ol>
                 <p class="setup-required-note">See the README for full instructions.</p>`;
@@ -261,7 +452,7 @@ const App = {
         }
 
         if (supabaseClient) {
-          const { data: { session } } = await supabaseClient.auth.getSession();
+          const session = await getAuthSession();
           if (!session) {
             const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
             document.documentElement.setAttribute('data-theme', systemTheme);
@@ -279,21 +470,10 @@ const App = {
             }
           } else {
             try {
-              const base = apiUrl.replace(/\/$/, '');
-              const r = await fetch(`${base}/admin/me`, { headers: { Authorization: `Bearer ${session.access_token}` } });
-              const text = await r.text();
-              let b = {};
-              try {
-                b = text ? JSON.parse(text) : {};
-              } catch (_) {
-                if (typeof console !== 'undefined' && console.warn) {
-                  console.warn('Elistly: /admin/me response was not JSON (got HTML or empty). Check Worker URL and that the Worker is deployed. Response starts with:', text.slice(0, 80));
-                }
-                return;
-              }
-              this.data.isAdmin = !!b.admin;
+              const r = await apiRequest('/admin/me');
+              this.data.isAdmin = !!(r.data && r.data.admin);
               if (r.status !== 200 && typeof console !== 'undefined' && console.warn) {
-                console.warn('Elistly: /admin/me returned non-200.', r.status, b);
+                console.warn('Elistly: /admin/me returned non-200.', r.status, r.data);
               }
             } catch (e) {
               if (typeof console !== 'undefined' && console.warn) {
@@ -321,7 +501,16 @@ const App = {
         this.updateHeaderColor(localStorage.getItem('headerColor') || '#1a1b1e', false);
         this.applyLogoStyle(localStorage.getItem('logoStyle') || 'color');
 
-        const stored = await Storage.getAppData();
+        let dataMutatedDuringInit = false;
+        const stored = await Storage.getAppData({
+          onRemoteSync: (remoteData) => {
+            if (!this._isReady) {
+              this._pendingRemoteData = remoteData || null;
+              return;
+            }
+            this.applyRemoteSyncData(remoteData);
+          }
+        });
         const isFirstRun = !stored || (Object.keys(stored.categories || {}).length === 0 && Object.keys(stored.entityTypes || {}).length === 0);
         const onboardingDone = !!(stored && stored.onboardingDone);
 
@@ -356,6 +545,7 @@ const App = {
                 }
               };
               this.data.currentWorkspaceId = 'default';
+              dataMutatedDuringInit = true;
             }
             this.normalizeEntityTypeCategories();
               const fontSize = this.data.settings.fontSize || 'normal';
@@ -376,12 +566,14 @@ const App = {
                     if (!this.data.entityTypes[typeId].fields) this.data.entityTypes[typeId].fields = [];
                     this.data.entityTypes[typeId].fields = [...this.data.entityTypes[typeId].fields, ...newDefaultFields];
                     updateChanges.updatedEntityTypes.push(typeId);
+                    dataMutatedDuringInit = true;
                   }
                   (userType.fields || []).forEach((uf, i) => {
                     if (uf.type === 'dropdown') {
                       const df = defaultType.fields.find(f => f.name === uf.name);
                       if (df && df.options && (!uf.options || uf.options.length === 0))
                         this.data.entityTypes[typeId].fields[i].options = JSON.parse(JSON.stringify(df.options));
+                      if (df && df.options && (!uf.options || uf.options.length === 0)) dataMutatedDuringInit = true;
                     }
                   });
                   const userAssocNames = (userType.associations || []).map(a => a.name);
@@ -390,10 +582,12 @@ const App = {
                     if (!this.data.entityTypes[typeId].associations) this.data.entityTypes[typeId].associations = [];
                     this.data.entityTypes[typeId].associations = [...this.data.entityTypes[typeId].associations, ...newAssocs];
                     if (!updateChanges.updatedEntityTypes.includes(typeId)) updateChanges.updatedEntityTypes.push(typeId);
+                    dataMutatedDuringInit = true;
                   }
                 } else if (!removedDefaultTypes.includes(typeId)) {
                   this.data.entityTypes[typeId] = JSON.parse(JSON.stringify(defaultType));
                   updateChanges.newEntityTypes.push(typeId);
+                  dataMutatedDuringInit = true;
                 } else {
                   updateChanges.askToRestoreTypes.push({ id: typeId, label: defaultType.label });
                 }
@@ -431,15 +625,16 @@ const App = {
                 }
                 return field;
               });
+              dataMutatedDuringInit = true;
             }
           }
 
         const componentsChanged = this.normalizeNameComponents();
-        const titleChanged = this.normalizeTitleSettings();
+        const schemaChanged = this.normalizeEntityTypeSchema();
         const namesChanged = this.normalizeAutoNames();
         document.documentElement.setAttribute('data-font-size', this.data.settings.fontSize || 'normal');
-        if (componentsChanged || titleChanged || namesChanged) this.saveData();
-        this.saveData();
+        if (componentsChanged || schemaChanged || namesChanged) dataMutatedDuringInit = true;
+        if (dataMutatedDuringInit) this.saveData();
         this.buildIconGrid();
         this.renderSidebar();
         this.loadView('dashboard');
@@ -454,6 +649,11 @@ const App = {
         }
         this.setupEventListeners();
         this.setupMobileNav();
+        this._isReady = true;
+        if (this._pendingRemoteData) {
+          this.applyRemoteSyncData(this._pendingRemoteData);
+          this._pendingRemoteData = null;
+        }
 
         if (isFirstRun && !onboardingDone) {
           setTimeout(() => this.showOnboarding(), 100);
@@ -745,6 +945,11 @@ const App = {
       async getDisplayName(userId) {
         if (!supabaseClient || !userId) return null;
         try {
+          if (hasApiUrl()) {
+            const res = await apiRequest('/profile');
+            const profile = res && res.data ? res.data.profile : null;
+            return (profile && profile.display_name && profile.display_name.trim()) ? profile.display_name.trim() : null;
+          }
           const { data } = await supabaseClient.from('profiles').select('display_name').eq('user_id', userId).maybeSingle();
           return (data && data.display_name && data.display_name.trim()) ? data.display_name.trim() : null;
         } catch (_) {
@@ -997,6 +1202,7 @@ const App = {
       },
       
       saveData() {
+        this.normalizeEntityTypeSchema();
         const cid = this.data.currentWorkspaceId;
         if (this.data.workspaces && cid) {
           this.data.workspaces[cid] = {
@@ -1009,6 +1215,30 @@ const App = {
         const dataToSave = { ...this.data, version: this.data.version };
         if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
         Storage.setAppData(dataToSave);
+      },
+
+      applyRemoteSyncData(remoteData) {
+        if (!remoteData || typeof remoteData !== 'object') return;
+        if (document.getElementById('entityModal')) return;
+        const current = new URL(window.location);
+        const activeView = current.searchParams.get('category') || current.searchParams.get('view') || 'dashboard';
+
+        this.data.settings = { ...this.data.settings, ...(remoteData.settings || {}) };
+        if (remoteData.workspaces && typeof remoteData.currentWorkspaceId === 'string') {
+          this.data.workspaces = remoteData.workspaces;
+          this.data.currentWorkspaceId = remoteData.currentWorkspaceId;
+          const w = this.data.workspaces[this.data.currentWorkspaceId];
+          this.data.categories = { ...((w && w.categories) || {}) };
+          this.data.entityTypes = { ...((w && w.entityTypes) || {}) };
+          this.data.entities = { ...((w && w.entities) || {}) };
+        } else {
+          this.data.categories = { ...(remoteData.categories || {}) };
+          this.data.entityTypes = { ...(remoteData.entityTypes || {}) };
+          this.data.entities = { ...(remoteData.entities || {}) };
+        }
+        this.normalizeEntityTypeCategories();
+        this.renderSidebar();
+        this.loadView(activeView);
       },
 
       showOnboarding() {
@@ -1175,14 +1405,17 @@ const App = {
       getEntityTitleInfo(entity) {
         if (!entity) return { title: '', fieldName: null };
         const type = this.data.entityTypes[entity.type];
-        if (type?.enableNameGen && type.useAutoNameAsTitle && entity.autoName) {
+        if (type?.enableNameGen && entity.autoName) {
           return { title: String(entity.autoName), fieldName: null };
         }
-        if (type?.fields && type.fields.length > 0) {
-          const useAsTitleField = type.fields.find(f => f.useAsTitle && entity[f.name]);
-          if (useAsTitleField) {
-            return { title: String(entity[useAsTitleField.name] ?? ''), fieldName: useAsTitleField.name };
-          }
+        if (entity.name) {
+          return { title: String(entity.name), fieldName: 'name' };
+        }
+        if (entity.autoName) {
+          return { title: String(entity.autoName), fieldName: null };
+        }
+        if (entity.id) {
+          return { title: String(entity.id), fieldName: null };
         }
         return { title: '', fieldName: null };
       },
@@ -1205,7 +1438,7 @@ const App = {
           .filter(f => f.visibleInCard && (f.name || '').trim())
           .filter(f => !titleInfo.fieldName || f.name !== titleInfo.fieldName);
         const assocLines = (type.associations || [])
-          .filter(a => entity[a.name])
+          .filter(a => a.visibleInCard && entity[a.name])
           .map(a => {
             const name = this.getEntityDisplayName(entity[a.name]);
             return name ? `<div class="mini-field"><span class="mini-field-label">${(a.label || '').replace(/</g, '&lt;')}:</span> <span>${String(name).replace(/</g, '&lt;')}</span></div>` : '';
@@ -2582,7 +2815,7 @@ const App = {
                       <h4>Dashboard Layout</h4>
                     </div>
                     <div class="section-content">
-                      <p class="help-text u-mb-075">Choose how the main dashboard and category views show items. What appears on each card is set per entity type under Manage entity types → Visible in Card.</p>
+                      <p class="help-text u-mb-075">Choose how the main dashboard and category views show items. What appears on each card is set per entity type under Manage entity types → Visible in card.</p>
                       <div class="form-group">
                         <label>View mode</label>
                         <select name="dashboardViewMode" onchange="App.updateDashboardSettings('viewMode', this.value); App.updateGroupByVisibility(this.value); App.updateViewModeHint(this.value)">
@@ -2628,7 +2861,7 @@ const App = {
                             <p><strong>Gallery</strong> — Same cards as Category Cards but in a grid. Use "Group by category" for one section per category, or off for one A–Z grid. Best for: visual skim of everything.</p>
                           </div>
                         </div>
-                        <p class="help-text view-mode-note">A book-store style (cover image + title + author) would need an image field type; for now cards show the fields you mark as Visible in Card.</p>
+                        <p class="help-text view-mode-note">A book-store style (cover image + title + author) would need an image field type; for now cards show the fields you mark as Visible in card.</p>
                       </div>
                       <div class="form-group group-by-category">
                         <label class="checkbox-label">
@@ -2980,15 +3213,23 @@ const App = {
       async saveProfile() {
         const userName = (document.getElementById('profileUserName') && document.getElementById('profileUserName').value) || '';
         const trimmedName = userName.trim();
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const user = await getAuthUser();
         if (!user) return;
-        const { error: profileError } = await supabaseClient.from('profiles').upsert(
-          { user_id: user.id, display_name: trimmedName || null, updated_at: new Date().toISOString() },
-          { onConflict: 'user_id' }
-        );
-        if (profileError) {
-          this.showSnackbar(profileError.message || 'Failed to save display name', true);
-          return;
+        if (hasApiUrl()) {
+          const res = await apiRequest('/profile', { method: 'PUT', body: { display_name: trimmedName || null } });
+          if (!res.ok) {
+            this.showSnackbar((res.data && res.data.error) || 'Failed to save display name', true);
+            return;
+          }
+        } else {
+          const { error: profileError } = await supabaseClient.from('profiles').upsert(
+            { user_id: user.id, display_name: trimmedName || null, updated_at: new Date().toISOString() },
+            { onConflict: 'user_id' }
+          );
+          if (profileError) {
+            this.showSnackbar(profileError.message || 'Failed to save display name', true);
+            return;
+          }
         }
         this.showSnackbar('Profile saved.');
         this.closeModal('profileModal');
@@ -3074,13 +3315,16 @@ const App = {
 
       async sendSecondaryVerification(email) {
         try {
-          const { data, error } = await supabaseClient.functions.invoke('send-secondary-email-verification', { body: { email } });
+          const res = hasApiUrl()
+            ? await apiRequest('/secondary-email/send', { method: 'POST', body: { email } })
+            : await supabaseClient.functions.invoke('send-secondary-email-verification', { body: { email } });
+          const data = hasApiUrl() ? res.data : res.data;
+          const error = hasApiUrl() ? (!res.ok ? new Error((res.data && res.data.error) || 'Failed to send verification') : null) : res.error;
           if (error) throw error;
           if (data && data.error) throw new Error(data.error);
           this.showSnackbar('Verification email sent. Check the inbox for that address.');
         } catch (e) {
-          const msg = (e && e.message) || 'Failed to send verification.';
-          this.showSnackbar('Verification requires server setup. Add the Edge Function send-secondary-email-verification so this email can be used for recovery.', true);
+          this.showSnackbar((e && e.message) || 'Failed to send verification.', true);
         }
         document.querySelectorAll('.profile-email-dropdown').forEach(d => d.classList.remove('open'));
       },
@@ -3091,7 +3335,11 @@ const App = {
         url.searchParams.delete('token');
         window.history.replaceState({}, '', url.toString());
         try {
-          const { data, error } = await supabaseClient.functions.invoke('confirm-secondary-email-verification', { body: { token } });
+          const res = hasApiUrl()
+            ? await apiRequest('/secondary-email/confirm', { method: 'POST', body: { token } })
+            : await supabaseClient.functions.invoke('confirm-secondary-email-verification', { body: { token } });
+          const data = hasApiUrl() ? res.data : res.data;
+          const error = hasApiUrl() ? (!res.ok ? new Error((res.data && res.data.error) || 'Verification failed') : null) : res.error;
           if (error) throw error;
           if (data && data.error) throw new Error(data.error);
           this.showSnackbar('Secondary email verified. You can use it for account recovery.');
@@ -3559,7 +3807,7 @@ const App = {
         
         return `
           <div class="association-field-row">
-            <select id="${assoc.name}" name="${assoc.name}">
+            <select id="${assoc.name}" name="${assoc.name}" ${assoc.required ? 'required' : ''}>
               <option value="">— None —</option>
               ${options.map(opt => `
                 <option value="${opt.id}" ${value === opt.id ? 'selected' : ''}>
@@ -3674,7 +3922,11 @@ const App = {
         
         this.saveData();
         this.closeEntityModal();
-        this.loadView(type.category);
+        const url = new URL(window.location);
+        const activeView = url.searchParams.get('category') || url.searchParams.get('view') || 'dashboard';
+        const categoryIds = this.getEntityTypeCategoryIds(type);
+        const fallbackView = categoryIds.length ? categoryIds[0] : 'dashboard';
+        this.loadView(activeView || fallbackView);
         this.showNotification(`Entity ${entityId ? 'updated' : 'created'} successfully`, 'success');
       },
       
@@ -4035,13 +4287,19 @@ const App = {
         const type = this.data.entityTypes[entityType];
         if (!type || !type.enableNameGen) return '';
 
-        const prefix = type.nameGen?.prefix || '';
+        const prefixEnabled = type.nameGen?.prefixEnabled !== false;
+        const prefix = prefixEnabled ? (type.nameGen?.prefix || '') : '';
         const componentsOrder = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
         const fields = Array.isArray(type.fields) ? type.fields : [];
+        const associations = Array.isArray(type.associations) ? type.associations : [];
         const fieldMap = new Map(fields.map(f => [f.name, f]));
+        const assocMap = new Map(associations.map(a => [a.name, a]));
         const components = componentsOrder.length
           ? componentsOrder
-          : fields.filter(f => f.partOfName).map(f => ({ type: 'field', name: f.name }));
+          : [
+              ...fields.filter(f => f.partOfName).map(f => ({ type: 'field', name: f.name })),
+              ...associations.filter(a => a.partOfName).map(a => ({ type: 'association', name: a.name }))
+            ];
 
         const parts = [];
         let pendingSeparator = null;
@@ -4074,6 +4332,20 @@ const App = {
             pendingSeparator = null;
             const option = field.options?.find(opt => opt.value === value);
             parts.push(option && option.nameValue ? option.nameValue : value);
+            return;
+          }
+          if (component && component.type === 'association') {
+            const assoc = assocMap.get(component.name);
+            if (!assoc || !assoc.partOfName) return;
+            const linkedId = data[component.name];
+            if (!linkedId) return;
+            const linkedName = this.getEntityDisplayName(linkedId);
+            if (!linkedName) return;
+            if (parts.length > 0 && pendingSeparator != null) {
+              parts.push(pendingSeparator);
+            }
+            pendingSeparator = null;
+            parts.push(linkedName);
           }
         });
 
@@ -4200,11 +4472,14 @@ const App = {
           });
           if (!type.enableNameGen) return;
           const fields = type.fields.filter(f => f.partOfName);
+          const associations = (type.associations || []).filter(a => a.partOfName && a.name);
           const fieldNames = new Set(fields.map(f => f.name));
+          const associationNames = new Set(associations.map(a => a.name));
           const order = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
           if (order.length === 0) return;
 
           const remainingFields = new Set(fieldNames);
+          const remainingAssociations = new Set(associationNames);
           const normalized = [];
           for (let i = 0; i < order.length; i++) {
             const item = order[i];
@@ -4213,13 +4488,21 @@ const App = {
                 const next = order[j];
                 if (next && next.type === 'field' && fieldNames.has(next.name)) return true;
                 if (typeof next === 'string' && fieldNames.has(next)) return true;
+                if (next && next.type === 'association' && associationNames.has(next.name)) return true;
               }
-              return remainingFields.size > 0;
+              return remainingFields.size > 0 || remainingAssociations.size > 0;
             })();
             if (item && item.type === 'separator') {
               const last = normalized[normalized.length - 1];
-              if (!last || last.type !== 'field' || !nextFieldExists) continue;
+              if (!last || (last.type !== 'field' && last.type !== 'association') || !nextFieldExists) continue;
               normalized.push({ type: 'separator', value: item.value });
+              continue;
+            }
+            if (item && item.type === 'association') {
+              if (item.name && associationNames.has(item.name)) {
+                normalized.push({ type: 'association', name: item.name });
+                remainingAssociations.delete(item.name);
+              }
               continue;
             }
             const fieldName = typeof item === 'string' ? item : item?.name;
@@ -4233,9 +4516,15 @@ const App = {
               normalized.push({ type: 'field', name: field.name });
             }
           });
-          if (!normalized.some(item => item.type === 'field') && fields.length > 0) {
+          associations.forEach(assoc => {
+            if (remainingAssociations.has(assoc.name)) {
+              normalized.push({ type: 'association', name: assoc.name });
+            }
+          });
+          if (!normalized.some(item => item.type === 'field' || item.type === 'association') && (fields.length > 0 || associations.length > 0)) {
             normalized.length = 0;
             fields.forEach(field => normalized.push({ type: 'field', name: field.name }));
+            associations.forEach(assoc => normalized.push({ type: 'association', name: assoc.name }));
           }
           if (fieldNames.has('firstName') && fieldNames.has('lastName')) {
             const firstIdx = normalized.findIndex(i => i.type === 'field' && i.name === 'firstName');
@@ -4262,14 +4551,51 @@ const App = {
         return changed;
       },
 
-      normalizeTitleSettings() {
+      normalizeEntityTypeSchema() {
         let changed = false;
         Object.values(this.data.entityTypes || {}).forEach(type => {
-          if (!type.enableNameGen || !Array.isArray(type.fields)) return;
-          const hasTitleField = type.fields.some(f => f.useAsTitle);
-          if (type.useAutoNameAsTitle === undefined && !hasTitleField) {
-            type.useAutoNameAsTitle = true;
+          if (!type || typeof type !== 'object') return;
+          if (!type.nameGen || typeof type.nameGen !== 'object') {
+            type.nameGen = { prefix: '', prefixEnabled: false, partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] };
             changed = true;
+          }
+          if (type.nameGen.prefixEnabled === undefined) {
+            type.nameGen.prefixEnabled = !!(type.nameGen.prefix && String(type.nameGen.prefix).trim());
+            changed = true;
+          }
+          if ('useAutoNameAsTitle' in type) {
+            delete type.useAutoNameAsTitle;
+            changed = true;
+          }
+          if (Array.isArray(type.fields)) {
+            type.fields = type.fields.map(field => {
+              if (!field || typeof field !== 'object') return field;
+              const next = { ...field };
+              if ('useAsTitle' in next) {
+                delete next.useAsTitle;
+                changed = true;
+              }
+              return next;
+            });
+          }
+          if (Array.isArray(type.associations)) {
+            type.associations = type.associations.map(assoc => {
+              if (!assoc || typeof assoc !== 'object') return assoc;
+              const next = { ...assoc };
+              if (next.required === undefined) {
+                next.required = false;
+                changed = true;
+              }
+              if (next.visibleInCard === undefined) {
+                next.visibleInCard = false;
+                changed = true;
+              }
+              if (next.partOfName === undefined) {
+                next.partOfName = false;
+                changed = true;
+              }
+              return next;
+            });
           }
         });
         return changed;
@@ -4361,7 +4687,7 @@ const App = {
           category: firstCategoryId,
           icon: 'folder',
           enableNameGen: false,
-          nameGen: { prefix: '', partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] },
+          nameGen: { prefix: '', prefixEnabled: false, partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] },
           fields: [],
           associations: []
         };
@@ -4400,6 +4726,8 @@ const App = {
       editEntityType(typeId, typeDataOverride) {
         const type = typeDataOverride || this.data.entityTypes[typeId];
         if (!type) return;
+        if (!type.nameGen) type.nameGen = { prefix: '', prefixEnabled: false, partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] };
+        if (type.nameGen.prefixEnabled === undefined) type.nameGen.prefixEnabled = !!(type.nameGen.prefix && String(type.nameGen.prefix).trim());
         this._editingEntityType = typeDataOverride || null;
         if (!typeDataOverride) {
           const changed = this.normalizeNameComponents();
@@ -4407,7 +4735,9 @@ const App = {
         }
         const nameComponentsHtml = (() => {
           const fields = Array.isArray(type.fields) ? type.fields.filter(f => f.partOfName) : [];
+          const associations = Array.isArray(type.associations) ? type.associations.filter(a => a.partOfName) : [];
           const fieldMap = new Map(fields.map(f => [f.name, f]));
+          const associationMap = new Map(associations.map(a => [a.name, a]));
           const order = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
           const hasFirstLast = fieldMap.has('firstName') && fieldMap.has('lastName');
           const used = new Set();
@@ -4418,6 +4748,15 @@ const App = {
               <div class="name-component-item sortable-item" data-component-type="field" data-field-name="${field.name}">
                 <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
                 <span class="name-component-label">${field.label}</span>
+              </div>
+            `;
+          };
+          const renderAssociation = (association) => {
+            used.add(association.name);
+            return `
+              <div class="name-component-item sortable-item" data-component-type="association" data-association-name="${association.name}">
+                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+                <span class="name-component-label">Link: ${association.label}</span>
               </div>
             `;
           };
@@ -4435,14 +4774,15 @@ const App = {
           };
           if (order.length) {
             const normalizedOrder = [];
-            let lastWasField = false;
+            let lastWasComponent = false;
             let sawSeparator = false;
-            const hasFieldAhead = (startIdx) => {
+            const hasComponentAhead = (startIdx) => {
               for (let i = startIdx + 1; i < order.length; i += 1) {
                 const next = order[i];
                 const nextName = typeof next === 'string' ? next : next?.name;
                 if (next && next.type === 'field' && fieldMap.has(next.name)) return true;
                 if (typeof next === 'string' && fieldMap.has(nextName)) return true;
+                if (next && next.type === 'association' && associationMap.has(next.name)) return true;
               }
               return false;
             };
@@ -4451,7 +4791,7 @@ const App = {
                 const field = fieldMap.get(item);
                 if (field) {
                   normalizedOrder.push({ type: 'field', name: field.name });
-                  lastWasField = true;
+                  lastWasComponent = true;
                 }
                 return;
               }
@@ -4459,20 +4799,26 @@ const App = {
                 const field = fieldMap.get(item.name);
                 if (field) {
                   normalizedOrder.push({ type: 'field', name: field.name });
-                  lastWasField = true;
+                  lastWasComponent = true;
+                }
+              } else if (item && item.type === 'association') {
+                const association = associationMap.get(item.name);
+                if (association) {
+                  normalizedOrder.push({ type: 'association', name: association.name });
+                  lastWasComponent = true;
                 }
               } else if (item && item.type === 'separator') {
                 sawSeparator = true;
-                if (!lastWasField) return;
-                if (!hasFieldAhead(idx)) return;
+                if (!lastWasComponent) return;
+                if (!hasComponentAhead(idx)) return;
                 normalizedOrder.push({ type: 'separator', value: item.value });
-                lastWasField = false;
+                lastWasComponent = false;
               }
             });
             if (sawSeparator && !normalizedOrder.some(i => i.type === 'separator')) {
-              const fieldItems = normalizedOrder.filter(i => i.type === 'field');
-              if (fieldItems.length >= 2) {
-                const insertAt = normalizedOrder.findIndex(i => i.type === 'field');
+              const componentItems = normalizedOrder.filter(i => i.type === 'field' || i.type === 'association');
+              if (componentItems.length >= 2) {
+                const insertAt = normalizedOrder.findIndex(i => i.type === 'field' || i.type === 'association');
                 normalizedOrder.splice(insertAt + 1, 0, { type: 'separator', value: ' ' });
               }
             }
@@ -4480,6 +4826,11 @@ const App = {
               if (item.type === 'field') {
                 const field = fieldMap.get(item.name);
                 if (field) parts.push(renderField(field));
+                return;
+              }
+              if (item.type === 'association') {
+                const association = associationMap.get(item.name);
+                if (association) parts.push(renderAssociation(association));
                 return;
               }
               if (item.type === 'separator') {
@@ -4495,6 +4846,9 @@ const App = {
           }
           fields.forEach(field => {
             if (!used.has(field.name)) parts.push(renderField(field));
+          });
+          associations.forEach(association => {
+            if (!used.has(association.name)) parts.push(renderAssociation(association));
           });
           return parts.join('');
         })();
@@ -4540,28 +4894,25 @@ const App = {
                           </div>
                         </div>
                         <div class="form-group name-gen-header">
-                          <div class="name-gen-title">Name/ID generator</div>
-                          <div class="name-gen-options">
-                            <label class="checkbox-label">
-                              <input type="checkbox" class="elistly-checkbox" name="enableNameGen" ${type.enableNameGen ? 'checked' : ''}
-                                     onchange="App.toggleNameGenSection(this)">
-                              <span>Enable</span>
-                            </label>
-                            <label class="checkbox-label">
-                              <input type="checkbox" class="elistly-checkbox" name="useAutoNameAsTitle" ${type.useAutoNameAsTitle ? 'checked' : ''} ${type.enableNameGen ? '' : 'disabled'}
-                                     onchange="App.toggleUseAutoNameAsTitle(this)">
-                              <span>Use as title</span>
-                            </label>
-                          </div>
+                          <div class="name-gen-title">Title generator</div>
+                          <label class="ui-switch">
+                            <input type="checkbox" name="enableNameGen" role="switch" aria-checked="${type.enableNameGen ? 'true' : 'false'}" ${type.enableNameGen ? 'checked' : ''} onchange="App.toggleNameGenSection(this)">
+                            <span class="ui-switch-slider" aria-hidden="true"></span>
+                            <span class="ui-switch-label">Enable title generator</span>
+                          </label>
                         </div>
                       </div>
                     </div>
                     <div class="modal-group carded-section name-generation-settings${type.enableNameGen ? '' : ' hidden'}">
-                      <h4>Name Generation Settings</h4>
+                      <h4>Title Generator</h4>
                       <div class="name-generation-grid">
                         <div class="form-group">
-                          <label for="namePrefix">Name Prefix</label>
-                          <input type="text" name="namePrefix" value="${type.nameGen?.prefix || ''}" onchange="App.updateNamePreview()">
+                          <label class="ui-switch">
+                            <input type="checkbox" name="prefixEnabled" role="switch" aria-checked="${type.nameGen?.prefixEnabled ? 'true' : 'false'}" ${type.nameGen?.prefixEnabled ? 'checked' : ''} onchange="App.togglePrefixInput(this)">
+                            <span class="ui-switch-slider" aria-hidden="true"></span>
+                            <span class="ui-switch-label">Use prefix</span>
+                          </label>
+                          <input type="text" name="namePrefix" value="${type.nameGen?.prefix || ''}" ${type.nameGen?.prefixEnabled ? '' : 'disabled'} onchange="App.updateNamePreview()">
                         </div>
                         <div class="form-group">
                           <label for="suffixType">Suffix Type</label>
@@ -4663,15 +5014,11 @@ const App = {
                                   </label>
                                   <label class="checkbox-label">
                                     <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" ${field.visibleInCard ? 'checked' : ''}>
-                                    <span>Visible in Card</span>
-                                  </label>
-                                  <label class="checkbox-label">
-                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].useAsTitle" ${field.useAsTitle ? 'checked' : ''} ${type.useAutoNameAsTitle ? 'disabled' : ''}>
-                                    <span>Use as Title</span>
+                                    <span>Visible in card</span>
                                   </label>
                                   <label class="checkbox-label">
                                     <input type="checkbox" class="elistly-checkbox" name="fields[${index}].partOfName" ${field.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
-                                    <span>Part of Name</span>
+                                    <span>In title</span>
                                   </label>
                                 </div>
                                 <button type="button" class="btn btn-danger" onclick="App.removeField(${index})">
@@ -4720,6 +5067,20 @@ const App = {
                                   `).join('')}
                                 </select>
                               </div>
+                              <div class="checkbox-group checkbox-group-inline">
+                                <label class="checkbox-label">
+                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].required" ${assoc?.required ? 'checked' : ''}>
+                                  <span>Required</span>
+                                </label>
+                                <label class="checkbox-label">
+                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].visibleInCard" ${assoc?.visibleInCard ? 'checked' : ''}>
+                                  <span>Visible in card</span>
+                                </label>
+                                <label class="checkbox-label">
+                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].partOfName" ${assoc?.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
+                                  <span>In title</span>
+                                </label>
+                              </div>
                               <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${idx})">
                                 <span class="material-icons">delete</span> Remove link
                               </button>
@@ -4753,8 +5114,6 @@ const App = {
         this.showModal('entityTypeFormModal');
         this.updateNamePreview();
         this.initNameComponentsDragDrop();
-        const useAutoTitle = document.querySelector('input[name="useAutoNameAsTitle"]');
-        if (useAutoTitle) this.toggleUseAutoNameAsTitle(useAutoTitle);
         document.querySelectorAll('#entityTypeFormModal .association-kind-select').forEach(s => this.updateAssociationKindHelp(s));
         
         // Initialize option containers sortable
@@ -4825,13 +5184,7 @@ const App = {
               <label class="checkbox-label">
                 <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" 
                        ${field.visibleInCard ? 'checked' : ''}>
-                <span>Visible in Card</span>
-              </label>
-
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].useAsTitle" 
-                       ${field.useAsTitle ? 'checked' : ''}>
-                <span>Use as Title</span>
+                <span>Visible in card</span>
               </label>
               
               <label class="checkbox-label">
@@ -4839,7 +5192,7 @@ const App = {
                        ${field.partOfName ? 'checked' : ''} 
                        ${partOfNameDisabled ? 'disabled' : ''}
                        onchange="App.updateNamePreview()">
-                <span>Part of Name</span>
+                <span>In title</span>
               </label>
             </div>
             
@@ -4866,8 +5219,8 @@ const App = {
           categories: categories,
           icon: formData.get('icon'),
           enableNameGen: formData.get('enableNameGen') === 'on',
-          useAutoNameAsTitle: formData.get('useAutoNameAsTitle') === 'on',
           nameGen: {
+            prefixEnabled: formData.get('prefixEnabled') === 'on',
             prefix: formData.get('namePrefix') || '',
             partOfNamePrefix: true,
             suffixType: formData.get('suffixType') || 'number',
@@ -4891,47 +5244,38 @@ const App = {
                 const value = encoded ? decodeURIComponent(encoded) : '';
                 return value ? { type: 'separator', value } : null;
               }
+              if (type === 'association') {
+                const name = item.dataset.associationName;
+                return name ? { type: 'association', name } : null;
+              }
               return null;
             }).filter(Boolean);
             const normalized = [];
-            let lastWasField = false;
+            let lastWasComponent = false;
             let sawSeparator = false;
             rawItems.forEach((item, idx) => {
-              if (item.type === 'field') {
+              if (item.type === 'field' || item.type === 'association') {
                 normalized.push(item);
-                lastWasField = true;
+                lastWasComponent = true;
                 return;
               }
               if (item.type === 'separator') {
                 sawSeparator = true;
-                if (!lastWasField) return;
-                const hasFieldAhead = rawItems.slice(idx + 1).some(next => next.type === 'field');
-                if (!hasFieldAhead) return;
+                if (!lastWasComponent) return;
+                const hasComponentAhead = rawItems.slice(idx + 1).some(next => next.type === 'field' || next.type === 'association');
+                if (!hasComponentAhead) return;
                 normalized.push(item);
-                lastWasField = false;
+                lastWasComponent = false;
               }
             });
             if (sawSeparator && !normalized.some(i => i.type === 'separator')) {
-              const fieldCount = normalized.filter(i => i.type === 'field').length;
-              if (fieldCount >= 2) {
-                const firstFieldIdx = normalized.findIndex(i => i.type === 'field');
-                normalized.splice(firstFieldIdx + 1, 0, { type: 'separator', value: ' ' });
+              const componentCount = normalized.filter(i => i.type === 'field' || i.type === 'association').length;
+              if (componentCount >= 2) {
+                const firstComponentIdx = normalized.findIndex(i => i.type === 'field' || i.type === 'association');
+                normalized.splice(firstComponentIdx + 1, 0, { type: 'separator', value: ' ' });
               }
             }
             data.nameGen.componentsOrder = normalized;
-          }
-        }
-
-        if (data.useAutoNameAsTitle) {
-          data.fields = data.fields.map(field => ({ ...field, useAsTitle: false }));
-        } else {
-          const titleFields = data.fields.filter(f => f.useAsTitle);
-          if (titleFields.length > 1) {
-            const [keep, ...rest] = titleFields;
-            data.fields = data.fields.map(field => {
-              if (rest.some(r => r.name === field.name)) return { ...field, useAsTitle: false };
-              return field;
-            });
           }
         }
         
@@ -4989,7 +5333,6 @@ const App = {
             type: group.type,
             required: group.required === 'on',
             visibleInCard: group.visibleInCard === 'on',
-            useAsTitle: group.useAsTitle === 'on',
             partOfName: group.partOfName === 'on'
           };
           
@@ -5044,12 +5387,17 @@ const App = {
           }
         });
         
-        Object.values(associationGroups).forEach(group => {
+        const sortedIndices = Object.keys(associationGroups).map(Number).sort((a, b) => a - b);
+        sortedIndices.forEach(i => {
+          const group = associationGroups[i];
           if (group.name && group.label) {
             associations.push({
               name: group.name,
               label: group.label,
               type: 'association',
+              required: group.required === 'on',
+              visibleInCard: group.visibleInCard === 'on',
+              partOfName: group.partOfName === 'on',
               association: group.association
             });
           }
@@ -5171,7 +5519,8 @@ const App = {
         const suffixPreview = document.getElementById('suffixPreview');
         if (!preview || !suffixPreview) return;
 
-        const prefix = document.querySelector('[name="namePrefix"]')?.value || '';
+        const prefixEnabled = !!document.querySelector('[name="prefixEnabled"]')?.checked;
+        const prefix = prefixEnabled ? (document.querySelector('[name="namePrefix"]')?.value || '') : '';
         const suffixType = document.querySelector('[name="suffixType"]')?.value || 'number';
         const type = this.getCurrentEditingType();
         if (!type) return;
@@ -5197,9 +5546,29 @@ const App = {
           });
         });
 
+        const assocCards = Array.from(document.querySelectorAll('.assoc-card, .association-editor'));
+        const activeAssociations = new Map();
+        assocCards.forEach((assocCard) => {
+          const partOfNameCheckbox = assocCard.querySelector('input[name^="associations"][name$=".partOfName"]');
+          if (!partOfNameCheckbox?.checked) return;
+          const nameInput = assocCard.querySelector('input[name^="associations"][name$=".name"]');
+          const labelInput = assocCard.querySelector('input[name^="associations"][name$=".label"]');
+          const assocName = nameInput?.value || '';
+          if (!assocName) return;
+          const assocLabel = (labelInput?.value || assocName).trim();
+          activeAssociations.set(assocName, {
+            label: assocLabel,
+            sampleValue: `<${assocLabel}>`
+          });
+        });
+
         const existingFieldItems = new Map();
         list.querySelectorAll('[data-component-type="field"]').forEach(item => {
           existingFieldItems.set(item.dataset.fieldName, item);
+        });
+        const existingAssocItems = new Map();
+        list.querySelectorAll('[data-component-type="association"]').forEach(item => {
+          existingAssocItems.set(item.dataset.associationName, item);
         });
 
         existingFieldItems.forEach((item, fieldName) => {
@@ -5223,13 +5592,36 @@ const App = {
             if (labelEl) labelEl.textContent = field.label;
           }
         });
+        existingAssocItems.forEach((item, assocName) => {
+          if (!activeAssociations.has(assocName)) item.remove();
+        });
+        activeAssociations.forEach((assoc, assocName) => {
+          const item = existingAssocItems.get(assocName);
+          if (!item) {
+            const div = document.createElement('div');
+            div.className = 'name-component-item sortable-item';
+            div.dataset.componentType = 'association';
+            div.dataset.associationName = assocName;
+            div.innerHTML = `
+              <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
+              <span class="name-component-label">${assoc.label}</span>
+            `;
+            list.appendChild(div);
+          } else {
+            const labelEl = item.querySelector('.name-component-label');
+            if (labelEl) labelEl.textContent = assoc.label;
+          }
+        });
 
         const listItems = Array.from(list.querySelectorAll('.name-component-item'));
-        const isFieldItem = (item) => item.dataset.componentType === 'field' && item.dataset.fieldName;
+        const isComponentItem = (item) => (
+          (item.dataset.componentType === 'field' && item.dataset.fieldName)
+          || (item.dataset.componentType === 'association' && item.dataset.associationName)
+        );
         const isSeparatorItem = (item) => item.dataset.componentType === 'separator';
-        const hasFieldAhead = (startIdx) => {
+        const hasComponentAhead = (startIdx) => {
           for (let i = startIdx + 1; i < listItems.length; i += 1) {
-            if (isFieldItem(listItems[i])) return true;
+            if (isComponentItem(listItems[i])) return true;
           }
           return false;
         };
@@ -5237,10 +5629,10 @@ const App = {
         const pendingLeadingSeparators = [];
         let seenField = false;
         listItems.forEach((item, idx) => {
-          if (isFieldItem(item)) {
+          if (isComponentItem(item)) {
             normalizedItems.push(item);
             seenField = true;
-            if (pendingLeadingSeparators.length && hasFieldAhead(idx)) {
+            if (pendingLeadingSeparators.length && hasComponentAhead(idx)) {
               pendingLeadingSeparators.forEach(sep => normalizedItems.push(sep));
             }
             pendingLeadingSeparators.length = 0;
@@ -5251,7 +5643,7 @@ const App = {
               pendingLeadingSeparators.push(item);
               return;
             }
-            if (!hasFieldAhead(idx)) return;
+            if (!hasComponentAhead(idx)) return;
             normalizedItems.push(item);
           }
         });
@@ -5266,6 +5658,9 @@ const App = {
             const encoded = item.dataset.separatorValue || '';
             return { type: 'separator', value: encoded ? decodeURIComponent(encoded) : '' };
           }
+          if (item.dataset.componentType === 'association') {
+            return { type: 'association', name: item.dataset.associationName };
+          }
           return { type: 'field', name: item.dataset.fieldName };
         });
 
@@ -5277,17 +5672,22 @@ const App = {
             pendingSeparator = component.value != null ? String(component.value) : '';
             return;
           }
-          const field = activeFields.get(component.name);
-          if (!field) return;
-          let sampleValue = field.label || '';
-          if (field.type === 'dropdown') {
-            const optionRows = field.card.querySelectorAll('.option-row');
-            if (optionRows.length > 0) {
-              const lastOptionRow = optionRows[optionRows.length - 1];
-              const nameValueInput = lastOptionRow?.querySelector('input[name$=".nameValue"]');
-              const valueInput = lastOptionRow?.querySelector('input[name$=".value"]');
-              sampleValue = (nameValueInput && nameValueInput.value) || (valueInput && valueInput.value) || sampleValue;
+          let sampleValue = '';
+          if (component.type === 'field') {
+            const field = activeFields.get(component.name);
+            if (!field) return;
+            sampleValue = field.label || '';
+            if (field.type === 'dropdown') {
+              const optionRows = field.card.querySelectorAll('.option-row');
+              if (optionRows.length > 0) {
+                const lastOptionRow = optionRows[optionRows.length - 1];
+                const nameValueInput = lastOptionRow?.querySelector('input[name$=".nameValue"]');
+                const valueInput = lastOptionRow?.querySelector('input[name$=".value"]');
+                sampleValue = (nameValueInput && nameValueInput.value) || (valueInput && valueInput.value) || sampleValue;
+              }
             }
+          } else if (component.type === 'association') {
+            sampleValue = activeAssociations.get(component.name)?.sampleValue || '';
           }
           if (!sampleValue) return;
           if (parts.length > 0 && pendingSeparator != null) {
@@ -5316,23 +5716,21 @@ const App = {
         const form = enableNameGenCheckbox?.closest('form');
         if (!form) return;
         const section = form.querySelector('.name-generation-settings');
-        if (section) section.style.display = enableNameGenCheckbox.checked ? 'block' : 'none';
+        if (section) section.classList.toggle('hidden', !enableNameGenCheckbox.checked);
         form.querySelectorAll('input[name$=".partOfName"]').forEach(input => {
           input.disabled = !enableNameGenCheckbox.checked;
         });
-        const useTitle = form.querySelector('input[name="useAutoNameAsTitle"]');
-        if (useTitle) useTitle.disabled = !enableNameGenCheckbox.checked;
+        enableNameGenCheckbox.setAttribute('aria-checked', enableNameGenCheckbox.checked ? 'true' : 'false');
         this.updateNamePreview();
       },
 
-      toggleUseAutoNameAsTitle(checkbox) {
+      togglePrefixInput(checkbox) {
         const form = checkbox?.closest('form');
         if (!form) return;
-        const disableFields = checkbox.checked;
-        form.querySelectorAll('input[name$=".useAsTitle"]').forEach(input => {
-          input.disabled = disableFields;
-          if (disableFields) input.checked = false;
-        });
+        const prefixInput = form.querySelector('input[name="namePrefix"]');
+        if (prefixInput) prefixInput.disabled = !checkbox.checked;
+        checkbox.setAttribute('aria-checked', checkbox.checked ? 'true' : 'false');
+        this.updateNamePreview();
       },
       
       addField() {
@@ -5514,9 +5912,10 @@ const App = {
         });
       },
       
-      renderAssociationEditor(assoc, index) {
+      renderAssociationEditor(assoc, index, enableNameGen = false) {
         return `
-          <div class="field-editor" data-index="${index}">
+          <div class="assoc-card association-editor sortable-item" data-index="${index}">
+            <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
             <div class="form-group">
               <label>Label *</label>
               <input type="text" name="associations[${index}].label" value="${assoc?.label || ''}" required
@@ -5548,6 +5947,20 @@ const App = {
                 `).join('')}
               </select>
             </div>
+            <div class="checkbox-group checkbox-group-inline">
+              <label class="checkbox-label">
+                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].required" ${assoc?.required ? 'checked' : ''}>
+                <span>Required</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].visibleInCard" ${assoc?.visibleInCard ? 'checked' : ''}>
+                <span>Visible in card</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].partOfName" ${assoc?.partOfName ? 'checked' : ''} ${!enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
+                <span>In title</span>
+              </label>
+            </div>
             
             <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${index})">
               <span class="material-icons">delete</span>
@@ -5561,41 +5974,61 @@ const App = {
         const container = document.getElementById('associationsContainer');
         if (!container) return;
         
-        const newIndex = container.querySelectorAll('.field-editor').length;
+        const newIndex = container.querySelectorAll('.assoc-card, .association-editor').length;
+        const form = document.getElementById('entityTypeForm');
+        const enableNameGen = form?.querySelector('input[name=enableNameGen]')?.checked ?? false;
         
         const newAssoc = {
           name: '',
           label: '',
           type: 'association',
+          required: false,
+          visibleInCard: false,
+          partOfName: false,
           association: {
             kind: 'belongs_to',
             targetType: Object.keys(this.data.entityTypes)[0] || ''
           }
         };
         
-        const assocHtml = this.renderAssociationEditor(newAssoc, newIndex);
+        const assocHtml = this.renderAssociationEditor(newAssoc, newIndex, enableNameGen);
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = assocHtml;
         const newAssocElement = tempDiv.firstElementChild;
-        container.appendChild(newAssocElement);
+        const addBtn = container.querySelector('.btn-add-field');
+        if (addBtn) {
+          container.insertBefore(newAssocElement, addBtn);
+        } else {
+          container.appendChild(newAssocElement);
+        }
+        this.updateAssociationKindHelp(newAssocElement.querySelector('.association-kind-select'));
         
         // Scroll the new association into view if it exists
         if (newAssocElement) {
           newAssocElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
+        this.updateNamePreview();
       },
       
       removeAssociation(index) {
-        const editor = document.querySelector(`#associationsContainer .field-editor[data-index="${index}"]`);
+        const editor = document.querySelector(`#associationsContainer .assoc-card[data-index="${index}"], #associationsContainer .association-editor[data-index="${index}"], #associationsContainer .field-editor[data-index="${index}"]`);
+        if (!editor) return;
         editor.remove();
         
         // Update indices for remaining associations
-        document.querySelectorAll('#associationsContainer .field-editor').forEach((editor, newIndex) => {
-          editor.dataset.index = newIndex;
-          editor.querySelectorAll('[name^="associations["]').forEach(input => {
+        document.querySelectorAll('#associationsContainer .assoc-card, #associationsContainer .association-editor, #associationsContainer .field-editor').forEach((assocEditor, newIndex) => {
+          assocEditor.dataset.index = newIndex;
+          assocEditor.querySelectorAll('[name^="associations["]').forEach(input => {
             input.name = input.name.replace(/associations\[\d+\]/, `associations[${newIndex}]`);
           });
+          assocEditor.querySelectorAll('[onchange]').forEach(el => {
+            const attr = el.getAttribute('onchange');
+            if (attr) el.setAttribute('onchange', attr.replace(/associations\[\d+\]/g, `associations[${newIndex}]`));
+          });
+          const removeBtn = assocEditor.querySelector('button[onclick*="App.removeAssociation("]');
+          if (removeBtn) removeBtn.setAttribute('onclick', `App.removeAssociation(${newIndex})`);
         });
+        this.updateNamePreview();
       },
       
       toggleDropdown(event, button) {
@@ -5991,15 +6424,12 @@ const App = {
         document.body.appendChild(div.firstElementChild);
         const input = document.getElementById('resetDataConfirmInput');
         const btn = document.getElementById('resetDataConfirmBtn');
-        const doReset = async () => {
-          if (supabaseClient) {
-            const { data: { user } } = await supabaseClient.auth.getUser();
-            if (user) {
-              await supabaseClient.from('app_data').upsert({ user_id: user.id, payload: {} }, { onConflict: 'user_id' });
-            }
-            Storage._cached = null;
-          }
-          localStorage.removeItem(Storage.KEY);
+	        const doReset = async () => {
+	          if (supabaseClient) {
+	            await Storage.setAppDataAsync({});
+	            Storage._cached = null;
+	          }
+	          localStorage.removeItem(Storage.KEY);
           location.reload();
         };
         input.addEventListener('input', () => {
@@ -6048,12 +6478,12 @@ const App = {
         document.body.appendChild(div.firstElementChild);
         const input = document.getElementById('deleteAccountConfirmInput');
         const btn = document.getElementById('deleteAccountConfirmBtn');
-        const doDelete = async () => {
-          const { data: { session } } = await supabaseClient.auth.getSession();
-          const token = session && session.access_token;
-          if (!token) {
-            this.showSnackbar('Session expired. Please sign in again.', true);
-            return;
+	        const doDelete = async () => {
+	          const session = await getAuthSession();
+	          const token = session && session.access_token;
+	          if (!token) {
+	            this.showSnackbar('Session expired. Please sign in again.', true);
+	            return;
           }
           btn.disabled = true;
           try {

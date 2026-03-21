@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Track what matters—devices, people, books, properties—in one place. Flexible categories, multiple workspaces, export and sync.">
   <meta name="theme-color" content="#1a1b1e">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="manifest.webmanifest">
@@ -19,12 +20,25 @@
     document.documentElement.setAttribute('data-theme', theme);
   })();
   </script>
+  <script src="config.js"></script>
+  <script src="landing-auth-redirect.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=17" />
 </head>
 <body class="landing-page">
+  <div class="landing-profile-anchor">
+    <button type="button" class="header-icon-btn" id="landingProfileBtn" aria-label="Account" aria-haspopup="true" aria-expanded="false">
+      <span class="material-icons">person</span>
+    </button>
+    <div class="dropdown-menu hidden" id="landingProfileMenu" role="menu" aria-hidden="true">
+      <a href="app.html" role="menuitem">
+        <span class="material-icons">login</span>
+        <span>Log in</span>
+      </a>
+    </div>
+  </div>
   <div class="landing-container">
     <main class="landing-main">
       <div class="landing-hero">
@@ -44,7 +58,7 @@
         <a href="app.html" class="btn btn-primary landing-cta">Start using Elistly</a>
       </div>
       <div class="landing-screenshot">
-        <img src="img/elistly-app.png" alt="Elistly app" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+        <img src="img/elistly-app.png" alt="Elistly" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
         <div class="landing-screenshot-placeholder hidden" aria-hidden="true">
           <span class="material-icons">dashboard</span>
           <span>App screenshot</span>
@@ -105,6 +119,35 @@
     if (link) link.addEventListener('click', function(e) { e.preventDefault(); openLegal(); });
     if (close1) close1.addEventListener('click', closeLegal);
     if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) closeLegal(); });
+  })();
+  </script>
+  <script>
+  (function() {
+    var btn = document.getElementById('landingProfileBtn');
+    var menu = document.getElementById('landingProfileMenu');
+    if (!btn || !menu) return;
+    function closeMenu() {
+      menu.style.display = 'none';
+      btn.setAttribute('aria-expanded', 'false');
+      menu.setAttribute('aria-hidden', 'true');
+    }
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var next = menu.style.display !== 'block';
+      if (next) {
+        menu.style.display = 'block';
+        btn.setAttribute('aria-expanded', 'true');
+        menu.setAttribute('aria-hidden', 'false');
+      } else {
+        closeMenu();
+      }
+    });
+    document.addEventListener('click', function(e) {
+      if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeMenu();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeMenu();
+    });
   })();
   </script>
   <script src="pwa-register.js"></script>

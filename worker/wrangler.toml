@@ -1,8 +1,7 @@
 # Elistly API Worker – deploy from Cloudflare with root directory = worker
 #
-# Set SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY in the dashboard
-# as Secret (encrypted), not Variable (plaintext). Only plaintext Variables are
-# wiped on Git-triggered deploy; Secrets persist. Or use: cd worker && npx wrangler secret put <NAME>
+# Required secret: NEON_DATABASE_URL
+# Store as a Secret (encrypted): cd worker && npx wrangler secret put NEON_DATABASE_URL
 name = "elistly-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
