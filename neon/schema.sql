@@ -118,3 +118,52 @@ alter table public.admin_users enable row level security;
 
 -- No end-user policies on admin_users.
 -- The app-owned Worker accesses this table via a privileged (service-role) connection.
+
+-- ---------------------------------------------------------------------------
+-- user_auth (credentials)
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.user_auth (
+  id              text        primary key,
+  email           text        not null,
+  email_lower     text        not null,
+  password_hash   text        not null,
+  last_sign_in_at timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  email_confirmed_at timestamptz,
+  unique(email_lower)
+);
+
+-- Index for email lookups
+create index if not exists idx_user_auth_email_lower on public.user_auth(email_lower);
+
+-- ---------------------------------------------------------------------------
+-- user_preferences (metadata)
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.user_preferences (
+  user_id        text        primary key,
+  user_name      text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- user_mfa (multi-factor auth factors)
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.user_mfa (
+  id                text        primary key,
+  user_id           text        not null,
+  factor_type       text        not null check (factor_type = 'totp'),
+  secret_encrypted  text        not null,
+  verified_at       timestamptz,
+  last_used_at      timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  unique(user_id, factor_type)
+);
+
+create index if not exists idx_user_mfa_user_id on public.user_mfa(user_id);
+

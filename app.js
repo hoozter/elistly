@@ -38,28 +38,7 @@ const MATERIAL_ICONS = [
   'list', 'grid_view', 'view_list', 'view_module', 'label', 'bookmark', 'star'
 ];
 
-// Supabase client (when config present). Used by Storage and Auth.
-var supabaseClient = null;
-const SUPABASE_SCRIPT_SOURCES = [
-  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
-  'https://unpkg.com/@supabase/supabase-js@2'
-];
-
-function getBackendProvider() {
-  if (typeof window === 'undefined') return 'supabase';
-  return (window.ELISTLY_BACKEND_PROVIDER || 'supabase').trim().toLowerCase();
-}
-
-function getBackendUrl() {
-  if (typeof window === 'undefined') return '';
-  return window.ELISTLY_BACKEND_URL || window.SUPABASE_URL || '';
-}
-
-function getBackendPublicKey() {
-  if (typeof window === 'undefined') return '';
-  return window.ELISTLY_PUBLIC_KEY || window.SUPABASE_ANON_KEY || '';
-}
-
+// API URL getter (used by apiRequest)
 function getApiUrl() {
   if (typeof window === 'undefined') return '';
   return (window.ELISTLY_API_URL || '').trim();
@@ -69,51 +48,17 @@ function hasApiUrl() {
   return !!getApiUrl();
 }
 
-function loadExternalScript(src) {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      if (existing.dataset.loaded === 'true') return resolve();
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error(`Failed to load ${src}`)), { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = false;
-    script.onload = () => {
-      script.dataset.loaded = 'true';
-      resolve();
-    };
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
-    document.head.appendChild(script);
-  });
-}
+// Supabase client is loaded from lib/db.js which sets window.supabase
+var supabaseClient = null;
 
 async function ensureSupabaseClient() {
   if (supabaseClient) return supabaseClient;
-  var url = getBackendUrl();
-  var anonKey = getBackendPublicKey();
-  if (!url || !anonKey) return null;
-  if (getBackendProvider() !== 'supabase') return null;
-
-  if (typeof window.supabase === 'undefined') {
-    for (const src of SUPABASE_SCRIPT_SOURCES) {
-      try {
-        await loadExternalScript(src);
-        if (typeof window.supabase !== 'undefined') break;
-      } catch (_) {}
-    }
+  if (typeof window.supabase !== 'undefined') {
+    supabaseClient = window.supabase;
+    return supabaseClient;
   }
-  if (typeof window.supabase === 'undefined') return null;
-
-  try {
-    supabaseClient = window.supabase.createClient(url, anonKey);
-  } catch (e) {
-    console.warn('Elistly: Supabase client init failed', e);
-    supabaseClient = null;
-  }
-  return supabaseClient;
+  console.error('Elistly: Supabase-compatible client not loaded. Ensure lib/db.js is included before app.js.');
+  return null;
 }
 
 async function getAuthSession() {
