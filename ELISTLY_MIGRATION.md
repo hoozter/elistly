@@ -238,15 +238,21 @@ If critical issues arise:
 
 ## Acceptance Checklist
 
-- [ ] All major API routes (`/app-data`, `/profile`, `/admin/*`) require and accept JWTs.
-- [ ] Admin panel functions correctly (admin check, user listing, deletion).
-- [ ] 2FA (TOTP) enrollment and verification work end-to-end.
-- [ ] No references to `@supabase/supabase-js` or `SUPABASE_URL` used at runtime.
-- [ ] `ELISTLY_MIGRATION.md` (this document) is present.
-- [ ] Migrated users can log in with their existing passwords.
-- [ ] New users can sign up without email confirmation (optional: can add later).
-- [ ] Token refresh works (`/auth/refresh`).
-- [ ] Logout clears token and cookie.
+- [x] All major API routes (`/app-data`, `/profile`, `/admin/*`) require and accept JWTs.
+- [x] Admin panel functions correctly (admin check, user listing, deletion).
+- [x] 2FA (TOTP) enrollment and verification work end-to-end.
+- [x] No references to `@supabase/supabase-js` or `SUPABASE_URL` used at runtime — Supabase CDN removed from `app.html`, keys removed from `config.js`.
+- [x] `ELISTLY_MIGRATION.md` (this document) is present.
+- [ ] Migrated users can log in with their existing passwords — **Note**: bcrypt hashes from Supabase are not compatible with PBKDF2. Existing users will need to reset passwords. New accounts work without this step.
+- [x] New users can sign up without email confirmation.
+- [x] Token refresh works (`/auth/refresh`).
+- [x] Logout clears token and cookie.
+
+### Implementation notes (2026-04-02)
+
+- Worker rewritten to use **Web Crypto API** (HS256 JWT, PBKDF2 passwords, HMAC-SHA1 TOTP) instead of `jsonwebtoken`, `bcryptjs`, `otplib` — those Node.js libraries are not compatible with the standard Cloudflare Workers runtime.
+- Auth logic extracted to `worker/src/auth.js` following the Notner auth pattern (`notner/AUTH_PATTERN.md`).
+- `neon()` client now initialized inside the `fetch` handler (env is not available at module scope in Workers).
 
 ## Appendix: Configuration Variables
 
