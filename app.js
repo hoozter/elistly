@@ -48,7 +48,7 @@ function hasApiUrl() {
   return !!getApiUrl();
 }
 
-// Supabase client is loaded from lib/db.js which sets window.supabase
+// Supabase-compatible client is loaded from lib/db.js and backed by Neon Auth.
 var supabaseClient = null;
 
 async function ensureSupabaseClient() {
@@ -89,7 +89,8 @@ async function apiRequest(path, options = {}) {
   const res = await fetch(`${apiUrl.replace(/\/$/, '')}${path}`, {
     method: options.method || 'GET',
     headers,
-    body
+    body,
+    credentials: 'include'
   });
   const text = await res.text();
   let data = {};
@@ -101,7 +102,7 @@ async function apiRequest(path, options = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
-// Storage layer: localStorage or Supabase (one row per user in app_data)
+// Storage layer: localStorage or account-backed API (one row per user in app_data)
 const Storage = {
   KEY: 'elistlyData',
   USER_CACHE_PREFIX: 'elistlyData:user:',
@@ -198,7 +199,7 @@ const Storage = {
             .eq('user_id', user.id)
             .maybeSingle();
           if (error) {
-            console.error('Storage.getAppData Supabase error', error);
+            console.error('Storage.getAppData backend error', error);
             return null;
           }
           remote = data || {};
@@ -364,27 +365,27 @@ const App = {
 
         if (!supabaseClient) {
           const main = document.getElementById('mainContent');
-          const hasConfigKeys = !!(getBackendUrl() && getBackendPublicKey());
-          const hasSupabaseSdk = typeof window.supabase !== 'undefined';
+          const hasConfigKeys = !!(getApiUrl() && window.NEON_AUTH_URL);
+          const hasClientShim = typeof window.supabase !== 'undefined';
           let setupHtml = `
                 <p class="setup-required-copy">Elistly requires an account, a database, and a configured backend provider.</p>
                 <ol class="setup-required-list">
                   <li>Copy <code>config.example.js</code> to <code>config.js</code></li>
-                  <li>Set <code>ELISTLY_BACKEND_PROVIDER</code>, <code>ELISTLY_BACKEND_URL</code>, and <code>ELISTLY_PUBLIC_KEY</code> in <code>config.js</code></li>
-                  <li>For the current Supabase-compatible backend, run the SQL in <code>supabase/schema.sql</code></li>
-                  <li>Set <code>ELISTLY_API_URL</code> so the app can use the Worker-backed API surface</li>
+                  <li>Set <code>ELISTLY_API_URL</code> and <code>NEON_AUTH_URL</code> in <code>config.js</code></li>
+                  <li>Run the SQL in <code>neon/schema.sql</code> against your Neon database</li>
+                  <li>Set the Worker secrets from <code>CLOUDFLARE_DEPLOY.md</code></li>
                   <li>Reload this page</li>
                 </ol>
                 <p class="setup-required-note">See the README for full instructions.</p>`;
-          if (hasConfigKeys && !hasSupabaseSdk) {
+          if (hasConfigKeys && !hasClientShim) {
             setupHtml = `
-                <p class="setup-required-copy">Supabase configuration was found, but the Supabase SDK did not load.</p>
+                <p class="setup-required-copy">Backend configuration was found, but the client shim did not load.</p>
                 <ol class="setup-required-list">
                   <li>Check your internet connection</li>
-                  <li>Disable content blockers for this site (they may block CDN scripts)</li>
+                  <li>Confirm <code>lib/db.js</code> is included before <code>app.js</code></li>
                   <li>Hard reload the page</li>
                 </ol>
-                <p class="setup-required-note">Tip: open DevTools → Network and verify the <code>@supabase/supabase-js</code> script is loading.</p>`;
+                <p class="setup-required-note">Tip: open DevTools → Network and verify <code>lib/db.js</code> is loading.</p>`;
           }
           if (main) {
             main.innerHTML = `
@@ -725,7 +726,7 @@ const App = {
       </div>
       <div class="form-group">
         <label for="authSignUpPassword">Password</label>
-        <input type="password" id="authSignUpPassword" class="auth-input" required placeholder="At least 6 characters" autocomplete="new-password" minlength="6">
+        <input type="password" id="authSignUpPassword" class="auth-input" required placeholder="At least 8 characters" autocomplete="new-password" minlength="8">
       </div>
       <div class="form-group">
         <label for="authSignUpConfirm">Confirm password</label>
@@ -988,7 +989,7 @@ const App = {
         window.addEventListener('popstate', (e) => this.handleRouting());
         
         // Settings button is wired via onclick in HTML
-        // Profile dropdown is wired in initProfileDropdown when Supabase + session
+        // Profile dropdown is wired in initProfileDropdown when the auth session is ready.
         
         // Global modal click-outside-to-close
         document.addEventListener('click', (e) => {
@@ -6132,7 +6133,7 @@ const App = {
                 <section class="legal-section">
                   <h4>Data &amp; privacy</h4>
                   <p><strong>What we store</strong></p>
-                  <p>When you use an account (e.g. via Supabase), we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app (e.g. Supabase).</p>
+                  <p>When you use an account, we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app.</p>
                   <p><strong>Why</strong></p>
                   <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
                   <p><strong>Your rights</strong></p>

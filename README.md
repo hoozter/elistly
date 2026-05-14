@@ -23,12 +23,12 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 
 ## Quick install
 
-Elistly needs Supabase (your backend and database). Without it, the app shows a “Setup required” message.
+Elistly needs Neon Auth, Neon Postgres, and the Cloudflare Worker API. Without configured backend URLs, the app shows a “Setup required” message.
 
 1. Clone or download the repo.
 2. Copy `config.example.js` to `config.js`.
-3. In [Supabase](https://supabase.com): create a project, run the SQL in `supabase/schema.sql` (SQL Editor).
-4. In Supabase → Project Settings → API: copy **Project URL** and **anon public** key into `config.js` as `ELISTLY_BACKEND_URL` and `ELISTLY_PUBLIC_KEY` (legacy `SUPABASE_URL` and `SUPABASE_ANON_KEY` still work).
+3. In [Neon](https://neon.tech): create a project, enable Neon Auth, and run the SQL in `neon/schema.sql`.
+4. Deploy the Worker and set `ELISTLY_API_URL` plus `NEON_AUTH_URL` in `config.js`.
 5. Open `index.html` in a browser (landing page), then click **Start using Elistly** to open the app and sign in. After that, your data is stored in the database and syncs when online. The app is designed to work offline and sync when back online (e.g. for an installable web app on Android).
 
 ## Basic usage
@@ -50,9 +50,9 @@ For a complete reference—concepts, all features, deployment, and project struc
 
 ## Deploying
 
-- **Static host** — Upload the repo (after building if you use `scripts/write-config.js` for config). Supabase provides the backend and database.
-- **Supabase / migration baseline** — Run `supabase/schema.sql`; set `config.js` (or inject config in build). See [DOCS.md](DOCS.md), `DEPLOY.md`, and `NEON_MIGRATION.md`.
-- **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps (Pages + Worker, env vars, one-push flow, optional admin).
+- **Static host** — Upload the repo after generating `config.js` with public backend URLs.
+- **Neon baseline** — Run `neon/schema.sql`; set `config.js` or inject config in build. See `DEPLOY.md` and `NEON_MIGRATION.md`.
+- **Cloudflare Pages + Worker** — See **`CLOUDFLARE_DEPLOY.md`** for full steps.
 
 ## License
 

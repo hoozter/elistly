@@ -1,7 +1,16 @@
 # Elistly API Worker – deploy from Cloudflare with root directory = worker
 #
-# Required secret: NEON_DATABASE_URL
-# Store as a Secret (encrypted): cd worker && npx wrangler secret put NEON_DATABASE_URL
+# Required secrets:
+#   NEON_DATABASE_URL
+#   NEON_AUTH_URL
+#   NEON_AUTH_JWKS_URL
+#   ELISTLY_ADMIN_EMAILS
+#
+# Store as encrypted secrets:
+#   cd worker && npx wrangler secret put NEON_DATABASE_URL
+#   cd worker && npx wrangler secret put NEON_AUTH_URL
+#   cd worker && npx wrangler secret put NEON_AUTH_JWKS_URL
+#   cd worker && npx wrangler secret put ELISTLY_ADMIN_EMAILS
 name = "elistly-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"

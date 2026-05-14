@@ -1,6 +1,7 @@
 {
   "name": "elistly-worker",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy"
   },

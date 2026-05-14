@@ -1,510 +1,413 @@
 /**
- * Elistly API Worker – JWT Authentication with Neon
+ * Elistly API Worker – Neon Auth + Neon Postgres.
  *
- * Endpoints:
- * Auth: /auth/signup, /auth/login, /auth/refresh, /auth/logout
- * MFA: /auth/mfa/factors, /auth/mfa/enroll, /auth/mfa/verify, /auth/mfa/challenge, /auth/mfa/unenroll, /auth/mfa/status
- * DB: /db/query (for QueryBuilder)
- * App: /me, /app-data, /profile, /admin/*, /users/me, etc.
+ * Auth is delegated to Neon Auth. App data stays behind this Worker so the
+ * browser never receives a database connection string.
  *
- * Required env secrets: NEON_DATABASE_URL, JWT_SECRET
- * Uses Web Crypto for all crypto (JWT HS256, PBKDF2 passwords, TOTP RFC 6238).
- * No Node.js libraries — compatible with the standard Cloudflare Workers runtime.
+ * Required env secrets:
+ *   NEON_DATABASE_URL
+ *   NEON_AUTH_URL
+ *   NEON_AUTH_JWKS_URL
+ *   ELISTLY_ADMIN_EMAILS (optional comma-separated admin email allowlist)
  */
 
 import { neon } from "@neondatabase/serverless";
-import {
-  signJwt,
-  verifyJwt,
-  hashPassword,
-  verifyPassword,
-  generateTotpSecret,
-  verifyTotp,
-  encryptTotpSecret,
-  decryptTotpSecret,
-  buildOtpauthUri,
-  uuidv4,
-} from "./auth.js";
 
-const TOKEN_COOKIE_NAME = "elistly_token";
+const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
+const jwksCache = { keys: null, expiresAt: 0 };
 
-// sql is initialized per-request inside fetch() using env.NEON_DATABASE_URL.
-// Do NOT call neon() at module scope — env is not available there.
 let sql;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
 async function readJsonBody(req) {
-  try { return await req.json(); } catch { return null; }
+  try {
+    return await req.json();
+  } catch {
+    return null;
+  }
 }
 
-function corsHeaders(origin, exposeAuth = false) {
-  const o = origin || "*";
-  const headers = {
+function corsHeaders(origin) {
+  return {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": o,
+    "Access-Control-Allow-Origin": origin || "*",
+    "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Cache-Control": "no-store, no-cache",
   };
-  if (exposeAuth) headers["Access-Control-Expose-Headers"] = "Set-Cookie";
-  return headers;
 }
 
-function jsonResponse(body, status = 200, origin = null, opts = {}) {
+function jsonResponse(body, status = 200, origin = null, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
-    headers: corsHeaders(origin, opts.exposeAuth),
+    headers: { ...corsHeaders(origin), ...extraHeaders },
     status,
   });
 }
 
-function setCookie(response, name, value, maxAge = 7 * 24 * 60 * 60) {
-  response.headers.append(
-    "Set-Cookie",
-    `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`
-  );
+function copySetCookie(source, target) {
+  const setCookie = source.headers.get("set-cookie");
+  if (setCookie) target.headers.append("Set-Cookie", setCookie);
 }
 
-function clearCookie(response, name) {
-  response.headers.append(
-    "Set-Cookie",
-    `${name}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`
-  );
+function cookieHeaderFromSetCookie(setCookie) {
+  if (!setCookie) return "";
+  return setCookie
+    .split(/,(?=\s*[^;,=\s]+=[^;,]+)/)
+    .map(cookie => cookie.trim().split(";")[0])
+    .filter(Boolean)
+    .join("; ");
 }
 
-function getTokenFromRequest(req) {
+function base64urlDecode(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function decodeJwtPart(value) {
+  return JSON.parse(new TextDecoder().decode(base64urlDecode(value)));
+}
+
+async function getJwks(env) {
+  if (jwksCache.keys && Date.now() < jwksCache.expiresAt) return jwksCache.keys;
+  const jwksUrl = env.NEON_AUTH_JWKS_URL || `${env.NEON_AUTH_URL.replace(/\/$/, "")}/.well-known/jwks.json`;
+  const response = await fetch(jwksUrl);
+  if (!response.ok) throw new Error("Failed to load Neon Auth JWKS");
+  const body = await response.json();
+  jwksCache.keys = Array.isArray(body.keys) ? body.keys : [];
+  jwksCache.expiresAt = Date.now() + 10 * 60 * 1000;
+  return jwksCache.keys;
+}
+
+async function verifyNeonJwt(token, env) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+
+  const header = decodeJwtPart(parts[0]);
+  const payload = decodeJwtPart(parts[1]);
+  if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
+  if (!payload.sub) return null;
+
+  const keys = await getJwks(env);
+  const jwk = keys.find(key => key.kid === header.kid);
+  if (!jwk || jwk.kty !== "OKP" || jwk.crv !== "Ed25519") return null;
+
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
+  const valid = await crypto.subtle.verify(
+    { name: "Ed25519" },
+    key,
+    base64urlDecode(parts[2]),
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+  );
+  return valid ? payload : null;
+}
+
+function getBearerToken(req) {
   const auth = req.headers.get("Authorization") || "";
-  if (auth.startsWith("Bearer ")) return auth.slice(7).trim();
-  const cookies = req.headers.get("Cookie") || "";
-  const match = cookies.match(new RegExp(`(^| )${TOKEN_COOKIE_NAME}=([^;]+)`));
-  return match ? match[2] : null;
+  return auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
 }
 
 async function getAuthenticatedUser(req, env) {
-  const token = getTokenFromRequest(req);
-  if (!token) return null;
-  const payload = await verifyJwt(token, env.JWT_SECRET);
-  if (!payload?.sub) return null;
-  return { id: payload.sub, email: payload.email, mfa_verified: payload.mfa_verified, ...payload };
+  const payload = await verifyNeonJwt(getBearerToken(req), env);
+  if (!payload) return null;
+  return {
+    id: payload.sub,
+    email: payload.email || null,
+    name: payload.name || null,
+    role: payload.role || null,
+    ...payload,
+  };
 }
 
-async function checkMfaRequired(userId) {
-  const rows = await sql`
-    SELECT 1 FROM user_mfa
-    WHERE user_id = ${userId} AND factor_type = 'totp' AND verified_at IS NOT NULL
+function getAuthUrl(env, path) {
+  return `${env.NEON_AUTH_URL.replace(/\/$/, "")}${path}`;
+}
+
+function configuredAdminEmails(env) {
+  return String(env.ELISTLY_ADMIN_EMAILS || "")
+    .split(",")
+    .map(email => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function isAdmin(user, env) {
+  if (!user) return false;
+  const adminEmails = configuredAdminEmails(env);
+  if (user.email && adminEmails.includes(String(user.email).toLowerCase())) {
+    await sql`
+      INSERT INTO admin_users (user_id)
+      VALUES (${user.id})
+      ON CONFLICT (user_id) DO NOTHING
+    `;
+    return true;
+  }
+
+  const activeAdmins = await sql`
+    SELECT au.user_id
+    FROM admin_users au
+    JOIN neon_auth."user" u ON u.id::text = au.user_id
+    LIMIT 1
   `;
+  if (activeAdmins.length === 0) {
+    const firstUsers = await sql`
+      SELECT id::text AS id
+      FROM neon_auth."user"
+      ORDER BY "createdAt" ASC, id ASC
+      LIMIT 1
+    `;
+    if (firstUsers[0]?.id === user.id) {
+      await sql`
+        INSERT INTO admin_users (user_id)
+        VALUES (${user.id})
+        ON CONFLICT (user_id) DO NOTHING
+      `;
+      return true;
+    }
+  }
+
+  const rows = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
   return rows.length > 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH ENDPOINTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function handleSignup(req, env, origin) {
-  const body = await readJsonBody(req);
-  if (!body?.email || !body?.password) {
-    return jsonResponse({ error: "Email and password required" }, 400, origin);
-  }
-  const email = body.email.trim().toLowerCase();
-  if (body.password.length < 6) {
-    return jsonResponse({ error: "Password must be at least 6 characters" }, 400, origin);
-  }
-  try {
-    const existing = await sql`SELECT id FROM user_auth WHERE email_lower = ${email}`;
-    if (existing.length > 0) {
-      return jsonResponse({ error: "User already exists" }, 400, origin);
-    }
-    const passwordHash = await hashPassword(body.password);
-    const userId = uuidv4();
-    const now = new Date().toISOString();
-    await sql`
-      INSERT INTO user_auth (id, email, email_lower, password_hash, created_at, updated_at, email_confirmed_at)
-      VALUES (${userId}, ${email}, ${email}, ${passwordHash}, ${now}, ${now}, ${now})
-    `;
-    await sql`
-      INSERT INTO user_preferences (user_id, created_at, updated_at)
-      VALUES (${userId}, ${now}, ${now})
-      ON CONFLICT (user_id) DO NOTHING
-    `;
-    await sql`
-      INSERT INTO profiles (user_id, display_name, updated_at)
-      VALUES (${userId}, NULL, ${now})
-      ON CONFLICT (user_id) DO NOTHING
-    `;
-    const token = await signJwt({ sub: userId, email, mfa_verified: true }, env.JWT_SECRET);
-    const response = jsonResponse({ token, user: { id: userId, email } }, 201, origin, { exposeAuth: true });
-    setCookie(response, TOKEN_COOKIE_NAME, token);
-    return response;
-  } catch (e) {
-    console.error("Signup error:", e);
-    return jsonResponse({ error: "Internal server error", detail: e.message }, 500, origin);
-  }
+async function callNeonAuth(env, path, options = {}) {
+  return fetch(getAuthUrl(env, path), {
+    method: options.method || "GET",
+    headers: options.headers || {},
+    body: options.body,
+  });
 }
 
-async function handleLogin(req, env, origin) {
+async function fetchSessionFromCookie(env, origin, cookieHeader) {
+  if (!cookieHeader) return { jwt: null, session: null, user: null };
+  const response = await callNeonAuth(env, "/get-session", {
+    headers: {
+      "Origin": origin || "",
+      "Cookie": cookieHeader,
+    },
+  });
+  const body = await response.json().catch(() => null);
+  return {
+    jwt: response.headers.get("set-auth-jwt"),
+    session: body && body.session ? body.session : null,
+    user: body && body.user ? body.user : null,
+    response,
+  };
+}
+
+async function handleAuthStart(req, env, origin, kind) {
   const body = await readJsonBody(req);
   if (!body?.email || !body?.password) {
     return jsonResponse({ error: "Email and password required" }, 400, origin);
   }
-  const email = body.email.trim().toLowerCase();
-  const totpToken = body.totp_token || null;
 
-  try {
-    const userRows = await sql`SELECT id, email, password_hash FROM user_auth WHERE email_lower = ${email}`;
-    const userAuth = userRows[0];
-    if (!userAuth) return jsonResponse({ error: "Invalid credentials" }, 401, origin);
-
-    const valid = await verifyPassword(body.password, userAuth.password_hash);
-    if (!valid) return jsonResponse({ error: "Invalid credentials" }, 401, origin);
-
-    const mfaRows = await sql`
-      SELECT id, secret_encrypted FROM user_mfa
-      WHERE user_id = ${userAuth.id} AND factor_type = 'totp' AND verified_at IS NOT NULL
-    `;
-    const hasMfa = mfaRows.length > 0;
-
-    if (hasMfa) {
-      const encKey = env.TOTP_ENCRYPTION_KEY || env.JWT_SECRET;
-      if (!totpToken) {
-        // Return partial token — client must supply TOTP to complete login
-        const token = await signJwt({ sub: userAuth.id, email: userAuth.email, mfa_verified: false }, env.JWT_SECRET);
-        return jsonResponse(
-          { token, user: { id: userAuth.id, email: userAuth.email }, totp_required: true, factor_id: mfaRows[0].id },
-          200, origin, { exposeAuth: true }
-        );
-      }
-      // Decrypt and verify TOTP
-      const secret = await decryptTotpSecret(mfaRows[0].secret_encrypted, encKey);
-      if (!secret || !await verifyTotp(secret, totpToken)) {
-        return jsonResponse({ error: "Invalid verification code" }, 401, origin);
-      }
-    }
-
-    await sql`UPDATE user_auth SET last_sign_in_at = NOW() WHERE id = ${userAuth.id}`;
-    const token = await signJwt({ sub: userAuth.id, email: userAuth.email, mfa_verified: true }, env.JWT_SECRET);
-    const response = jsonResponse({ token, user: { id: userAuth.id, email: userAuth.email } }, 200, origin, { exposeAuth: true });
-    setCookie(response, TOKEN_COOKIE_NAME, token);
-    return response;
-  } catch (e) {
-    console.error("Login error:", e);
-    return jsonResponse({ error: "Internal server error", detail: e.message }, 500, origin);
+  const authBody = {
+    email: body.email,
+    password: body.password,
+  };
+  if (kind === "signup") {
+    authBody.name = body.name || body.email.split("@")[0];
+  } else {
+    authBody.rememberMe = true;
   }
+
+  const authResponse = await callNeonAuth(env, kind === "signup" ? "/sign-up/email" : "/sign-in/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Origin": origin || "",
+    },
+    body: JSON.stringify(authBody),
+  });
+
+  const authResult = await authResponse.json().catch(() => ({}));
+  if (!authResponse.ok) {
+    return jsonResponse({ error: authResult.message || authResult.error || "Authentication failed" }, authResponse.status, origin);
+  }
+
+  const cookieHeader = cookieHeaderFromSetCookie(authResponse.headers.get("set-cookie"));
+  const sessionResult = await fetchSessionFromCookie(env, origin, cookieHeader);
+  if (!sessionResult.jwt) {
+    return jsonResponse({ error: "Authentication succeeded, but no JWT was issued" }, 502, origin);
+  }
+
+  const response = jsonResponse({
+    token: sessionResult.jwt,
+    user: {
+      id: sessionResult.user?.id || authResult.user?.id,
+      email: sessionResult.user?.email || authResult.user?.email,
+      name: sessionResult.user?.name || authResult.user?.name || null,
+    },
+  }, kind === "signup" ? 201 : 200, origin);
+  copySetCookie(authResponse, response);
+  return response;
 }
 
 async function handleRefresh(req, env, origin) {
-  const token = getTokenFromRequest(req);
-  if (!token) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  // Allow refresh of expired tokens (skip exp check) by decoding directly
-  const parts = token.split(".");
-  if (parts.length !== 3) return jsonResponse({ error: "Invalid token" }, 401, origin);
-  let payload;
-  try {
-    payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
-  } catch {
-    return jsonResponse({ error: "Invalid token" }, 401, origin);
+  const sessionResult = await fetchSessionFromCookie(env, origin, req.headers.get("Cookie") || "");
+  if (!sessionResult.jwt) {
+    return jsonResponse({ error: "Unauthorized" }, 401, origin);
   }
-  if (!payload?.sub) return jsonResponse({ error: "Invalid token" }, 401, origin);
-  const newToken = await signJwt({ sub: payload.sub, email: payload.email, mfa_verified: payload.mfa_verified === true }, env.JWT_SECRET);
-  const response = jsonResponse({ token: newToken }, 200, origin, { exposeAuth: true });
-  setCookie(response, TOKEN_COOKIE_NAME, newToken);
+  const response = jsonResponse({ token: sessionResult.jwt }, 200, origin);
+  if (sessionResult.response) copySetCookie(sessionResult.response, response);
   return response;
 }
 
 async function handleLogout(req, env, origin) {
-  const response = jsonResponse({ ok: true }, 200, origin);
-  clearCookie(response, TOKEN_COOKIE_NAME);
+  const authResponse = await callNeonAuth(env, "/sign-out", {
+    method: "POST",
+    headers: {
+      "Origin": origin || "",
+      "Cookie": req.headers.get("Cookie") || "",
+    },
+  });
+  const response = jsonResponse({ ok: authResponse.ok }, authResponse.ok ? 200 : authResponse.status, origin);
+  copySetCookie(authResponse, response);
+  response.headers.append("Set-Cookie", `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`);
   return response;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MFA ENDPOINTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function handleMfaFactors(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  const rows = await sql`
-    SELECT id, factor_type, verified_at, created_at FROM user_mfa
-    WHERE user_id = ${user.id} AND factor_type = 'totp'
-  `;
-  return jsonResponse({
-    totp: rows.map(r => ({ id: r.id, factor_type: r.factor_type, status: r.verified_at ? "verified" : "unverified", created_at: r.created_at })),
-  }, 200, origin);
+function normalizeAppDataRow(row) {
+  if (!row) return { payload: null, updated_at: null };
+  return { payload: row.payload ?? null, updated_at: row.updated_at ?? null };
 }
-
-async function handleMfaEnroll(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-
-  const existing = await sql`
-    SELECT id FROM user_mfa WHERE user_id = ${user.id} AND factor_type = 'totp' AND verified_at IS NOT NULL
-  `;
-  if (existing.length > 0) return jsonResponse({ error: "MFA already enrolled" }, 400, origin);
-
-  const secret = generateTotpSecret();
-  const encKey = env.TOTP_ENCRYPTION_KEY || env.JWT_SECRET;
-  const secretEncrypted = await encryptTotpSecret(secret, encKey);
-  const factorId = uuidv4();
-  const now = new Date().toISOString();
-
-  await sql`
-    INSERT INTO user_mfa (id, user_id, factor_type, secret_encrypted, created_at, verified_at)
-    VALUES (${factorId}, ${user.id}, 'totp', ${secretEncrypted}, ${now}, NULL)
-    ON CONFLICT (user_id, factor_type) DO UPDATE
-      SET secret_encrypted = EXCLUDED.secret_encrypted,
-          updated_at = EXCLUDED.created_at,
-          verified_at = NULL
-  `;
-
-  const otpAuthUrl = buildOtpauthUri(secret, user.email, "Elistly");
-  return jsonResponse({ factor_id: factorId, secret, qr_code: otpAuthUrl }, 200, origin);
-}
-
-async function handleMfaVerify(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  const body = await readJsonBody(req);
-  const factorId = body?.factor_id;
-  const code = body?.code;
-  if (!factorId || !code) return jsonResponse({ error: "factor_id and code required" }, 400, origin);
-
-  const factorRows = await sql`
-    SELECT secret_encrypted, verified_at FROM user_mfa
-    WHERE id = ${factorId} AND user_id = ${user.id} AND factor_type = 'totp'
-  `;
-  if (factorRows.length === 0) return jsonResponse({ error: "Factor not found" }, 404, origin);
-
-  const encKey = env.TOTP_ENCRYPTION_KEY || env.JWT_SECRET;
-  const secret = await decryptTotpSecret(factorRows[0].secret_encrypted, encKey);
-  if (!secret || !await verifyTotp(secret, code)) {
-    return jsonResponse({ error: "Invalid verification code" }, 401, origin);
-  }
-
-  if (!factorRows[0].verified_at) {
-    await sql`UPDATE user_mfa SET verified_at = NOW() WHERE id = ${factorId}`;
-  }
-
-  const token = await signJwt({ sub: user.id, email: user.email, mfa_verified: true }, env.JWT_SECRET);
-  const response = jsonResponse({ token }, 200, origin);
-  setCookie(response, TOKEN_COOKIE_NAME, token);
-  return response;
-}
-
-async function handleMfaChallenge(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  const body = await readJsonBody(req);
-  const factorId = body?.factorId;
-  if (!factorId) return jsonResponse({ error: "factorId required" }, 400, origin);
-  const rows = await sql`SELECT id FROM user_mfa WHERE id = ${factorId} AND user_id = ${user.id}`;
-  if (rows.length === 0) return jsonResponse({ error: "Factor not found" }, 404, origin);
-  return jsonResponse({ challenge: { id: factorId, expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString() } }, 200, origin);
-}
-
-async function handleMfaUnenroll(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  const body = await readJsonBody(req);
-  const factorId = body?.factor_id;
-  if (!factorId) return jsonResponse({ error: "factor_id required" }, 400, origin);
-  await sql`DELETE FROM user_mfa WHERE id = ${factorId} AND user_id = ${user.id}`;
-  return jsonResponse({ ok: true }, 200, origin);
-}
-
-async function handleMfaStatus(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  const mfaRows = await sql`
-    SELECT 1 FROM user_mfa WHERE user_id = ${user.id} AND factor_type = 'totp' AND verified_at IS NOT NULL
-  `;
-  const hasMfa = mfaRows.length > 0;
-  const mfaVerified = user.mfa_verified === true;
-  const currentLevel = hasMfa && mfaVerified ? "aal2" : "aal1";
-  return jsonResponse({ currentLevel, nextLevel: "aal2" }, 200, origin);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GENERIC DB QUERY ENDPOINT (QueryBuilder passthrough)
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function handleDbQuery(req, env, origin) {
-  const user = await getAuthenticatedUser(req, env);
-  if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-  if (!user.mfa_verified && await checkMfaRequired(user.id)) {
-    return jsonResponse({ error: "MFA verification required" }, 403, origin);
-  }
-  const body = await readJsonBody(req);
-  const { sql: sqlText, params } = body || {};
-  if (!sqlText || typeof sqlText !== "string") {
-    return jsonResponse({ error: "Missing sql query" }, 400, origin);
-  }
-  try {
-    const rows = await sql.query(sqlText, params || []);
-    return jsonResponse({ data: rows.rows }, 200, origin);
-  } catch (e) {
-    console.error("DB query error:", e.message);
-    return jsonResponse({ error: "Query failed", detail: e.message }, 500, origin);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MAIN FETCH
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default {
-  async fetch(req, env, ctx) {
-    // Initialize the Neon client from env (must be done inside fetch, not at module scope).
-    if (!sql || !env._sqlInitialized) {
-      sql = neon(env.NEON_DATABASE_URL);
-      env._sqlInitialized = true;
+  async fetch(req, env) {
+    const origin = req.headers.get("Origin") || "*";
+
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    const origin = req.headers.get("Origin") || "*";
     try {
+      if (!sql) sql = neon(env.NEON_DATABASE_URL);
+
       const url = new URL(req.url);
       const path = url.pathname;
 
-      if (req.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers: corsHeaders(origin) });
-      }
-
-      // Health check
       if (path === "/health" || path === "/") {
-        return jsonResponse({ ok: true, service: "elistly-api", provider: "neon" }, 200, origin);
+        return jsonResponse({ ok: true, service: "elistly-api", provider: "neon", auth: "neon-auth" }, 200, origin);
       }
 
-      // Debug env (remove or guard before production if desired)
       if (path === "/debug-env") {
-        const keys = typeof env === "object" && env !== null ? Object.keys(env).filter(k => !k.startsWith("_")) : [];
-        return jsonResponse({ envKeys: keys, provider: "neon", hasBackendUrl: !!env.NEON_DATABASE_URL }, 200, origin);
+        const keys = typeof env === "object" && env !== null ? Object.keys(env).filter(key => !key.startsWith("_")) : [];
+        return jsonResponse({
+          envKeys: keys,
+          provider: "neon",
+          auth: "neon-auth",
+          hasDatabaseUrl: !!env.NEON_DATABASE_URL,
+          hasAuthUrl: !!env.NEON_AUTH_URL,
+          hasAuthJwksUrl: !!env.NEON_AUTH_JWKS_URL,
+        }, 200, origin);
       }
 
-      // ───── AUTH ROUTES ─────
-      if (path === "/auth/signup" && req.method === "POST") return handleSignup(req, env, origin);
-      if (path === "/auth/login" && req.method === "POST") return handleLogin(req, env, origin);
+      if (path === "/auth/signup" && req.method === "POST") return handleAuthStart(req, env, origin, "signup");
+      if (path === "/auth/login" && req.method === "POST") return handleAuthStart(req, env, origin, "login");
       if (path === "/auth/refresh" && req.method === "POST") return handleRefresh(req, env, origin);
       if (path === "/auth/logout" && req.method === "POST") return handleLogout(req, env, origin);
+      if (path === "/auth/mfa/status" && req.method === "GET") {
+        return jsonResponse({ currentLevel: "aal1", nextLevel: "aal1" }, 200, origin);
+      }
+      if (path === "/auth/mfa/factors" && req.method === "GET") {
+        return jsonResponse({ totp: [] }, 200, origin);
+      }
+      if (path.startsWith("/auth/mfa/")) {
+        return jsonResponse({ error: "MFA is not implemented for Neon Auth yet" }, 501, origin);
+      }
 
-      // ───── MFA ROUTES ─────
-      if (path === "/auth/mfa/factors" && req.method === "GET") return handleMfaFactors(req, env, origin);
-      if (path === "/auth/mfa/enroll" && req.method === "POST") return handleMfaEnroll(req, env, origin);
-      if (path === "/auth/mfa/verify" && req.method === "POST") return handleMfaVerify(req, env, origin);
-      if (path === "/auth/mfa/challenge" && req.method === "POST") return handleMfaChallenge(req, env, origin);
-      if (path === "/auth/mfa/unenroll" && req.method === "POST") return handleMfaUnenroll(req, env, origin);
-      if (path === "/auth/mfa/status" && req.method === "GET") return handleMfaStatus(req, env, origin);
-
-      // ───── DB QUERY ─────
-      if (path === "/db/query" && req.method === "POST") return handleDbQuery(req, env, origin);
-
-      // ───── AUTHENTICATED APP ROUTES ─────
       const user = await getAuthenticatedUser(req, env);
       if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-      if (!user.mfa_verified && await checkMfaRequired(user.id)) {
-        return jsonResponse({ error: "MFA verification required", mfa_required: true }, 403, origin);
-      }
 
-      // GET /me
       if (path === "/me" && req.method === "GET") {
-        return jsonResponse({ user: { id: user.id, email: user.email } }, 200, origin);
+        return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
       }
 
-      // GET/PUT /app-data
       if (path === "/app-data") {
         if (req.method === "GET") {
           const rows = await sql`SELECT payload, updated_at FROM app_data WHERE user_id = ${user.id}`;
-          return jsonResponse({ data: rows[0]?.payload ?? null }, 200, origin);
+          return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
         }
         if (req.method === "PUT") {
           const body = await readJsonBody(req);
-          const payload = body?.payload ?? body ?? null;
-          const now = new Date().toISOString();
-          await sql`
+          const payload = body?.payload ?? body ?? {};
+          const rows = await sql`
             INSERT INTO app_data (user_id, payload, updated_at)
-            VALUES (${user.id}, ${JSON.stringify(payload)}, ${now})
-            ON CONFLICT (user_id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+            VALUES (${user.id}, ${JSON.stringify(payload)}::jsonb, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+              SET payload = EXCLUDED.payload,
+                  updated_at = EXCLUDED.updated_at
+            RETURNING payload, updated_at
           `;
-          return jsonResponse({ ok: true }, 200, origin);
+          return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
         }
       }
 
-      // GET/PUT /profile
       if (path === "/profile") {
         if (req.method === "GET") {
           const rows = await sql`SELECT display_name, updated_at FROM profiles WHERE user_id = ${user.id}`;
-          return jsonResponse({ profile: rows[0] ?? null }, 200, origin);
+          return jsonResponse({ profile: rows[0] || null }, 200, origin);
         }
         if (req.method === "PUT") {
           const body = await readJsonBody(req);
-          const displayName = body?.display_name ?? null;
-          const now = new Date().toISOString();
           const rows = await sql`
-            INSERT INTO profiles (user_id, display_name, updated_at)
-            VALUES (${user.id}, ${displayName}, ${now})
-            ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = EXCLUDED.updated_at
+            INSERT INTO profiles (user_id, email, display_name, updated_at)
+            VALUES (${user.id}, ${user.email}, ${body?.display_name || user.name || null}, NOW())
+            ON CONFLICT (user_id) DO UPDATE
+              SET email = EXCLUDED.email,
+                  display_name = EXCLUDED.display_name,
+                  updated_at = EXCLUDED.updated_at
             RETURNING display_name, updated_at
           `;
-          return jsonResponse({ profile: rows[0] ?? null }, 200, origin);
+          return jsonResponse({ profile: rows[0] || null }, 200, origin);
         }
       }
 
-      // Secondary email (not implemented)
       if (path === "/secondary-email/send" || path === "/secondary-email/confirm") {
-        return jsonResponse({ error: "Not implemented" }, 501, origin);
+        return jsonResponse({ error: "Secondary email management is not implemented yet" }, 501, origin);
       }
 
-      // GET /admin/me
-      if (path === "/admin/me") {
-        const rows = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
-        return jsonResponse({ admin: rows.length > 0 }, 200, origin);
+      if (path === "/admin/me" && req.method === "GET") {
+        return jsonResponse({ admin: await isAdmin(user, env) }, 200, origin);
       }
 
-      // DELETE /users/me
       if (path === "/users/me" && req.method === "DELETE") {
         await sql`DELETE FROM app_data WHERE user_id = ${user.id}`;
         await sql`DELETE FROM profiles WHERE user_id = ${user.id}`;
         await sql`DELETE FROM admin_users WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM user_preferences WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM user_mfa WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM user_auth WHERE id = ${user.id}`;
+        await sql`DELETE FROM neon_auth."user" WHERE id::text = ${user.id}`;
         return jsonResponse({ ok: true }, 200, origin);
       }
 
-      // GET/DELETE /admin/users
       if (path === "/admin/users") {
-        const adminCheck = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
-        if (adminCheck.length === 0) return jsonResponse({ error: "Forbidden" }, 403, origin);
+        if (!await isAdmin(user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         if (req.method === "GET") {
-          const authUsers = await sql`
-            SELECT ua.id, ua.email, ua.created_at, up.user_name
-            FROM user_auth ua
-            LEFT JOIN user_preferences up ON ua.id = up.user_id
-            WHERE ua.email_confirmed_at IS NOT NULL
-            ORDER BY ua.created_at DESC
+          const users = await sql`
+            SELECT id::text AS id, email, name, "createdAt" AS created_at
+            FROM neon_auth."user"
+            ORDER BY "createdAt" DESC
           `;
-          return jsonResponse({ users: authUsers.map(u => ({ id: u.id, email: u.email, created_at: u.created_at, user_name: u.user_name })) }, 200, origin);
+          return jsonResponse({ users }, 200, origin);
         }
         return jsonResponse({ error: "Method not allowed" }, 405, origin);
       }
 
-      // DELETE /admin/users/:id
       const deleteUserMatch = path.match(/^\/admin\/users\/([a-zA-Z0-9-]+)$/);
       if (deleteUserMatch && req.method === "DELETE") {
-        const adminCheck = await sql`SELECT user_id FROM admin_users WHERE user_id = ${user.id}`;
-        if (adminCheck.length === 0) return jsonResponse({ error: "Forbidden" }, 403, origin);
+        if (!await isAdmin(user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         const targetId = deleteUserMatch[1];
         await sql`DELETE FROM app_data WHERE user_id = ${targetId}`;
         await sql`DELETE FROM profiles WHERE user_id = ${targetId}`;
         await sql`DELETE FROM admin_users WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM user_preferences WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM user_mfa WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM user_auth WHERE id = ${targetId}`;
+        await sql`DELETE FROM neon_auth."user" WHERE id::text = ${targetId}`;
         return jsonResponse({ ok: true }, 200, origin);
       }
 
       return jsonResponse({ error: "Not found" }, 404, origin);
-    } catch (e) {
-      console.error("Unhandled error:", e);
-      return jsonResponse({ error: "Internal server error", detail: e?.message ?? String(e) }, 500, origin);
+    } catch (error) {
+      console.error("Unhandled Worker error:", error);
+      return jsonResponse({ error: "Internal server error", detail: error?.message || String(error) }, 500, origin);
     }
   },
 };
