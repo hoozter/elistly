@@ -801,13 +801,16 @@ const App = {
         const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
         if (error) {
-          var isEmailNotConfirmed = (error.message || '').toLowerCase().indexOf('email not confirmed') !== -1;
+          var lowerMessage = (error.message || '').toLowerCase();
+          var isEmailNotConfirmed = lowerMessage.indexOf('email not confirmed') !== -1 || lowerMessage.indexOf('email not verified') !== -1 || lowerMessage.indexOf('verify') !== -1;
           if (errEl) { errEl.textContent = error.message || 'Sign in failed'; errEl.style.display = 'block'; }
           if (isEmailNotConfirmed && resendBlock) {
             resendBlock.style.display = 'block';
             resendBlock.dataset.email = email;
             var resendBtn = document.getElementById('authSignInResendBtn');
             if (resendBtn) resendBtn.onclick = function () { App.handleResendConfirmation(email); };
+            this.closeModal('authSignInModal');
+            this.showEmailConfirmationModal(email, false);
           }
           return;
         }
@@ -822,17 +825,17 @@ const App = {
 
       async handleResendConfirmation(email) {
         if (!supabaseClient || !email) return;
-        var btn = document.getElementById('authSignInResendBtn');
+        var btn = document.getElementById('authSignInResendBtn') || document.getElementById('authVerifyEmailResendBtn');
         if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-        var errEl = document.getElementById('authSignInError');
+        var errEl = document.getElementById('authSignInError') || document.getElementById('authVerifyEmailError');
         if (errEl) errEl.style.display = 'none';
         var res = await supabaseClient.auth.resend({ type: 'signup', email: email });
-        if (btn) { btn.disabled = false; btn.textContent = 'Resend confirmation email'; }
+        if (btn) { btn.disabled = false; btn.textContent = btn.id === 'authVerifyEmailResendBtn' ? 'Resend code' : 'Resend confirmation email'; }
         if (res.error) {
           if (errEl) { errEl.textContent = res.error.message || 'Could not resend email'; errEl.style.display = 'block'; }
           return;
         }
-        this.showNotification('Confirmation email sent. Check your inbox.', 'success');
+        this.showNotification('Verification code sent. Check your inbox.', 'success');
       },
 
       async handleSignUp(username, email, password, confirmPassword) {
@@ -867,25 +870,66 @@ const App = {
           window.location.reload();
           return;
         }
+        const safeEmail = (email || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
         const html = `
 <div class="modal auth-modal inline-flex-display" id="authConfirmEmailModal" data-persistent>
   <div class="auth-modal-card">
     <div class="auth-modal-brand">
       <span class="material-icons auth-modal-icon">mark_email_read</span>
-      <h2 class="auth-modal-title">Check your email</h2>
-      <p class="auth-modal-tagline">We sent a confirmation link to <strong>${(email || '').replace(/</g, '&lt;')}</strong></p>
+      <h2 class="auth-modal-title">Verify your email</h2>
+      <p class="auth-modal-tagline">Enter the verification code sent to <strong>${safeEmail}</strong></p>
     </div>
-    <div class="auth-confirm-body">
-      <p>Click the link in that email to confirm your account. Then you can sign in below.</p>
-      <p class="auth-confirm-note">If you don't see it, check your spam folder.</p>
-      <button type="button" class="btn btn-primary auth-submit" onclick="App.closeModal('authConfirmEmailModal'); App.showSignInModal();">Go to sign in</button>
-    </div>
+    <form id="authVerifyEmailForm" class="auth-form">
+      <div class="form-group">
+        <label for="authVerifyEmailCode">Verification code</label>
+        <input type="text" id="authVerifyEmailCode" class="auth-input" required placeholder="123456" inputmode="numeric" autocomplete="one-time-code">
+      </div>
+      <div id="authVerifyEmailError" class="auth-error hidden"></div>
+      <button type="submit" class="btn btn-primary auth-submit" id="authVerifyEmailBtn">Verify email</button>
+      <p class="auth-modal-footer">Didn't get it? <button type="button" class="btn-link" id="authVerifyEmailResendBtn">Resend code</button></p>
+      <p class="auth-modal-footer"><button type="button" class="btn-link" onclick="App.closeModal('authConfirmEmailModal'); App.showSignInModal();">Back to sign in</button></p>
+    </form>
   </div>
 </div>`;
         const div = document.createElement('div');
         div.innerHTML = html.trim();
         document.body.appendChild(div.firstElementChild);
+        var form = document.getElementById('authVerifyEmailForm');
+        if (form) {
+          form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            App.handleVerifyEmailCode(email, document.getElementById('authVerifyEmailCode').value);
+          });
+        }
+        var resendBtn = document.getElementById('authVerifyEmailResendBtn');
+        if (resendBtn) resendBtn.onclick = function () { App.handleResendConfirmation(email); };
         this.showModal('authConfirmEmailModal');
+      },
+
+      async handleVerifyEmailCode(email, code) {
+        if (!supabaseClient) return;
+        const errEl = document.getElementById('authVerifyEmailError');
+        const btn = document.getElementById('authVerifyEmailBtn');
+        const cleanCode = (code || '').trim();
+        if (errEl) errEl.style.display = 'none';
+        if (!cleanCode) {
+          if (errEl) { errEl.textContent = 'Enter the verification code from your email.'; errEl.style.display = 'block'; }
+          return;
+        }
+        if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
+        const { data, error } = await supabaseClient.auth.verifyOtp({ email, token: cleanCode, type: 'signup' });
+        if (btn) { btn.disabled = false; btn.textContent = 'Verify email'; }
+        if (error) {
+          if (errEl) { errEl.textContent = error.message || 'Invalid verification code'; errEl.style.display = 'block'; }
+          return;
+        }
+        this.closeModal('authConfirmEmailModal');
+        if (data && data.session) {
+          window.location.reload();
+          return;
+        }
+        this.showNotification('Email verified. Please sign in.', 'success');
+        this.showSignInModal();
       },
 
       async getDisplayName(userId) {
