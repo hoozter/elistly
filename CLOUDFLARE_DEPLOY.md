@@ -33,8 +33,9 @@ Connect the same GitHub repo to a Cloudflare Worker project, or deploy manually 
 Build/deploy settings:
 
 - Root directory: `worker`
-- Build command: `npm install`
-- Deploy command: `npx wrangler deploy`
+- Build command: leave empty, or `npm install`
+- Deploy command: `cd worker && npm ci && npx wrangler deploy` if the Cloudflare project root is the repo root.
+- Deploy command: `npm ci && npx wrangler deploy` if the Cloudflare project root is already `worker`.
 
 Worker secrets:
 

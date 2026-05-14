@@ -82,7 +82,7 @@ if [[ -n "${ELISTLY_ADMIN_EMAILS:-}" ]]; then
 fi
 
 echo "Deploying Worker..."
-(cd "$WORKER_DIR" && npx wrangler deploy)
+(cd "$WORKER_DIR" && npm ci && npx wrangler deploy)
 
 PAGES_PROJECT="$(detect_pages_project)"
 echo "Setting Pages environment values for $PAGES_PROJECT..."
