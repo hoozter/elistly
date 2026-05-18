@@ -1,387 +1,214 @@
-# Elistly – Full documentation
+# Elistly – Full Documentation
 
-**Modular inventory. Endlessly flexible.**
+Elistly is a modular inventory app for tracking anything: devices, books, people, locations, equipment, and other structured lists. You define categories, entity types, custom fields, and item relationships, then use the app from the browser with account-backed sync.
 
-This is the complete reference for Elistly: concepts, features, deployment, and project layout. For a short “what is this and how do I run it?” see [README.md](README.md).
-
----
-
-## Table of contents
+## Table Of Contents
 
 1. [Concepts](#1-concepts)
-2. [Getting started](#2-getting-started)
-3. [Dashboard and views](#3-dashboard-and-views)
-4. [Search and navigation](#4-search-and-navigation)
-5. [Entity types and fields](#5-entity-types-and-fields)
+2. [Getting Started](#2-getting-started)
+3. [Dashboard And Views](#3-dashboard-and-views)
+4. [Search And Navigation](#4-search-and-navigation)
+5. [Entity Types And Fields](#5-entity-types-and-fields)
 6. [Categories](#6-categories)
-7. [Data: export, import, presets, reset](#7-data-export-import-presets-reset)
-8. [Account and Supabase](#8-account-and-supabase)
-9. [Admin (optional)](#9-admin-optional)
-10. [Appearance and accessibility](#10-appearance-and-accessibility)
+7. [Data Management](#7-data-management)
+8. [Account And Sync](#8-account-and-sync)
+9. [Admin](#9-admin)
+10. [Appearance And Accessibility](#10-appearance-and-accessibility)
 11. [Mobile](#11-mobile)
 12. [Deployment](#12-deployment)
-13. [Project structure](#13-project-structure)
-14. [In-app help and changelog](#14-in-app-help-and-changelog)
-
----
+13. [Project Structure](#13-project-structure)
+14. [Help And Changelog](#14-help-and-changelog)
 
 ## 1. Concepts
 
 ### Categories
 
-**Categories** are the top-level groups in the sidebar (e.g. Books, People, Devices). Each has a label and an icon. They define how you navigate: clicking a category shows all entities that belong to it. Category order is drag-sortable in Settings → Data → Manage categories.
+Categories are top-level groups such as Books, Devices, People, Properties, or Equipment. They appear in the sidebar and dashboard.
 
-### Entity types
+### Entity Types
 
-An **entity type** is the “shape” of one kind of item. It defines:
-
-- **Label** (e.g. “Book”, “Person”)
-- **Category** it belongs to
-- **Fields** (name, title, author, due date, dropdown, checkbox, etc.)
-- **Associations** (e.g. Book → Borrower)
-- Optional **name generation** (auto-build a display name from fields)
-- Which fields are **Visible in Card** (what shows on dashboard/category cards)
-
-You can have several entity types in one category (e.g. Book and Magazine under “Library”).
+Entity types define the schema for items in a category. For example, a Book type might include Author, ISBN, Purchase date, and Status fields.
 
 ### Entities
 
-**Entities** are the actual items: one record per “row” (e.g. one book, one person). Each entity has an id, a type, and values for that type’s fields and associations. The **display name** of an entity is either a manual name, an auto-generated name (if name generation is on), or a fallback; this is what search matches and what appears on cards.
+Entities are the actual records you create. Each entity belongs to a category and uses one entity type.
 
-### Data storage
+### Data Storage
 
-Elistly **requires an account**. You must configure Supabase (see Quick install in the README). Without config, the app shows a “Setup required” message and does not run.
+Elistly requires an account and configured backend URLs. Authentication is handled by Neon Auth, app data is stored in Neon Postgres, and browser database access goes through the Cloudflare Worker API. The browser never receives the database connection string.
 
-When you sign in, your data is stored in the **`app_data`** table in your Supabase project, keyed by user id. The app reads and writes this row; when you’re logged in, it syncs with the database. It is designed to work offline (e.g. as an installable web app on Android) and to sync when the device is back online. Row Level Security ensures each user only sees their own row.
+App data is stored in the `app_data` table keyed by Neon Auth user id. Profile display names are stored in `profiles`, and admin membership is stored in `admin_users`.
 
----
+## 2. Getting Started
 
-## 2. Getting started
+### First Run
 
-### First run
+1. Configure `config.js` with `ELISTLY_API_URL` and `NEON_AUTH_URL`.
+2. Run `neon/schema.sql` against your Neon database.
+3. Deploy the Worker with the required Neon secrets.
+4. Open `index.html`, click **Start using Elistly**, and sign in.
+5. Choose a preset or start blank.
 
-On first run (no saved data), the app shows an **onboarding** modal: choose a preset (Blank, Library, IT, Staff, Property). Each preset adds categories and entity types; Blank starts empty. You can remove or edit anything later.
+If config is missing, the app shows **Setup required** instead of loading data.
 
 ### Presets
 
-- **Blank** — No categories or entity types.
-- **Library** — Categories and types for books, borrowers, lending.
-- **IT** — Devices, people, typical IT asset fields.
-- **Staff** — Teams and people.
-- **Property** — Properties and related types.
+Built-in presets include Blank, Library, IT, Staff, and Property. Presets create useful starter categories, entity types, and optional sample entities.
 
-You can **add** another preset later without wiping data: Settings → Data → Add preset. Your existing categories and entity types are kept; the preset’s are merged in.
+### Sample Data
 
-### Sample data
+Sample data is optional and helps you test views, fields, and dashboard behavior before entering real records.
 
-After you choose a non-blank preset, the app may offer to **load sample data** (from `sample-data.js`). This adds example entities so you can see the preset in action. You can delete or edit them like any other data.
+### Clearing Local Data
 
-### Clearing local data
+The app caches account data locally for offline-friendly behavior. Resetting data from Profile clears remote app data and local cache for the signed-in account.
 
-The app no longer ships a separate `refresh.html` utility page. To clear local data, use **Profile → Reset data** for account-backed data or clear browser storage manually during development.
+## 3. Dashboard And Views
 
----
+### View Modes
 
-## 3. Dashboard and views
+The dashboard supports card, list, and gallery-style views depending on your settings and data.
 
-### View modes
+### Group By Category
 
-Settings → Dashboard Layout → **View mode**:
+Items are grouped by category in the sidebar and dashboard. Category cards can show counts, icons, and selected item details.
 
-- **Category Cards** — One card per category; inside each card, item cards (or a list of items). Best for grouped inventory (e.g. Books, People).
-- **List** — All items in rows, grouped by first letter (A–Z). Best for long lists you scan by name.
-- **Gallery** — Same item cards in a grid. With **Group by category** on, one section per category; with it off, one A–Z grid.
+### Due And Overdue
 
-### Group by category
+If you add due-date fields, Elistly can show due and overdue records as a focused view.
 
-For List and Gallery only. When on, items are grouped by category. When off (List), you get a single A–Z list; when off (Gallery), a single grid. For Category Cards view, grouping is always by category (the option is disabled).
-
-### Items per category
-
-How many items to show per category on the dashboard. One control: a slider (0–100) plus number field. **0 = show all** (default); 1–100 limits how many items per category. Does not apply to the single A–Z List view.
-
-### Due & overdue
-
-If any entity type has a **date** field whose **name** contains “due” (e.g. “Due date”), a **Due & overdue** link appears in the sidebar. It shows:
-
-- **Overdue** — Items whose due date is before today.
-- **Due in the next 7 days** — Due today or in the next week.
-
-Items are sorted by due date. The due field is detected by type (date) and label/name; you can add such a field in Manage entity types.
-
----
-
-## 4. Search and navigation
+## 4. Search And Navigation
 
 ### Search
 
-The header search box matches the **display name** of entities (the title shown on cards). It does not search inside every field. Typing shows a results list; clearing the box returns you to the dashboard. On mobile, tap the search icon to open the search bar.
+Use the header search to find entities by name and field content.
 
-### URL and routing
+### URL And Routing
 
-The app uses the URL for deep-linking and back/forward:
+The app uses lightweight client-side routing for dashboard, category, settings, admin, and modal states.
 
-- `?view=dashboard` — Main dashboard.
-- `?view=overdue` — Due & overdue (if available).
-- `?category=<id>` — Category view (same as clicking a category).
-- `?entityType=<id>&entityId=<id>` — Opens the entity form for that item.
+## 5. Entity Types And Fields
 
-You can bookmark or share these URLs. The sidebar and in-app navigation update the URL so the back button works as expected.
+### Managing Entity Types
 
----
+Entity types can be created, edited, restored from defaults, and assigned to categories.
 
-## 5. Entity types and fields
+### Field Types
 
-### Managing entity types
-
-Settings → Data → **Entity types**. From there you can add, edit, reorder, and delete entity types. Each type has:
-
-- Label, icon, category
-- Fields (see below)
-- Associations (links to other entity types)
-- Name generation (optional)
-- Per-field **Visible in Card**
-
-### Field types
-
-| Type        | Description |
-|------------|-------------|
-| Text       | Single-line text. |
-| Number     | Numeric value. |
-| Textarea   | Multi-line text. |
-| Date       | Date picker. Use a name containing “due” for Due & overdue. |
-| Dropdown   | Single choice from options you define (label + value). |
-| Checkbox   | Boolean (yes/no). |
-| QR Code    | Stores a value; can show a QR representation. |
-| Association| Link to another entity type (e.g. Book → Borrower). You choose the target type and how the relation is shown. |
-
-Fields can be required and can be marked **Part of name** when name generation is enabled (they are used in the auto-generated name).
+Supported fields include text, number, date, dropdown, checkbox, URL/link, QR-related fields, and associations to other entities.
 
 ### Associations
 
-An **association** field links an entity to another entity (e.g. “Lent to” → Person). You pick the target entity type. When editing an entity, you select from existing entities of that type. The UI shows the target’s display name.
+Associations let one item reference another, such as a device assigned to a person or a book stored at a location.
 
-### Name generation
+### Name Generation
 
-For an entity type you can enable **Generate name from fields**. You then define:
+Entity names can be generated from selected fields so records remain consistent and scannable.
 
-- **Components order** — A sequence of fields and separators (e.g. First name + space + Last name).
-- **Prefix** / **Suffix** — Optional; suffix can be numbers (1, 2, 3…) or letters (a, b, c…).
-- **Use auto-generated name as title** — If on, that name is the entity’s display name everywhere (cards, search, links).
+### Visible In Card
 
-If you turn this off or edit components, existing entities keep their last generated or manual name until you save them again.
-
-### Visible in Card
-
-Per field, **Visible in Card** controls whether that field appears on the small cards in the dashboard and category views. Only fields with this on are shown on cards (plus the item’s title/name).
-
----
+Fields marked as visible in cards appear in dashboard/category cards for quick scanning.
 
 ## 6. Categories
 
-### Managing categories
+Categories organize records and control where entity types can be used. Category order can be customized from settings.
 
-Settings → Data → **Categories**. Add, edit, or delete categories. Each has a label and an icon (from the same icon set as entity types). The order in this list is the order in the sidebar.
+## 7. Data Management
 
-### Category order
+### Export
 
-In the category manager, you can **drag** categories to reorder. That order is used in the sidebar and on the dashboard (for Category Cards and for grouped List/Gallery).
-
----
-
-## 7. Data: export, import, presets, reset
-
-### Export (inventory)
-
-Settings → Data → **Export**. Choose:
-
-- Which **entity types** to export (and optionally which fields and dropdown options).
-- Which **categories**.
-- Which **entities** (actual items).
-- Whether to include **settings**.
-
-A JSON file is downloaded. This is **inventory-only** (categories, entity types, entities, optional settings). Use it as a backup or to move data to another browser/account. For a **full backup** including user info and theme, use **Profile → Export all data** (see [Account and Supabase](#8-account-and-supabase)).
+Inventory export downloads categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** includes account metadata, theme, and app data.
 
 ### Import
 
-Settings → Data → **Import**. Select a JSON file (from a previous export or compatible structure). The app shows a **preview** and lets you choose what to import (types, categories, entities). Existing data is merged; you can uncheck items to avoid overwriting. After import, the app reloads the view.
+Import JSON from a previous export to restore or merge inventory structures and records.
 
-### Add preset
+### Add Preset
 
-Settings → Data → **Add preset**. Adds the categories and entity types from a chosen template (Library, IT, Staff, Property) **without** deleting your current data. Your existing categories and entity types are kept; the preset’s are added. Useful to add, for example, Library on top of an existing setup.
+You can add a preset after first setup to merge additional categories, entity types, and sample records.
 
-### Reset data (Profile)
+### Reset Data
 
-**Profile → Reset data**. This **permanently deletes all your app data**—categories, entity types, entities, and settings—from this device and from your account in the database. Your **account** remains; you can sign in again and start fresh. The app asks you to type **RESET** to confirm. After reset, the page reloads and you’ll see the first-run welcome screen again. This cannot be undone.
+Profile → **Reset data** clears the signed-in user’s app data in Neon Postgres and local cache. The account remains.
 
-### Restore defaults
+## 8. Account And Sync
 
-After an **app version upgrade**, you may be prompted to **restore default entity types** when the app ships new or updated types (e.g. new fields). Restore defaults lets you bring back the built-in structure for selected types and optionally restore fields/options. Your own **entities** and **categories** are not removed; only the type definitions are updated to match the app’s defaults.
+Elistly always runs with an account.
 
----
+- **Authentication** uses Neon Auth through `NEON_AUTH_URL`.
+- **App data** is read and written through the Cloudflare Worker at `ELISTLY_API_URL`.
+- **Storage** uses Neon Postgres tables from `neon/schema.sql`.
+- **Local cache** keeps the app responsive and supports offline-friendly usage.
 
-## 8. Account and Supabase
+Opening the app without a session shows the sign-in screen. Signing out clears the local auth token and returns to sign-in.
 
-### Account required
+Password reset, secondary email verification, and MFA UI are present but depend on backend support. The Worker currently returns explicit “not implemented” responses for unsupported flows.
 
-Elistly always runs with an account. You must configure a backend provider in `config.js` with `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, and `ELISTLY_PUBLIC_KEY`. Legacy `SUPABASE_URL` and `SUPABASE_ANON_KEY` are still supported during migration. If config is missing, the app shows a “Setup required” message and does not load data.
+## 9. Admin
 
-### What Supabase does
+Admin features require the Worker and `admin_users` table.
 
-- Sign-in, sign-up, and password reset use Supabase Auth.
-- App data is stored in the `app_data` table, one row per user (`user_id` + `payload` JSON). When you’re signed in, the app reads and writes this row; it is designed to work offline and sync when the device is online again.
-- Row Level Security ensures each user only read/write their own row.
+- The first Neon Auth user becomes admin automatically when no active admins exist.
+- `ELISTLY_ADMIN_EMAILS` can be set on the Worker as a recovery allowlist.
+- The Admin page lists Neon Auth users and can delete an account plus its app/profile/admin rows.
 
-### Sign in / sign out
+Worker secrets:
 
-With Supabase configured, opening the app shows the sign-in screen if there is no session. After sign-in, the **profile** icon in the header opens a dropdown: **Profile**, **Help**, **Sign out**. Sign out clears the session and reloads; you’ll see the sign-in screen again.
+- `NEON_DATABASE_URL`
+- `NEON_AUTH_URL`
+- `NEON_AUTH_JWKS_URL`
+- Optional: `ELISTLY_ADMIN_EMAILS`
 
-### Profile
+## 10. Appearance And Accessibility
 
-Profile (header → profile icon → Profile) opens the **profile modal**:
-
-- **Display name** (if supported by your Supabase setup).
-- **Emails** — Primary and secondary emails; add, verify, remove. You can change which email is primary.
-- **Two-factor authentication (2FA)** — Enable or disable TOTP. When enabled, you’ll enter a code from an authenticator app after signing in.
-- **Data & account**:
-  - **Export all data** — Downloads a single JSON file with **everything**: user id/email/metadata, theme, and full app data (categories, entity types, entities, settings). Use for a complete backup or portability. This is separate from Settings → Export, which is inventory-only.
-  - **Reset data** — Permanently clears all app data (categories, entity types, entities, settings) from the database and this device. You type **RESET** to confirm. Your account stays; you can sign in again and start from scratch.
-  - **Delete account** — Permanently deletes your account and all your data. You type **DELETE** to confirm. This uses the API (Worker); if `ELISTLY_API_URL` is not set in config (or in Cloudflare Pages env), the app will tell you. After deletion you are signed out and cannot use that account again.
-
-### 2FA / TOTP
-
-In Profile you can enable **TOTP** (e.g. Google Authenticator). The app shows a QR code and secret. After you add it to your app, you’ll be asked for the code on each sign-in. Disabling 2FA is done from the same profile screen (you may need to confirm with a code).
-
----
-
-## 9. Admin (optional)
-
-Admin features let designated users list and delete accounts. They require the **API (Cloudflare Worker)** and the **`admin_users`** table in Supabase.
-
-### How it works
-
-- The Worker exposes: **`GET /admin/me`** (returns `{ admin: true }` if the current user is in `admin_users`), **`GET /admin/users`** (list all auth users, admin only), **`DELETE /admin/users/:id`** (delete a user and their app data, admin only), and **`DELETE /users/me`** (delete your own account).
-- The app calls **`/admin/me`** on load (when signed in and when `ELISTLY_API_URL` is set). If the response says `admin: true`, the profile dropdown shows an **Admin** link.
-- Clicking **Admin** opens the **Admin page**: a table of accounts (email, user id, created) with a **Delete** button per row. Deleting an account removes the user from Supabase Auth and their row in `app_data`; it cannot be undone.
-
-### Adding an admin
-
-1. Run the schema so the **`admin_users`** table exists (it’s in **`supabase/schema.sql`**).
-2. In the **Supabase SQL Editor**, run:
-   ```sql
-   insert into public.admin_users (user_id) values ('your-auth-user-uuid');
-   ```
-   Replace `'your-auth-user-uuid'` with the user’s **id** from Supabase → **Authentication** → **Users** (the UUID, not the email).
-3. Ensure the app has **`ELISTLY_API_URL`** set in config (your Worker URL). On Cloudflare Pages, add env var **`ELISTLY_API_URL`**; the build script writes it into `config.js` as `window.ELISTLY_API_URL`.
-4. The user signs in (or refreshes). The app fetches `/admin/me`; if their id is in `admin_users`, they see **Admin** in the profile dropdown and can open the Admin page.
-
-### Worker environment
-
-The Worker needs **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, **`ELISTLY_PUBLIC_KEY`** (to verify user JWTs), and **`ELISTLY_SERVICE_ROLE_KEY`**. Legacy `SUPABASE_*` names are still supported. See **`CLOUDFLARE_DEPLOY.md`** for full deploy steps.
-
----
-
-## 10. Appearance and accessibility
-
-### Theme and colors
-
-Settings → **Appearance**:
-
-- **Theme** — Light, Dark, or (if available) follow system.
-- **Accent color** — Used for links, buttons, highlights. Custom picker.
-- **Header color** — Top bar background; text color is chosen for contrast.
-- **Logo style** — Color, White, or Black (for the header logo).
-
-### Text size
-
-Settings → Appearance → **Text size**: smaller A to larger A. Affects base font size across the app (labels, body text, controls).
-
-### In-app Help
-
-Settings → About → **Help**, or (when signed in) profile menu → **Help**. Opens the FAQ modal with sections on getting started, dashboard, search, entity types, data, account, mobile, and troubleshooting.
-
----
+Elistly supports light/dark themes, accent color, header color, logo style, and text size preferences. UI controls use semantic labels where possible and Material Icons for visual affordances.
 
 ## 11. Mobile
 
-The app is **responsive**:
-
-- **Sidebar** becomes a drawer: tap the **menu** (hamburger) icon to open; tap the overlay or a link to close.
-- **Search** — On small screens, tap the search icon to show the search bar.
-- **Modals** — Full-width friendly; **close** button (X) in the top-right is touch-sized on mobile. Tapping outside the modal also closes it.
-- **Touch targets** — Buttons and controls are sized for touch (e.g. 44px minimum where appropriate).
-- **Settings and forms** — Layout stacks and scrolls; nested buttons and inputs are enlarged in modals so they stay usable.
-
----
+Elistly is designed as an installable browser app. The service worker and manifest support PWA-style use where browser support allows it.
 
 ## 12. Deployment
 
-### Local / static
+### Local / Static Frontend
 
-- The app must have backend config set (see README). Run it by opening **index.html** (or serving the folder). Copy `config.example.js` to `config.js` and set `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, and `ELISTLY_PUBLIC_KEY`.
+Copy `config.example.js` to `config.js`, set `ELISTLY_API_URL` and `NEON_AUTH_URL`, then serve or open the app.
 
-### Supabase backend
+### Neon
 
-1. Create a Supabase project.
-2. In the SQL Editor, run the contents of **`supabase/schema.sql`**. This creates `app_data`, `profiles`, and `admin_users`, plus the RLS policies, and is safe to re-run.
-3. (Optional) Configure Auth: email confirmation, MFA, etc. See Supabase docs.
-4. In the app, set `config.js` (or inject config at build time) with Project URL and anon key.
+Create a Neon project, enable Neon Auth, and run:
 
-See **`DEPLOY.md`** for a concise checklist.
+```bash
+psql "$NEON_DATABASE_URL" -f neon/schema.sql
+```
 
-### Cloudflare Pages (frontend)
+### Cloudflare Pages
 
-- Connect the repo to Cloudflare Pages. Build command: **`node scripts/write-config.js`**. Output directory: **`/`** (or your static output).
-- Set environment variables **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, and **`ELISTLY_PUBLIC_KEY`** so the build script can write `config.js` from env. Legacy `SUPABASE_*` names still work. No secrets in the repo.
+Use:
 
-### Cloudflare Worker (API)
+- Build command: `node scripts/write-config.js`
+- Build output directory: `/`
+- Environment variables: `ELISTLY_API_URL`, `NEON_AUTH_URL`
 
-- Used for **app data**, **profile data**, **delete account**, and **admin** (list/delete users). Put the Worker in **`worker/`**; connect the same repo to a Worker with root **`worker/`**, deploy command **`npx wrangler deploy`** (or **`cd worker && npx wrangler deploy`** if no root-directory option). Set **Variables and Secrets**: **`ELISTLY_BACKEND_PROVIDER`**, **`ELISTLY_BACKEND_URL`**, **`ELISTLY_PUBLIC_KEY`**, **`ELISTLY_SERVICE_ROLE_KEY`**. The app needs **`ELISTLY_API_URL`** in config (set in Pages as the env var **`ELISTLY_API_URL`**) for those features. See **`CLOUDFLARE_DEPLOY.md`** for the full flow and how to add an admin.
+### Cloudflare Worker
 
-### Supabase Edge Functions
+Deploy from `worker/` with Wrangler and set the Worker secrets listed in [Admin](#9-admin). See `CLOUDFLARE_DEPLOY.md` for the complete flow.
 
-- Optional. Deploy from CLI (e.g. `supabase functions deploy health`). Set secrets in the Supabase dashboard. Used for server-side logic; not required for the core app.
-
----
-
-## 13. Project structure
+## 13. Project Structure
 
 | Path | Purpose |
-|------|--------|
-| `index.html` | Landing page: hero, tagline, CTA to app, legal link. |
-| `app.html` | App shell: header, sidebar, main content, modals; loads app.js and setup/sample/faq scripts. |
-| `app.js` | Main application logic: data, UI, auth, export/import, entity types, categories. |
-| `styles.css` | All styles; theme variables, layout, responsive rules. |
-| `img/` | Logo variants (SVG/PNG), app screenshot (`elistly-app.png`) for landing page. |
-| `config.example.js` | Template for config; copy to `config.js` (gitignored) and set `ELISTLY_BACKEND_PROVIDER`, `ELISTLY_BACKEND_URL`, `ELISTLY_PUBLIC_KEY`, optional `ELISTLY_API_URL`. |
-| `config.js` | `window.ELISTLY_BACKEND_PROVIDER`, `window.ELISTLY_BACKEND_URL`, `window.ELISTLY_PUBLIC_KEY`, `window.ELISTLY_API_URL` (gitignored; created at build or by hand). |
-| `setup-blank.js`, `setup-library.js`, etc. | Starter presets; register in `window.ELISTLY_PRESETS`. |
-| `sample-data.js` | Optional sample entities per preset; used for “Load sample data?”. |
-| `faq.js` | In-app FAQ content (`window.ELISTLY_FAQ`); used by the Help modal. |
-| `version-history.js` | Changelog entries (`window.VERSION_CHANGES`); used by Changelog and What’s New. |
-| `scripts/write-config.js` | Build script: writes `config.js` from env vars (for example `ELISTLY_BACKEND_URL`, `ELISTLY_PUBLIC_KEY`). |
-| `scripts/check-no-inline-css.sh` | Guard script: fails if inline `style=` attributes are present in runtime HTML/JS files. |
-| `neon/schema.sql` | Neon-ready schema using `auth.user_id()` RLS for `app_data` and `profiles`. |
-| `supabase/schema.sql` | Tables `app_data`, `profiles`, and `admin_users`; RLS for `app_data` and `profiles`. Admins: add user id to `admin_users`. |
-| `supabase/functions/` | Optional Edge Functions (e.g. health). |
-| `worker/` | Cloudflare Worker for delete-account and admin API; `wrangler.toml`, `src/index.js`. |
+|---|---|
+| `index.html` | Landing page and app entry redirect |
+| `app.html` | Main app shell |
+| `app.js` | Main frontend application logic |
+| `lib/db.js` | Browser auth/session client for Neon Auth and Worker calls |
+| `config.example.js` | Public frontend config template |
+| `scripts/write-config.js` | Writes `config.js` from deployment environment variables |
+| `neon/schema.sql` | Neon Postgres schema for app data, profiles, and admins |
+| `worker/src/index.js` | Cloudflare Worker API for auth/session checks, data, profile, and admin routes |
+| `CLOUDFLARE_DEPLOY.md` | Cloudflare Pages + Worker deployment guide |
+| `DEPLOY.md` | Short deploy notes |
+| `NEON_MIGRATION.md` | Current Neon architecture/status notes |
 
-Developer rule: inline CSS is not allowed in `app.html`, `app.js`, or `index.html`. Keep styles consolidated in `styles.css` and run `scripts/check-no-inline-css.sh` to verify.
+## 14. Help And Changelog
 
----
-
-## 14. In-app help and changelog
-
-### Help (FAQ)
-
-- **Settings → About → Help**, or **Profile menu → Help** (when signed in).
-- Opens a modal with the full FAQ: getting started, dashboard, search, entity types, data, account, appearance, mobile, troubleshooting. Content is in **`faq.js`**.
-
-### Changelog
-
-- **Settings → About → View Changelog**.
-- Shows version history from **`version-history.js`** (newest first). Loaded on demand.
-
-### What’s New
-
-- After an **app version upgrade**, if the stored version is older than the current one, the app may show a **What’s New** modal with the latest changelog entry. You can dismiss it and open the full Changelog from Settings anytime.
+In-app help is powered by `faq.js`. Version history and the changelog are loaded from `version-history.js`.

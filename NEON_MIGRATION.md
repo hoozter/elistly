@@ -1,4 +1,4 @@
-# Neon Migration Notes
+# Neon Architecture Notes
 
 ## Current status
 
@@ -42,10 +42,8 @@ For recovery or explicit assignment, set `ELISTLY_ADMIN_EMAILS` on the Worker to
 
 When an authenticated user's email matches `ELISTLY_ADMIN_EMAILS`, the Worker also inserts that user's Neon Auth ID into `admin_users`, so the admin relationship is preserved by user ID after first login.
 
-## Remaining migration work
+## Remaining backend work
 
-- Deploy the updated Worker with the required secrets.
-- Deploy the updated frontend with `NEON_AUTH_URL` in generated `config.js`.
-- Create the new Neon Auth account using the email configured in `ELISTLY_ADMIN_EMAILS`.
 - Add production-grade password reset/email-change flows through Neon Auth.
 - Revisit MFA once Neon Auth MFA requirements are defined for this app.
+- Add automated smoke tests for Worker auth, app data, profile, and admin routes.

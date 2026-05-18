@@ -10,11 +10,11 @@
       items: [
         {
           q: 'What is Elistly?',
-          a: 'Elistly is a modular inventory app for tracking anything: books, devices, people, locations, and more. You define categories (e.g. Books, People) and entity types (e.g. Book, Person) with custom fields, then add and edit items. It works offline in your browser or syncs to the cloud when you use Supabase.'
+          a: 'Elistly is a modular inventory app for tracking anything: books, devices, people, locations, and more. You define categories (e.g. Books, People) and entity types (e.g. Book, Person) with custom fields, then add and edit items. It uses Neon Auth, Neon Postgres, and the Elistly Worker API for account-backed sync.'
         },
         {
           q: 'How do I start from scratch?',
-          a: 'Open the app. On first run you’ll see a welcome screen to pick a preset: Blank (empty), Library, IT assets, Staff, Property. You can change or remove anything later. To permanently delete all data (including from the database), use Settings → Data → Reset app and type DELETE to confirm.'
+          a: 'Open the app. On first run you’ll see a welcome screen to pick a preset: Blank (empty), Library, IT assets, Staff, Property. You can change or remove anything later. To clear app data for your account, use Profile → Reset data and type RESET to confirm.'
         },
         {
           q: 'What’s the difference between a category and an entity type?',
@@ -86,7 +86,7 @@
         },
         {
           q: 'What does “Reset app” do?',
-          a: 'Settings → Data → Reset app. It permanently deletes all your data—categories, entity types, entities, and settings—from this device and from your account in the database. It cannot be undone. The app asks you to type DELETE to confirm. After reset, you’ll see the welcome screen again.'
+          a: 'Profile → Reset data permanently clears your app data—categories, entity types, entities, and settings—from this device and from your account in the database. It cannot be undone. The app asks you to type RESET to confirm.'
         },
         {
           q: 'What is “Restore defaults”?',
@@ -95,11 +95,11 @@
       ]
     },
     {
-      section: 'Account and sync (Supabase)',
+      section: 'Account and sync',
       items: [
         {
           q: 'Do I need an account?',
-          a: 'Yes. Elistly requires an account. You configure Supabase (see README); without it, the app shows “Setup required” and won’t run. Once signed in, your data is stored in the database and the app syncs with it. It’s designed to work offline and sync when back online (e.g. installable web app on Android).'
+          a: 'Yes. Elistly requires an account. Configure Neon Auth, Neon Postgres, and the Worker API as described in the README; without those URLs, the app shows “Setup required” and won’t run. Once signed in, your data is stored in the database and syncs when online.'
         },
         {
           q: 'Can I use it offline or as an installable app?',
@@ -107,7 +107,7 @@
         },
         {
           q: 'How do I sign in or sign out?',
-          a: 'With Supabase configured, opening the app shows sign-in if you’re not logged in. Once signed in, use the profile icon in the header → Sign out. Profile opens your account settings (emails, 2FA).'
+          a: 'With Neon Auth configured, opening the app shows sign-in if you’re not logged in. Once signed in, use the profile icon in the header → Sign out. Profile opens your account settings.'
         },
         {
           q: 'Can I have multiple emails on my account?',
@@ -137,11 +137,11 @@
       items: [
         {
           q: 'I opened refresh.html. Is my data gone?',
-          a: 'No. refresh.html only clears the app’s local copy in this browser. Your data remains in the database. When you open the app again and sign in, it will load from the database. To permanently delete everything (including from the database), use Settings → Data → Reset app and type DELETE to confirm.'
+          a: 'No. Clearing local browser data only removes this device’s cache. Your data remains in the database. When you open the app again and sign in, it will load from the database. To clear remote app data too, use Profile → Reset data and type RESET to confirm.'
         },
         {
           q: 'Where is my data stored?',
-          a: 'In your Supabase project in the app_data table, keyed by your user id. Each user only sees their own data. The app syncs with the database when you’re signed in.'
+          a: 'In Neon Postgres in the app_data table, keyed by your Neon Auth user id. The Worker authorizes requests before reading or writing your data.'
         }
       ]
     }

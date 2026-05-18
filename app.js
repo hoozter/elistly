@@ -44,32 +44,32 @@ function getApiUrl() {
   return (window.ELISTLY_API_URL || '').trim();
 }
 
-function hasApiUrl() {
-  return !!getApiUrl();
-}
+// Elistly client is loaded from lib/db.js and backed by Neon Auth.
+var backendClient = null;
 
-// Supabase-compatible client is loaded from lib/db.js and backed by Neon Auth.
-var supabaseClient = null;
-
-async function ensureSupabaseClient() {
-  if (supabaseClient) return supabaseClient;
-  if (typeof window.supabase !== 'undefined') {
-    supabaseClient = window.supabase;
-    return supabaseClient;
+async function ensureBackendClient() {
+  if (backendClient) return backendClient;
+  if (!getApiUrl() || !window.NEON_AUTH_URL) {
+    console.error('Elistly: ELISTLY_API_URL and NEON_AUTH_URL must be configured.');
+    return null;
   }
-  console.error('Elistly: Supabase-compatible client not loaded. Ensure lib/db.js is included before app.js.');
+  if (typeof window.elistlyClient !== 'undefined') {
+    backendClient = window.elistlyClient;
+    return backendClient;
+  }
+  console.error('Elistly: Elistly client not loaded. Ensure lib/db.js is included before app.js.');
   return null;
 }
 
 async function getAuthSession() {
-  if (!supabaseClient) return null;
-  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (!backendClient) return null;
+  const { data: { session } } = await backendClient.auth.getSession();
   return session || null;
 }
 
 async function getAuthUser() {
-  if (!supabaseClient) return null;
-  const { data: { user } } = await supabaseClient.auth.getUser();
+  if (!backendClient) return null;
+  const { data: { user } } = await backendClient.auth.getUser();
   return user || null;
 }
 
@@ -158,7 +158,7 @@ const Storage = {
   },
 
   getAppData(options = {}) {
-    if (supabaseClient) return this.getAppDataAsync(options);
+    if (backendClient) return this.getAppDataAsync(options);
     try {
       const raw = localStorage.getItem(this.KEY);
       return Promise.resolve(raw ? JSON.parse(raw) : null);
@@ -168,7 +168,7 @@ const Storage = {
   },
 
   async getAppDataAsync(options = {}) {
-    if (supabaseClient) {
+    if (backendClient) {
       try {
         const onRemoteSync = typeof options.onRemoteSync === 'function' ? options.onRemoteSync : null;
         const user = await getAuthUser();
@@ -184,26 +184,12 @@ const Storage = {
           return this._cached;
         }
 
-        let remote = null;
-        if (hasApiUrl()) {
-          const res = await apiRequest('/app-data');
-          if (!res.ok) {
-            console.error('Storage.getAppData API error', res.data);
-            return null;
-          }
-          remote = res.data || {};
-        } else {
-          const { data, error } = await supabaseClient
-            .from('app_data')
-            .select('payload,updated_at')
-            .eq('user_id', user.id)
-            .maybeSingle();
-          if (error) {
-            console.error('Storage.getAppData backend error', error);
-            return null;
-          }
-          remote = data || {};
+        const res = await apiRequest('/app-data');
+        if (!res.ok) {
+          console.error('Storage.getAppData API error', res.data);
+          return null;
         }
+        const remote = res.data || {};
         this._cached = remote && remote.payload ? remote.payload : null;
         this._writeUserCache(user.id, this._cached || {}, remote && remote.updated_at ? remote.updated_at : '');
         return this._cached;
@@ -222,20 +208,9 @@ const Storage = {
 
   async syncRemoteInBackground(userId, cachedUpdatedAt, onRemoteSync) {
     try {
-      let data = null;
-      if (hasApiUrl()) {
-        const res = await apiRequest('/app-data');
-        if (!res.ok) return;
-        data = res.data || null;
-      } else {
-        const response = await supabaseClient
-          .from('app_data')
-          .select('payload,updated_at')
-          .eq('user_id', userId)
-          .maybeSingle();
-        if (response.error) return;
-        data = response.data || null;
-      }
+      const res = await apiRequest('/app-data');
+      if (!res.ok) return;
+      const data = res.data || null;
 
       const remoteUpdatedAt = data && data.updated_at ? String(data.updated_at) : '';
       if (cachedUpdatedAt && remoteUpdatedAt && cachedUpdatedAt === remoteUpdatedAt) return;
@@ -250,7 +225,7 @@ const Storage = {
   },
 
   setAppData(data) {
-    if (supabaseClient) return this.setAppDataAsync(data);
+    if (backendClient) return this.setAppDataAsync(data);
     try {
       localStorage.setItem(this.KEY, JSON.stringify(data));
     } catch (e) {
@@ -260,24 +235,14 @@ const Storage = {
   },
 
   async setAppDataAsync(data) {
-    if (supabaseClient) {
+    if (backendClient) {
       try {
         const user = await getAuthUser();
         if (!user) return;
         this._cached = data;
-        let row = null;
-        if (hasApiUrl()) {
-          const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
-          if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
-          row = res.data || {};
-        } else {
-          const response = await supabaseClient
-            .from('app_data')
-            .upsert({ user_id: user.id, payload: data }, { onConflict: 'user_id' })
-            .select('updated_at')
-            .maybeSingle();
-          row = response.data || null;
-        }
+        const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
+        if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
+        const row = res.data || {};
         const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
         this._writeUserCache(user.id, data, updatedAt);
       } catch (e) {
@@ -351,7 +316,7 @@ const App = {
       async init() {
         this._isReady = false;
         this._pendingRemoteData = null;
-        await ensureSupabaseClient();
+        await ensureBackendClient();
 
         this.data = {
           version: CURRENT_VERSION,
@@ -363,10 +328,10 @@ const App = {
           currentWorkspaceId: 'default'
         };
 
-        if (!supabaseClient) {
+        if (!backendClient) {
           const main = document.getElementById('mainContent');
           const hasConfigKeys = !!(getApiUrl() && window.NEON_AUTH_URL);
-          const hasClientShim = typeof window.supabase !== 'undefined';
+          const hasClientShim = typeof window.elistlyClient !== 'undefined';
           let setupHtml = `
                 <p class="setup-required-copy">Elistly requires an account, a database, and a configured backend provider.</p>
                 <ol class="setup-required-list">
@@ -379,7 +344,7 @@ const App = {
                 <p class="setup-required-note">See the README for full instructions.</p>`;
           if (hasConfigKeys && !hasClientShim) {
             setupHtml = `
-                <p class="setup-required-copy">Backend configuration was found, but the client shim did not load.</p>
+                <p class="setup-required-copy">Backend configuration was found, but the browser client did not load.</p>
                 <ol class="setup-required-list">
                   <li>Check your internet connection</li>
                   <li>Confirm <code>lib/db.js</code> is included before <code>app.js</code></li>
@@ -397,7 +362,7 @@ const App = {
           return;
         }
 
-        if (supabaseClient) {
+        if (backendClient) {
           const session = await getAuthSession();
           if (!session) {
             const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -774,14 +739,14 @@ const App = {
       },
 
       async handleForgotPassword(email) {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         const errEl = document.getElementById('authForgotError');
         const successEl = document.getElementById('authForgotSuccess');
         const btn = document.getElementById('authForgotBtn');
         if (errEl) errEl.style.display = 'none';
         if (successEl) successEl.style.display = 'none';
         if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/' });
+        const { error } = await backendClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/' });
         if (btn) { btn.disabled = false; btn.textContent = 'Send reset link'; }
         if (error) {
           if (errEl) { errEl.textContent = error.message || 'Something went wrong'; errEl.style.display = 'block'; }
@@ -791,14 +756,14 @@ const App = {
       },
 
       async handleSignIn(email, password) {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         const errEl = document.getElementById('authSignInError');
         const resendBlock = document.getElementById('authSignInResendBlock');
         const btn = document.getElementById('authSignInBtn');
         if (errEl) errEl.style.display = 'none';
         if (resendBlock) resendBlock.style.display = 'none';
         if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
-        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        const { error } = await backendClient.auth.signInWithPassword({ email, password });
         if (btn) { btn.disabled = false; btn.textContent = 'Sign in'; }
         if (error) {
           var lowerMessage = (error.message || '').toLowerCase();
@@ -824,12 +789,12 @@ const App = {
       },
 
       async handleResendConfirmation(email) {
-        if (!supabaseClient || !email) return;
+        if (!backendClient || !email) return;
         var btn = document.getElementById('authSignInResendBtn') || document.getElementById('authVerifyEmailResendBtn');
         if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
         var errEl = document.getElementById('authSignInError') || document.getElementById('authVerifyEmailError');
         if (errEl) errEl.style.display = 'none';
-        var res = await supabaseClient.auth.resend({ type: 'signup', email: email });
+        var res = await backendClient.auth.resend({ type: 'signup', email: email });
         if (btn) { btn.disabled = false; btn.textContent = btn.id === 'authVerifyEmailResendBtn' ? 'Resend code' : 'Resend confirmation email'; }
         if (res.error) {
           if (errEl) { errEl.textContent = res.error.message || 'Could not resend email'; errEl.style.display = 'block'; }
@@ -839,7 +804,7 @@ const App = {
       },
 
       async handleSignUp(username, email, password, confirmPassword) {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         if (password !== confirmPassword) {
           const errEl = document.getElementById('authSignUpError');
           if (errEl) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; }
@@ -849,7 +814,7 @@ const App = {
         const btn = document.getElementById('authSignUpBtn');
         if (errEl) errEl.style.display = 'none';
         if (btn) { btn.disabled = true; btn.textContent = 'Creating account…'; }
-        const { data, error } = await supabaseClient.auth.signUp({
+        const { data, error } = await backendClient.auth.signUp({
           email,
           password,
           options: { data: { user_name: (username && username.trim()) || email.split('@')[0] } }
@@ -907,7 +872,7 @@ const App = {
       },
 
       async handleVerifyEmailCode(email, code) {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         const errEl = document.getElementById('authVerifyEmailError');
         const btn = document.getElementById('authVerifyEmailBtn');
         const cleanCode = (code || '').trim();
@@ -917,7 +882,7 @@ const App = {
           return;
         }
         if (btn) { btn.disabled = true; btn.textContent = 'Verifying…'; }
-        const { data, error } = await supabaseClient.auth.verifyOtp({ email, token: cleanCode, type: 'signup' });
+        const { data, error } = await backendClient.auth.verifyOtp({ email, token: cleanCode, type: 'signup' });
         if (btn) { btn.disabled = false; btn.textContent = 'Verify email'; }
         if (error) {
           if (errEl) { errEl.textContent = error.message || 'Invalid verification code'; errEl.style.display = 'block'; }
@@ -933,15 +898,11 @@ const App = {
       },
 
       async getDisplayName(userId) {
-        if (!supabaseClient || !userId) return null;
+        if (!backendClient || !userId) return null;
         try {
-          if (hasApiUrl()) {
-            const res = await apiRequest('/profile');
-            const profile = res && res.data ? res.data.profile : null;
-            return (profile && profile.display_name && profile.display_name.trim()) ? profile.display_name.trim() : null;
-          }
-          const { data } = await supabaseClient.from('profiles').select('display_name').eq('user_id', userId).maybeSingle();
-          return (data && data.display_name && data.display_name.trim()) ? data.display_name.trim() : null;
+          const res = await apiRequest('/profile');
+          const profile = res && res.data ? res.data.profile : null;
+          return (profile && profile.display_name && profile.display_name.trim()) ? profile.display_name.trim() : null;
         } catch (_) {
           return null;
         }
@@ -1020,10 +981,10 @@ const App = {
       },
 
       async handleSignOut() {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         this.closeProfileDropdown();
         this.closeModal('settingsModal');
-        await supabaseClient.auth.signOut();
+        await backendClient.auth.signOut();
         Storage._cached = null;
         window.location.reload();
       },
@@ -2321,7 +2282,7 @@ const App = {
             </div>`;
           return;
         }
-        const { data: { session } } = await supabaseClient.auth.getSession();
+        const { data: { session } } = await backendClient.auth.getSession();
         const token = session && session.access_token;
         if (!token) {
           mainContent.innerHTML = `
@@ -2393,7 +2354,7 @@ const App = {
         if (!userId) return;
         const apiUrl = typeof window !== 'undefined' && window.ELISTLY_API_URL;
         if (!apiUrl || !apiUrl.trim()) return;
-        const { data: { session } } = await supabaseClient.auth.getSession();
+        const { data: { session } } = await backendClient.auth.getSession();
         const token = session && session.access_token;
         if (!token) return;
         this.showConfirmModal({
@@ -2951,12 +2912,12 @@ const App = {
       },
 
       async showProfileModal() {
-        if (!supabaseClient) return;
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!backendClient) return;
+        const { data: { user } } = await backendClient.auth.getUser();
         if (!user) return;
         let factors = { totp: [] };
         try {
-          const f = await supabaseClient.auth.mfa.listFactors();
+          const f = await backendClient.auth.mfa.listFactors();
           if (f.data) factors = f.data;
         } catch (_) {}
         const meta = user.user_metadata || {};
@@ -3122,7 +3083,7 @@ const App = {
           confirmNewEmailBtn.addEventListener('click', async () => {
             const email = newEmailInput.value.trim();
             if (!email) return;
-            const { error } = await supabaseClient.auth.updateUser({ email });
+            const { error } = await backendClient.auth.updateUser({ email });
             if (error) {
               this.showSnackbar(error.message || 'Failed to update email', true);
               return;
@@ -3186,7 +3147,7 @@ const App = {
               confirmLabel: 'Disable',
               confirmVariant: 'danger',
               onConfirm: async () => {
-                const { error } = await supabaseClient.auth.mfa.unenroll({ factorId: totpFactorId });
+                const { error } = await backendClient.auth.mfa.unenroll({ factorId: totpFactorId });
                 if (error) {
                   this.showSnackbar(error.message || 'Failed to disable', true);
                   return;
@@ -3205,21 +3166,10 @@ const App = {
         const trimmedName = userName.trim();
         const user = await getAuthUser();
         if (!user) return;
-        if (hasApiUrl()) {
-          const res = await apiRequest('/profile', { method: 'PUT', body: { display_name: trimmedName || null } });
-          if (!res.ok) {
-            this.showSnackbar((res.data && res.data.error) || 'Failed to save display name', true);
-            return;
-          }
-        } else {
-          const { error: profileError } = await supabaseClient.from('profiles').upsert(
-            { user_id: user.id, display_name: trimmedName || null, updated_at: new Date().toISOString() },
-            { onConflict: 'user_id' }
-          );
-          if (profileError) {
-            this.showSnackbar(profileError.message || 'Failed to save display name', true);
-            return;
-          }
+        const res = await apiRequest('/profile', { method: 'PUT', body: { display_name: trimmedName || null } });
+        if (!res.ok) {
+          this.showSnackbar((res.data && res.data.error) || 'Failed to save display name', true);
+          return;
         }
         this.showSnackbar('Profile saved.');
         this.closeModal('profileModal');
@@ -3236,7 +3186,7 @@ const App = {
           this.showSnackbar('Please enter a valid email address.', true);
           return;
         }
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const { data: { user } } = await backendClient.auth.getUser();
         if (!user) return;
         const primary = (user.email || '').toLowerCase();
         if (email.toLowerCase() === primary) {
@@ -3251,7 +3201,7 @@ const App = {
           return;
         }
         list.push({ email, verified: false });
-        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
+        const { error } = await backendClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
         if (error) {
           this.showSnackbar(error.message || 'Failed to add email', true);
           return;
@@ -3263,14 +3213,14 @@ const App = {
       },
 
       async removeSecondaryEmail(index) {
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const { data: { user } } = await backendClient.auth.getUser();
         if (!user) return;
         const meta = user.user_metadata || {};
         let list = Array.isArray(meta.secondary_emails) ? [...meta.secondary_emails] : [];
         if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
         if (index < 0 || index >= list.length) return;
         list.splice(index, 1);
-        const { error } = await supabaseClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
+        const { error } = await backendClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
         if (error) {
           this.showSnackbar(error.message || 'Failed to remove email', true);
           return;
@@ -3280,7 +3230,7 @@ const App = {
       },
 
       async setDefaultEmail(secondaryEmail) {
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const { data: { user } } = await backendClient.auth.getUser();
         if (!user) return;
         const primary = user.email || '';
         const meta = user.user_metadata || {};
@@ -3290,7 +3240,7 @@ const App = {
         if (idx < 0) return;
         const [removed] = list.splice(idx, 1);
         list.push({ email: primary, verified: false });
-        const { error } = await supabaseClient.auth.updateUser({
+        const { error } = await backendClient.auth.updateUser({
           email: removed.email,
           data: { user_metadata: { ...meta, secondary_emails: list } }
         });
@@ -3305,12 +3255,9 @@ const App = {
 
       async sendSecondaryVerification(email) {
         try {
-          const res = hasApiUrl()
-            ? await apiRequest('/secondary-email/send', { method: 'POST', body: { email } })
-            : await supabaseClient.functions.invoke('send-secondary-email-verification', { body: { email } });
-          const data = hasApiUrl() ? res.data : res.data;
-          const error = hasApiUrl() ? (!res.ok ? new Error((res.data && res.data.error) || 'Failed to send verification') : null) : res.error;
-          if (error) throw error;
+          const res = await apiRequest('/secondary-email/send', { method: 'POST', body: { email } });
+          const data = res.data;
+          if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to send verification');
           if (data && data.error) throw new Error(data.error);
           this.showSnackbar('Verification email sent. Check the inbox for that address.');
         } catch (e) {
@@ -3325,12 +3272,9 @@ const App = {
         url.searchParams.delete('token');
         window.history.replaceState({}, '', url.toString());
         try {
-          const res = hasApiUrl()
-            ? await apiRequest('/secondary-email/confirm', { method: 'POST', body: { token } })
-            : await supabaseClient.functions.invoke('confirm-secondary-email-verification', { body: { token } });
-          const data = hasApiUrl() ? res.data : res.data;
-          const error = hasApiUrl() ? (!res.ok ? new Error((res.data && res.data.error) || 'Verification failed') : null) : res.error;
-          if (error) throw error;
+          const res = await apiRequest('/secondary-email/confirm', { method: 'POST', body: { token } });
+          const data = res.data;
+          if (!res.ok) throw new Error((res.data && res.data.error) || 'Verification failed');
           if (data && data.error) throw new Error(data.error);
           this.showSnackbar('Secondary email verified. You can use it for account recovery.');
         } catch (e) {
@@ -3339,7 +3283,7 @@ const App = {
       },
 
       async showTwoFAModal() {
-        if (!supabaseClient) return;
+        if (!backendClient) return;
         const modalHtml = `
           <div class="modal" id="twoFAModal">
             <div class="modal-content profile-modal-content">
@@ -3430,18 +3374,18 @@ const App = {
           }
           const d = this._totpEnrollData;
           if (!d) return;
-          const { data: challengeData, error: challengeError } = await supabaseClient.auth.mfa.challenge({ factorId: d.factorId });
+          const { data: challengeData, error: challengeError } = await backendClient.auth.mfa.challenge({ factorId: d.factorId });
           if (challengeError) {
             if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
             return;
           }
-          const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: d.factorId, challengeId: challengeData.id, code });
+          const { error: verifyError } = await backendClient.auth.mfa.verify({ factorId: d.factorId, challengeId: challengeData.id, code });
           if (verifyError) {
             if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
             return;
           }
           this._totpEnrollData = null;
-          await supabaseClient.auth.refreshSession();
+          await backendClient.auth.refreshSession();
           this.closeModal('twoFAModal');
           this.showSnackbar('Two-factor authentication is on.');
           this.closeModal('profileModal');
@@ -3461,7 +3405,7 @@ const App = {
         if (codeInput) codeInput.value = '';
         if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
 
-        const { data, error } = await supabaseClient.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' });
+        const { data, error } = await backendClient.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' });
         if (loadingEl) loadingEl.style.display = 'none';
         if (error) {
           this.showSnackbar(error.message || 'Failed to set up authenticator', true);
@@ -3481,8 +3425,8 @@ const App = {
       },
 
       async requiresMFAVerification() {
-        if (!supabaseClient) return false;
-        const { data, error } = await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (!backendClient) return false;
+        const { data, error } = await backendClient.auth.mfa.getAuthenticatorAssuranceLevel();
         if (error || !data) return false;
         return data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
       },
@@ -3525,7 +3469,7 @@ const App = {
         const errEl = document.getElementById('mfaVerifyError');
 
         if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-          await supabaseClient.auth.signOut();
+          await backendClient.auth.signOut();
           this.closeModal('mfaVerifyModal');
           this.showSignInModal();
         });
@@ -3536,18 +3480,18 @@ const App = {
             if (errEl) { errEl.textContent = 'Enter the 6-digit code.'; errEl.style.display = 'block'; }
             return;
           }
-          const factors = await supabaseClient.auth.mfa.listFactors();
+          const factors = await backendClient.auth.mfa.listFactors();
           const totp = factors.data && factors.data.totp && factors.data.totp[0];
           if (!totp) {
             if (errEl) { errEl.textContent = 'No authenticator found.'; errEl.style.display = 'block'; }
             return;
           }
-          const { data: challengeData, error: challengeError } = await supabaseClient.auth.mfa.challenge({ factorId: totp.id });
+          const { data: challengeData, error: challengeError } = await backendClient.auth.mfa.challenge({ factorId: totp.id });
           if (challengeError) {
             if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
             return;
           }
-          const { error: verifyError } = await supabaseClient.auth.mfa.verify({ factorId: totp.id, challengeId: challengeData.id, code });
+          const { error: verifyError } = await backendClient.auth.mfa.verify({ factorId: totp.id, challengeId: challengeData.id, code });
           if (verifyError) {
             if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
             return;
@@ -6357,7 +6301,7 @@ const App = {
       },
       /** Export full account data: user info, app data, theme. For backup or portability. */
       async exportAllData() {
-        const { data: { user } } = await supabaseClient.auth.getUser();
+        const { data: { user } } = await backendClient.auth.getUser();
         const theme = typeof localStorage !== 'undefined' ? localStorage.getItem('theme') : null;
         const payload = {
           version: this.data.version,
@@ -6415,7 +6359,7 @@ const App = {
         const input = document.getElementById('resetDataConfirmInput');
         const btn = document.getElementById('resetDataConfirmBtn');
 	        const doReset = async () => {
-	          if (supabaseClient) {
+	          if (backendClient) {
 	            await Storage.setAppDataAsync({});
 	            Storage._cached = null;
 	          }
@@ -6488,7 +6432,7 @@ const App = {
               btn.disabled = false;
               return;
             }
-            await supabaseClient.auth.signOut();
+            await backendClient.auth.signOut();
             window.location.href = window.location.origin + (window.location.pathname || '/');
           } catch (e) {
             this.showSnackbar(e.message || 'Request failed', true);

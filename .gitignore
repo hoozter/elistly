@@ -7,9 +7,6 @@ config.js
 secrets/
 neon/neon-stuff.txt
 
-# Supabase local (if you use supabase CLI)
-.supabase/
-
 # OS and editor
 .DS_Store
 Thumbs.db

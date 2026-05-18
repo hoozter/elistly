@@ -1,9 +1,9 @@
 # Elistly – Roadmap
 
-**Last updated:** 2026-03-22
-**Status:** Active development. Neon migration in progress.
+**Last updated:** 2026-05-18
+**Status:** Active development. Neon Auth, Neon Postgres, and the Cloudflare Worker are the current backend.
 
-Elistly is a modular inventory app for tracking anything — devices, books, people, locations. Users define their own entity types and custom fields. Data is stored in the database (Supabase/Neon) and designed for offline-first PWA use.
+Elistly is a modular inventory app for tracking anything — devices, books, people, locations. Users define their own entity types and custom fields. Data is stored in Neon Postgres through the Worker API and designed for offline-friendly PWA use.
 
 ---
 
@@ -18,21 +18,20 @@ Elistly is a modular inventory app for tracking anything — devices, books, peo
 - Light/dark theme, accent colors, theming
 - Admin panel (list/delete users)
 - PWA manifest + offline support
-- Neon migration: Worker API surface extracted, schema ready
+- Neon Auth + Neon Postgres migration
 - Cloudflare Worker: /me, /app-data, /profile, admin routes
 
 ### In Progress 🔄
-- Neon backend migration (auth still Supabase-backed)
-- Neon schema ready (`neon/schema.sql`) but auth not yet migrated
+- Production hardening for account flows and Worker routes
 
 ---
 
-## P0 – Complete Neon Migration
+## P0 – Harden Current Backend
 
-- [ ] **Migrate auth to Neon** — Replace Supabase auth with JWT-based auth against Neon. Worker handles `/auth/login`, `/auth/register`, `/auth/refresh`.
-- [ ] **Remove Supabase dependency** — Once auth is migrated, Supabase config (`config.js`) becomes optional/removed
-- [ ] **Deploy on Cloudflare Workers** — Worker as the sole backend; frontend points to Worker URL only
-- [ ] **Test suite** — Smoke test all Worker routes after migration (auth, app-data, profile, admin)
+- [ ] **Password reset** — Add production-grade reset flow through Neon Auth.
+- [ ] **Email changes** — Implement primary/secondary email management against current backend support.
+- [ ] **MFA decision** — Revisit 2FA once Neon Auth MFA requirements are defined for this app.
+- [ ] **Test suite** — Smoke test all Worker routes (auth, app-data, profile, admin).
 
 ## P1 – Import / Export
 
@@ -68,7 +67,5 @@ Elistly is a modular inventory app for tracking anything — devices, books, peo
 
 ## Known Tech Debt
 
-- Auth still coupled to Supabase despite Neon migration of data layer
-- `config.js` has dual Supabase/Neon config paths — should consolidate post-migration
 - QR field type exists in schema but camera scanning not implemented
 - No automated tests for Worker routes
