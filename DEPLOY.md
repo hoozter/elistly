@@ -31,4 +31,6 @@ Optional:
 
 - `ELISTLY_ADMIN_EMAILS`
 
+Set the required non-secret Worker variable `ELISTLY_ALLOWED_ORIGINS` to a comma-separated allowlist of exact frontend HTTP(S) origins. The checked-in production default is `https://elistly.com`; override it explicitly for another deployment. Do not use `*`, paths, or trailing slashes. Missing or malformed configuration fails every request closed, and an unlisted `Origin` receives `403` without credentialed CORS headers.
+
 See `CLOUDFLARE_DEPLOY.md` for the full Cloudflare setup.

@@ -47,6 +47,12 @@ Optional Worker secret:
 
 - `ELISTLY_ADMIN_EMAILS` = comma-separated admin email recovery allowlist
 
+Required non-secret Worker variable:
+
+- `ELISTLY_ALLOWED_ORIGINS` = comma-separated exact frontend origins permitted to make credentialed browser API requests, for example `https://app.example.test,https://preview.example.test`.
+
+The checked-in `worker/wrangler.toml` sets the production default to `https://elistly.com`. Override it explicitly for a different deployment or local frontend. Each entry must be a full `http://` or `https://` origin with no path, query, fragment, trailing slash, or wildcard. Do not use `*`; malformed or missing configuration fails every request closed, and an unlisted `Origin` receives `403`.
+
 ## Admin Bootstrap
 
 The first Neon Auth user becomes admin automatically when there are no active Neon Auth admins yet.

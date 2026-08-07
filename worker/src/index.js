@@ -16,8 +16,6 @@ import { neon } from "@neondatabase/serverless";
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
 const jwksCache = { keys: null, expiresAt: 0 };
 
-let sql;
-
 async function readJsonBody(req) {
   try {
     return await req.json();
@@ -26,15 +24,46 @@ async function readJsonBody(req) {
   }
 }
 
+function configuredCorsOrigin(env, requestOrigin) {
+  const configuredOrigins = env.ELISTLY_ALLOWED_ORIGINS;
+  if (typeof configuredOrigins !== "string" || !configuredOrigins.trim()) {
+    throw new Error("ELISTLY_ALLOWED_ORIGINS must contain one or more origins");
+  }
+
+  const origins = configuredOrigins.split(",").map(value => value.trim());
+  if (origins.some(value => !value)) {
+    throw new Error("ELISTLY_ALLOWED_ORIGINS contains an empty origin");
+  }
+
+  for (const configuredOrigin of origins) {
+    let parsed;
+    try {
+      parsed = new URL(configuredOrigin);
+    } catch {
+      throw new Error("ELISTLY_ALLOWED_ORIGINS contains an invalid origin");
+    }
+    if (!/^https?:$/.test(parsed.protocol) || parsed.origin !== configuredOrigin) {
+      throw new Error("ELISTLY_ALLOWED_ORIGINS must contain exact HTTP origins");
+    }
+  }
+
+  if (!requestOrigin) return null;
+  return origins.includes(requestOrigin) ? requestOrigin : false;
+}
+
 function corsHeaders(origin) {
-  return {
+  const headers = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin || "*",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Cache-Control": "no-store, no-cache",
   };
+  if (origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Access-Control-Allow-Credentials"] = "true";
+    headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    headers.Vary = "Origin";
+  }
+  return headers;
 }
 
 function jsonResponse(body, status = 200, origin = null, extraHeaders = {}) {
@@ -132,7 +161,7 @@ function configuredAdminEmails(env) {
     .filter(Boolean);
 }
 
-async function isAdmin(user, env) {
+async function isAdmin(sql, user, env) {
   if (!user) return false;
   const adminEmails = configuredAdminEmails(env);
   if (user.email && adminEmails.includes(String(user.email).toLowerCase())) {
@@ -273,17 +302,28 @@ function normalizeAppDataRow(row) {
   return { payload: row.payload ?? null, updated_at: row.updated_at ?? null };
 }
 
-export default {
+export function createWorker({ createSql = neon, authenticate = getAuthenticatedUser, checkAdmin = isAdmin } = {}) {
+  let sql;
+
+  return {
   async fetch(req, env) {
-    const origin = req.headers.get("Origin") || "*";
+    let origin;
+    try {
+      origin = configuredCorsOrigin(env, req.headers.get("Origin"));
+    } catch {
+      console.error("Invalid Worker configuration");
+      return jsonResponse({ error: "Worker configuration error" }, 500);
+    }
+
+    if (origin === false) {
+      return jsonResponse({ error: "Forbidden origin" }, 403);
+    }
 
     if (req.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
     try {
-      if (!sql) sql = neon(env.NEON_DATABASE_URL);
-
       const url = new URL(req.url);
       const path = url.pathname;
 
@@ -291,17 +331,9 @@ export default {
         return jsonResponse({ ok: true, service: "elistly-api", provider: "neon", auth: "neon-auth" }, 200, origin);
       }
 
-      if (path === "/debug-env") {
-        const keys = typeof env === "object" && env !== null ? Object.keys(env).filter(key => !key.startsWith("_")) : [];
-        return jsonResponse({
-          envKeys: keys,
-          provider: "neon",
-          auth: "neon-auth",
-          hasDatabaseUrl: !!env.NEON_DATABASE_URL,
-          hasAuthUrl: !!env.NEON_AUTH_URL,
-          hasAuthJwksUrl: !!env.NEON_AUTH_JWKS_URL,
-        }, 200, origin);
-      }
+      if (path === "/debug-env") return jsonResponse({ error: "Not found" }, 404, origin);
+
+      if (!sql) sql = createSql(env.NEON_DATABASE_URL);
 
       if (path === "/auth/signup" && req.method === "POST") return handleAuthStart(req, env, origin, "signup");
       if (path === "/auth/login" && req.method === "POST") return handleAuthStart(req, env, origin, "login");
@@ -317,7 +349,7 @@ export default {
         return jsonResponse({ error: "MFA is not implemented for Neon Auth yet" }, 501, origin);
       }
 
-      const user = await getAuthenticatedUser(req, env);
+      const user = await authenticate(req, env);
       if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
 
       if (path === "/me" && req.method === "GET") {
@@ -369,7 +401,7 @@ export default {
       }
 
       if (path === "/admin/me" && req.method === "GET") {
-        return jsonResponse({ admin: await isAdmin(user, env) }, 200, origin);
+        return jsonResponse({ admin: await checkAdmin(sql, user, env) }, 200, origin);
       }
 
       if (path === "/users/me" && req.method === "DELETE") {
@@ -381,7 +413,7 @@ export default {
       }
 
       if (path === "/admin/users") {
-        if (!await isAdmin(user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
+        if (!await checkAdmin(sql, user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         if (req.method === "GET") {
           const users = await sql`
             SELECT id::text AS id, email, name, "createdAt" AS created_at
@@ -395,7 +427,7 @@ export default {
 
       const deleteUserMatch = path.match(/^\/admin\/users\/([a-zA-Z0-9-]+)$/);
       if (deleteUserMatch && req.method === "DELETE") {
-        if (!await isAdmin(user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
+        if (!await checkAdmin(sql, user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         const targetId = deleteUserMatch[1];
         await sql`DELETE FROM app_data WHERE user_id = ${targetId}`;
         await sql`DELETE FROM profiles WHERE user_id = ${targetId}`;
@@ -405,9 +437,12 @@ export default {
       }
 
       return jsonResponse({ error: "Not found" }, 404, origin);
-    } catch (error) {
-      console.error("Unhandled Worker error:", error);
-      return jsonResponse({ error: "Internal server error", detail: error?.message || String(error) }, 500, origin);
+    } catch {
+      console.error("Unhandled Worker error");
+      return jsonResponse({ error: "Internal server error" }, 500, origin);
     }
   },
-};
+  };
+}
+
+export default createWorker();

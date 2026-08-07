@@ -6,6 +6,10 @@
 #   NEON_AUTH_JWKS_URL
 #   ELISTLY_ADMIN_EMAILS
 #
+# Required non-secret Worker variable:
+#   ELISTLY_ALLOWED_ORIGINS (comma-separated exact frontend HTTP(S) origins)
+# Never use `*`: credentialed CORS is only returned to an exact configured origin.
+#
 # Store as encrypted secrets:
 #   cd worker && npx wrangler secret put NEON_DATABASE_URL
 #   cd worker && npx wrangler secret put NEON_AUTH_URL
@@ -14,3 +18,6 @@
 name = "elistly-api"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
+
+[vars]
+ELISTLY_ALLOWED_ORIGINS = "https://elistly.com"
