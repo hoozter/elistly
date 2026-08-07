@@ -14,14 +14,58 @@
 import { neon } from "@neondatabase/serverless";
 
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
+const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const jwksCache = { keys: null, expiresAt: 0 };
 
-async function readJsonBody(req) {
-  try {
-    return await req.json();
-  } catch {
-    return null;
+class RequestBodyError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
   }
+}
+
+function isJsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readJsonBody(req) {
+  const declaredLength = Number(req.headers.get("Content-Length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BODY_BYTES) {
+    throw new RequestBodyError(413, "Request body too large");
+  }
+
+  const reader = req.body?.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_JSON_BODY_BYTES) {
+        await reader.cancel();
+        throw new RequestBodyError(413, "Request body too large");
+      }
+      chunks.push(value);
+    }
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const text = new TextDecoder().decode(bytes);
+
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new RequestBodyError(400, "Invalid JSON body");
+  }
+  if (!isJsonObject(body)) throw new RequestBodyError(400, "JSON object required");
+  return body;
 }
 
 function configuredCorsOrigin(env, requestOrigin) {
@@ -227,8 +271,11 @@ async function fetchSessionFromCookie(env, origin, cookieHeader) {
 
 async function handleAuthStart(req, env, origin, kind) {
   const body = await readJsonBody(req);
-  if (!body?.email || !body?.password) {
+  if (typeof body.email !== "string" || typeof body.password !== "string" || !body.email || !body.password) {
     return jsonResponse({ error: "Email and password required" }, 400, origin);
+  }
+  if (body.email.length > 320 || body.password.length > 1024 || (body.name != null && (typeof body.name !== "string" || body.name.length > 200))) {
+    return jsonResponse({ error: "Authentication fields are too long" }, 400, origin);
   }
 
   const authBody = {
@@ -363,7 +410,10 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         }
         if (req.method === "PUT") {
           const body = await readJsonBody(req);
-          const payload = body?.payload ?? body ?? {};
+          if (!Object.hasOwn(body, "payload") || !isJsonObject(body.payload)) {
+            throw new RequestBodyError(400, "Payload object required");
+          }
+          const payload = body.payload;
           const rows = await sql`
             INSERT INTO app_data (user_id, payload, updated_at)
             VALUES (${user.id}, ${JSON.stringify(payload)}::jsonb, NOW())
@@ -383,9 +433,15 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         }
         if (req.method === "PUT") {
           const body = await readJsonBody(req);
+          if (!Object.hasOwn(body, "display_name") || (body.display_name !== null && typeof body.display_name !== "string")) {
+            throw new RequestBodyError(400, "display_name must be a string or null");
+          }
+          if (typeof body.display_name === "string" && body.display_name.length > 200) {
+            throw new RequestBodyError(400, "display_name is too long");
+          }
           const rows = await sql`
             INSERT INTO profiles (user_id, email, display_name, updated_at)
-            VALUES (${user.id}, ${user.email}, ${body?.display_name || user.name || null}, NOW())
+            VALUES (${user.id}, ${user.email}, ${body.display_name?.trim() || user.name || null}, NOW())
             ON CONFLICT (user_id) DO UPDATE
               SET email = EXCLUDED.email,
                   display_name = EXCLUDED.display_name,
@@ -405,10 +461,16 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
       }
 
       if (path === "/users/me" && req.method === "DELETE") {
-        await sql`DELETE FROM app_data WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM profiles WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM admin_users WHERE user_id = ${user.id}`;
-        await sql`DELETE FROM neon_auth."user" WHERE id::text = ${user.id}`;
+        await sql`
+          WITH deleted_app_data AS (
+            DELETE FROM app_data WHERE user_id = ${user.id}
+          ), deleted_profiles AS (
+            DELETE FROM profiles WHERE user_id = ${user.id}
+          ), deleted_admin AS (
+            DELETE FROM admin_users WHERE user_id = ${user.id}
+          )
+          DELETE FROM neon_auth."user" WHERE id::text = ${user.id}
+        `;
         return jsonResponse({ ok: true }, 200, origin);
       }
 
@@ -429,15 +491,24 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
       if (deleteUserMatch && req.method === "DELETE") {
         if (!await checkAdmin(sql, user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         const targetId = deleteUserMatch[1];
-        await sql`DELETE FROM app_data WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM profiles WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM admin_users WHERE user_id = ${targetId}`;
-        await sql`DELETE FROM neon_auth."user" WHERE id::text = ${targetId}`;
+        await sql`
+          WITH deleted_app_data AS (
+            DELETE FROM app_data WHERE user_id = ${targetId}
+          ), deleted_profiles AS (
+            DELETE FROM profiles WHERE user_id = ${targetId}
+          ), deleted_admin AS (
+            DELETE FROM admin_users WHERE user_id = ${targetId}
+          )
+          DELETE FROM neon_auth."user" WHERE id::text = ${targetId}
+        `;
         return jsonResponse({ ok: true }, 200, origin);
       }
 
       return jsonResponse({ error: "Not found" }, 404, origin);
-    } catch {
+    } catch (error) {
+      if (error instanceof RequestBodyError) {
+        return jsonResponse({ error: error.message }, error.status, origin);
+      }
       console.error("Unhandled Worker error");
       return jsonResponse({ error: "Internal server error" }, 500, origin);
     }
