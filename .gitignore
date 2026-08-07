@@ -1,25 +1,24 @@
-# Secrets and config (keys must not be committed)
+# Generated dependencies and build output
+node_modules/
+dist/
+.wrangler/
+
+# Local runtime configuration
 config.js
 .env
-.env.local
-.env.*.local
-*.pem
-secrets/
-neon/neon-stuff.txt
+.env.*
+!.env.example
 
-# OS and editor
+# Credentials and private material
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# OS and editor output
 .DS_Store
 Thumbs.db
 *.log
 .idea/
 .vscode/
-
-# Dependencies (if added later)
-node_modules/
-# Deelab safe web
-.safe_web_inbox/
-.safe_web_sanitized/
-
-# Local Codex/agent tooling
-.agents/
-skills-lock.json

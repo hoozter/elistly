@@ -74,7 +74,7 @@
       items: [
         {
           q: 'How do I export my data?',
-          a: 'Settings → Data → Export. Choose which entity types, categories, and entities to include; you can also include app settings. A JSON file is downloaded. Use it as a backup or to move data to another browser/account.'
+          a: 'Settings → Data → Export downloads selected entity types, categories, entities, and optional settings as JSON. The current selective export and Profile → Export all data use different envelopes, so a guaranteed full round-trip restore remains roadmap work.'
         },
         {
           q: 'How do I import data?',
@@ -103,7 +103,7 @@
         },
         {
           q: 'Can I use it offline or as an installable app?',
-          a: 'Yes. When you’re signed in, the app is designed to work offline and to sync with the database when the device is back online. That makes it suitable for a standalone web app or “web APK” on Android: install it, use it anywhere, and your data syncs when you have a connection.'
+          a: 'The application shell can be installed and cached where the browser supports PWAs. Durable offline edits and automatic reconnect replay are not release-proven yet, so do not rely on offline changes until that roadmap work is complete.'
         },
         {
           q: 'How do I sign in or sign out?',
@@ -111,11 +111,11 @@
         },
         {
           q: 'Can I have multiple emails on my account?',
-          a: 'Yes. In Profile you can add a secondary email and verify it. You can set which email is primary and remove secondary emails.'
+          a: 'Not reliably yet. Parts of the profile UI exist, but secondary-email verification and primary-email changes are not production-complete against the current backend.'
         },
         {
           q: 'What is 2FA / TOTP?',
-          a: 'Two-factor authentication (2FA) adds a second step at login: your password plus a code from an app (e.g. Google Authenticator). In Profile you can enable TOTP; the app shows a QR code and secret to enter into your authenticator app. When 2FA is on, you’ll be asked for the code after signing in.'
+          a: 'Two-factor authentication (2FA/TOTP) would add an authenticator-code step at login. Elistly’s current MFA controls are not production-complete against the current backend and should not be relied on until the roadmap implementation and tests are complete.'
         }
       ]
     },

@@ -61,7 +61,7 @@ Sample data is optional and helps you test views, fields, and dashboard behavior
 
 ### Clearing Local Data
 
-The app caches account data locally for offline-friendly behavior. Resetting data from Profile clears remote app data and local cache for the signed-in account.
+The app keeps a local startup cache for the signed-in account. This cache is not yet a durable offline write queue: edits made while a remote save fails are not release-proven to survive restart and reconnect. Resetting data from Profile clears remote app data and local cache for the signed-in account.
 
 ## 3. Dashboard And Views
 
@@ -81,7 +81,7 @@ If you add due-date fields, Elistly can show due and overdue records as a focuse
 
 ### Search
 
-Use the header search to find entities by name and field content.
+Use the header search to find entities by generated name/title. Field-value and association search are roadmap work.
 
 ### URL And Routing
 
@@ -117,11 +117,11 @@ Categories organize records and control where entity types can be used. Category
 
 ### Export
 
-Inventory export downloads categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** includes account metadata, theme, and app data.
+Inventory export downloads selected categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** includes account metadata, theme, and app data. The two export envelopes are not yet one guaranteed round-trip backup format.
 
 ### Import
 
-Import JSON from a previous export to restore or merge inventory structures and records.
+Import previews and merges the current top-level selective inventory format. It does not yet restore the full-account export envelope. Validate important restores on disposable data until the versioned round-trip format in the roadmap is complete.
 
 ### Add Preset
 
@@ -138,11 +138,11 @@ Elistly always runs with an account.
 - **Authentication** uses Neon Auth through `NEON_AUTH_URL`.
 - **App data** is read and written through the Cloudflare Worker at `ELISTLY_API_URL`.
 - **Storage** uses Neon Postgres tables from `neon/schema.sql`.
-- **Local cache** keeps the app responsive and supports offline-friendly usage.
+- **Local cache** makes startup responsive, but durable offline edits, reconnect replay, and multi-device conflict handling are not release-proven.
 
 Opening the app without a session shows the sign-in screen. Signing out clears the local auth token and returns to sign-in.
 
-Password reset, secondary email verification, and MFA UI are present but depend on backend support. The Worker currently returns explicit “not implemented” responses for unsupported flows.
+Password reset, secondary email verification, and MFA controls are present in parts of the UI but are not production-complete. The Worker returns explicit “not implemented” responses for unsupported flows; users must not rely on those controls until the roadmap gates are complete.
 
 ## 9. Admin
 
