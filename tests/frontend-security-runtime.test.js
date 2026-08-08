@@ -690,6 +690,93 @@ async function testImportCollisionHardening() {
     assert.equal(changedIdentity.success, false, 'identity change after preview must not report success');
 
     await page.evaluate(original => {
+      const tokenA = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEiLCJleHAiOjQxMDI0NDQ4MDB9.sig-a';
+      const tokenB = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEiLCJleHAiOjQxMDI0NDQ4MDB9.sig-b';
+      let token = tokenA;
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+        getSession: async () => ({ data: { session: { access_token: token } } })
+      } };
+      window.__swapImportToken = () => { token = tokenB; };
+      window.__putCalls = 0;
+      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.evaluate(() => window.__swapImportToken());
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('Signed-in session changed. Reload and review this import again.').waitFor();
+    const swappedToken = await page.evaluate(() => ({ puts: window.__putCalls, data: App.data, success: document.body.textContent.includes('Import complete') }));
+    assert.equal(swappedToken.puts, 0, 'same-user token replacement after preview must reject before PUT');
+    assert.deepEqual(swappedToken.data, original, 'same-user token replacement must preserve in-memory data');
+    assert.equal(swappedToken.success, false, 'same-user token replacement must not report success');
+
+    await page.evaluate(original => {
+      const expired = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEiLCJleHAiOjF9.expired';
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+        getSession: async () => ({ data: { session: { access_token: expired, expires_at: 1 } } })
+      } };
+      window.__putCalls = 0;
+      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('Signed-in session has expired. Sign in and review this import again.').waitFor();
+    const expiredSession = await page.evaluate(() => ({ puts: window.__putCalls, data: App.data, success: document.body.textContent.includes('Import complete') }));
+    assert.equal(expiredSession.puts, 0, 'known-expired session must reject before PUT');
+    assert.deepEqual(expiredSession.data, original, 'known-expired session must preserve in-memory data');
+    assert.equal(expiredSession.success, false, 'known-expired session must not report success');
+
+    await page.evaluate(original => {
+      const user1Token = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEiLCJleHAiOjQxMDI0NDQ4MDB9.user-1';
+      const user2Token = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTIiLCJleHAiOjQxMDI0NDQ4MDB9.user-2';
+      let userId = 'user-1';
+      let releasePut;
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: userId } } }),
+        getSession: async () => ({ data: { session: { access_token: userId === 'user-1' ? user1Token : user2Token } } })
+      } };
+      window.__switchDuringImportPut = () => { userId = 'user-2'; };
+      window.__releaseImportPut = () => releasePut();
+      window.__putStarted = false;
+      window.fetch = async () => {
+        window.__putStarted = true;
+        await new Promise(resolve => { releasePut = resolve; });
+        return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 });
+      };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.waitForFunction(() => window.__putStarted === true);
+    await page.evaluate(() => { window.__switchDuringImportPut(); window.__releaseImportPut(); });
+    await page.getByText('Import was saved using the preview session, but the active session changed. Reload before continuing.').waitFor();
+    const switchedDuringPut = await page.evaluate(() => ({ success: document.body.textContent.includes('Import complete'), user1: localStorage.getItem('elistlyData:user:user-1'), user2: localStorage.getItem('elistlyData:user:user-2') }));
+    assert.equal(switchedDuringPut.success, false, 'identity change during PUT must not report generic import success');
+    assert.match(switchedDuringPut.user1, /incoming/, 'confirmed remote write must remain cached under the exact preview account');
+    assert.equal(switchedDuringPut.user2, null, 'identity change during PUT must not cache under the newly active account');
+
+    await page.evaluate(original => {
       localStorage.clear();
       localStorage.setItem('elistlyData', JSON.stringify(original));
       localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));

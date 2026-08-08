@@ -73,18 +73,26 @@ async function getAuthUser() {
   return user || null;
 }
 
-function getAccessTokenSubject(accessToken) {
+function getAccessTokenClaims(accessToken) {
   if (typeof accessToken !== 'string') return null;
   const payload = accessToken.split('.')[1];
   if (!payload) return null;
   try {
     const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(normalized.padEnd(normalized.length + (4 - normalized.length % 4) % 4, '='));
-    const subject = JSON.parse(json).sub;
-    return typeof subject === 'string' && subject ? subject : null;
+    const claims = JSON.parse(json);
+    return claims && typeof claims === 'object' && !Array.isArray(claims) ? claims : null;
   } catch (_) {
     return null;
   }
+}
+
+function isImportSessionKnownExpired(session, claims) {
+  const now = Math.floor(Date.now() / 1000);
+  const sessionExpiry = Number(session && session.expires_at);
+  const tokenExpiry = Number(claims && claims.exp);
+  return (Number.isFinite(sessionExpiry) && sessionExpiry > 0 && sessionExpiry <= now)
+    || (Number.isFinite(tokenExpiry) && tokenExpiry > 0 && tokenExpiry <= now);
 }
 
 async function apiRequest(path, options = {}) {
@@ -178,9 +186,11 @@ const Storage = {
     const user = await getAuthUser();
     const accessToken = session && session.access_token;
     const userId = user && user.id;
-    const bearerUserId = getAccessTokenSubject(accessToken);
+    const claims = getAccessTokenClaims(accessToken);
+    const bearerUserId = typeof claims?.sub === 'string' && claims.sub ? claims.sub : null;
     const sessionUserId = session && session.user && session.user.id;
     if (!accessToken || !userId) throw new Error('No signed-in account is available to save this import.');
+    if (isImportSessionKnownExpired(session, claims)) throw new Error('Signed-in session has expired. Sign in and review this import again.');
     if (!bearerUserId || bearerUserId !== userId || (sessionUserId && sessionUserId !== bearerUserId)) {
       throw new Error('Signed-in account identity could not be confirmed.');
     }
@@ -7611,6 +7621,10 @@ const App = {
         if (backendClient && (!this._importPreviewIdentity || this._importPreviewIdentity.userId !== importIdentity.userId || Storage._cachedUserId !== importIdentity.userId)) {
           return this.showImportError('Signed-in account changed. Reload and review this import again.');
         }
+        if (backendClient && this._importPreviewIdentity.accessToken !== importIdentity.accessToken) {
+          return this.showImportError('Signed-in session changed. Reload and review this import again.');
+        }
+        if (backendClient) importIdentity = this._importPreviewIdentity;
         let duplicateSkipped = 0, duplicateOverwritten = 0;
         for (const duplicate of freshConflicts.filter(conflict => conflict.kind === 'duplicate')) {
           if (decisions.get(duplicate.id) === 'overwrite') duplicateOverwritten++; else duplicateSkipped++;
@@ -7650,6 +7664,20 @@ const App = {
           this.data = beforeData;
           this.restoreImportStorageState(beforeStorage);
           return this.showImportError(`Import was not saved; original data was restored. ${err.message || ''}`);
+        }
+        if (backendClient) {
+          let activeIdentity = null;
+          try { activeIdentity = await Storage.getImportIdentity(); } catch (_) {}
+          if (!activeIdentity || activeIdentity.userId !== importIdentity.userId || activeIdentity.accessToken !== importIdentity.accessToken) {
+            localStorage.removeItem(Storage.KEY);
+            Storage._cached = null;
+            Storage._cachedUserId = null;
+            this._importDataPreview = null;
+            this._importPreviewIdentity = null;
+            this.closeModal('importModal');
+            this.showNotification('Import was saved using the preview session, but the active session changed. Reload before continuing.', 'error');
+            return;
+          }
         }
         this.closeModal('importModal');
         this.loadView('dashboard');
