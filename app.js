@@ -257,6 +257,27 @@ const Storage = {
     }
   },
 
+  async setAppDataForImport(data) {
+    if (backendClient) {
+      const user = await getAuthUser();
+      if (!user) throw new Error('No signed-in account is available to save this import.');
+      const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
+      if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
+      const row = res.data || {};
+      const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
+      this._cached = data;
+      this._writeUserCache(user.id, data, updatedAt);
+      const serialized = JSON.stringify(data);
+      if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(user.id)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(user.id)) !== String(updatedAt)) {
+        throw new Error('Account cache persistence verification failed.');
+      }
+      return true;
+    }
+    localStorage.setItem(this.KEY, JSON.stringify(data));
+    if (localStorage.getItem(this.KEY) !== JSON.stringify(data)) throw new Error('Local persistence verification failed.');
+    return true;
+  },
+
   getOnboardingDone() {
     if (this._cached && 'onboardingDone' in this._cached) return !!this._cached.onboardingDone;
     try {
@@ -7224,7 +7245,7 @@ const App = {
         let members = 0;
         const duplicates = [];
         const fail = message => { throw new Error(`Invalid JSON: ${message}`); };
-        const whitespace = () => { while (/\s/.test(source[index] || '')) index++; };
+        const whitespace = () => { while (source[index] === ' ' || source[index] === '\t' || source[index] === '\r' || source[index] === '\n') index++; };
         const string = () => {
           if (source[index++] !== '"') fail('expected string');
           let out = '';
@@ -7283,6 +7304,7 @@ const App = {
               if (seen.has(key)) {
                 if (duplicates.length >= this.importLimits.maxConflicts) throw new Error('Import JSON exceeds the conflict limit.');
                 duplicates.push({ id: `duplicate:${childPath}:${duplicates.length}`, kind: 'duplicate', path: childPath, key, earlier: seen.get(key), later: child, owner: object });
+                seen.set(key, child);
               } else {
                 seen.set(key, child);
                 Object.defineProperty(object, key, { value: child, writable: true, enumerable: true, configurable: true });
@@ -7380,6 +7402,7 @@ const App = {
           previewArea.appendChild(section);
         }
 
+        this.assertSafeImportIds(imported);
         const conflicts = this.collectImportConflicts(imported, this._importDuplicateConflicts || []);
         this._importConflicts = conflicts;
         if (conflicts.length) {
@@ -7414,6 +7437,36 @@ const App = {
         return text.length > this.importLimits.maxPreviewText ? `${text.slice(0, this.importLimits.maxPreviewText)}…` : text;
       },
 
+      importFingerprint(value) {
+        const text = JSON.stringify(value);
+        if (typeof text !== 'string') throw new Error('Import conflict state cannot be fingerprinted safely.');
+        return text;
+      },
+
+      assertSafeImportIds(imported) {
+        const reserved = new Set(['__proto__', 'prototype', 'constructor']);
+        for (const collection of ['entityTypes', 'categories', 'entities']) {
+          for (const id of Object.keys(imported[collection] || {})) {
+            if (reserved.has(id)) throw new Error(`Import contains reserved ${collection} ID: ${id}.`);
+          }
+        }
+      },
+
+      captureImportStorageState() {
+        const entries = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key !== null) entries.push([key, localStorage.getItem(key)]);
+        }
+        return { entries, cached: Storage._cached };
+      },
+
+      restoreImportStorageState(snapshot) {
+        localStorage.clear();
+        for (const [key, value] of snapshot.entries) localStorage.setItem(key, value);
+        Storage._cached = snapshot.cached;
+      },
+
       renderImportConflict(conflict) {
         const item = document.createElement('div');
         item.className = 'restore-item';
@@ -7437,14 +7490,14 @@ const App = {
       },
 
       collectImportConflicts(imported, duplicates) {
-        const conflicts = duplicates.map(conflict => ({ ...conflict, signature: `${conflict.path}\n${this.importSafeText(conflict.earlier)}\n${this.importSafeText(conflict.later)}` }));
+        const conflicts = duplicates.map(conflict => ({ ...conflict, signature: `${conflict.path}\n${this.importFingerprint(conflict.earlier)}\n${this.importFingerprint(conflict.later)}` }));
         const collections = [['entityTypes', this.data.entityTypes], ['categories', this.data.categories], ['entities', this.data.entities]];
         for (const [collection, current] of collections) {
           for (const [id, incoming] of Object.entries(imported[collection] || {})) {
-            if (Object.prototype.hasOwnProperty.call(current || {}, id)) conflicts.push({ id: `id:${collection}:${id}`, kind: 'id', collection, idValue: id, current: current[id], incoming, signature: `${collection}\n${id}\n${this.importSafeText(current[id])}\n${this.importSafeText(incoming)}` });
+            if (Object.prototype.hasOwnProperty.call(current || {}, id)) conflicts.push({ id: `id:${collection}:${id}`, kind: 'id', collection, idValue: id, current: current[id], incoming, signature: `${collection}\n${id}\n${this.importFingerprint(current[id])}\n${this.importFingerprint(incoming)}` });
           }
         }
-        if (imported.settings && this.data.settings && Object.keys(this.data.settings).length) conflicts.push({ id: 'id:settings:settings', kind: 'id', collection: 'settings', idValue: 'settings', current: this.data.settings, incoming: imported.settings, signature: `settings\n${this.importSafeText(this.data.settings)}\n${this.importSafeText(imported.settings)}` });
+        if (imported.settings && this.data.settings && Object.keys(this.data.settings).length) conflicts.push({ id: 'id:settings:settings', kind: 'id', collection: 'settings', idValue: 'settings', current: this.data.settings, incoming: imported.settings, signature: `settings\n${this.importFingerprint(this.data.settings)}\n${this.importFingerprint(imported.settings)}` });
         if (conflicts.length > this.importLimits.maxConflicts) throw new Error('Import JSON exceeds the conflict limit.');
         return conflicts;
       },
@@ -7456,7 +7509,7 @@ const App = {
         button.disabled = !this._importDataPreview || unresolved;
       },
 
-      processImport() {
+      async processImport() {
         if (!this._importDataPreview) return;
         // Get selected checkboxes
         const selectedEntityTypes = Array.from(document.querySelectorAll('input[name="importEntityTypes"]:checked')).map(input => input.value);
@@ -7464,7 +7517,7 @@ const App = {
         const selectedEntities = Array.from(document.querySelectorAll('input[name="importEntities"]:checked')).map(input => input.value);
         const importSettings = document.querySelector('input[name="importSettings"]:checked');
         let parsed;
-        try { parsed = this.parseImportJson(this._importRawText); } catch (err) { return this.showImportError(err.message || 'Invalid JSON file.'); }
+        try { parsed = this.parseImportJson(this._importRawText); this.assertSafeImportIds(parsed.value); } catch (err) { return this.showImportError(err.message || 'Invalid JSON file.'); }
         const freshConflicts = this.collectImportConflicts(parsed.value, parsed.duplicates);
         const oldSignatures = (this._importConflicts || []).map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
         const freshSignatures = freshConflicts.map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
@@ -7479,7 +7532,7 @@ const App = {
         for (const duplicate of parsed.duplicates) if (decisions.get(duplicate.id) === 'overwrite') duplicate.owner[duplicate.key] = duplicate.later;
         const imported = parsed.value;
         const beforeData = this.data;
-        const beforeStorage = localStorage.getItem(Storage.KEY);
+        const beforeStorage = this.captureImportStorageState();
         const candidate = JSON.parse(JSON.stringify(this.data));
         let created = 0, overwritten = 0, skipped = 0;
         const applyCollection = (collection, selected) => {
@@ -7488,7 +7541,7 @@ const App = {
             const collision = freshConflicts.find(conflict => conflict.kind === 'id' && conflict.collection === collection && conflict.idValue === id);
             if (collision && decisions.get(collision.id) === 'skip') { skipped++; continue; }
             if (collision) overwritten++; else created++;
-            candidate[collection][id] = JSON.parse(JSON.stringify(imported[collection][id]));
+            Object.defineProperty(candidate[collection], id, { value: JSON.parse(JSON.stringify(imported[collection][id])), writable: true, enumerable: true, configurable: true });
           }
         };
         // Entity Types
@@ -7502,11 +7555,14 @@ const App = {
         }
         try {
           this.data = candidate;
-          this.saveData();
-          if (!backendClient && localStorage.getItem(Storage.KEY) !== JSON.stringify({ ...this.data, version: this.data.version })) throw new Error('Local persistence verification failed.');
+          this.normalizeEntityTypeSchema();
+          this.data.settings = this.normalizeSettings(this.data.settings);
+          const dataToSave = { ...this.data, version: this.data.version };
+          if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
+          if (await Storage.setAppDataForImport(dataToSave) !== true) throw new Error('Import persistence was not confirmed.');
         } catch (err) {
           this.data = beforeData;
-          if (beforeStorage === null) localStorage.removeItem(Storage.KEY); else localStorage.setItem(Storage.KEY, beforeStorage);
+          this.restoreImportStorageState(beforeStorage);
           return this.showImportError(`Import was not saved; original data was restored. ${err.message || ''}`);
         }
         this.closeModal('importModal');

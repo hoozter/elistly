@@ -579,7 +579,73 @@ async function testImportCollisionChoices() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
+async function testImportCollisionHardening() {
+  await withPage(async page => {
+    const original = { version: 'test', settings: {}, categories: {}, entityTypes: { device: { id: 'device', label: 'current', fields: [], categories: [] } }, entities: {}, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
+    const incoming = { entityTypes: { device: { id: 'device', label: 'incoming', fields: [], categories: [] } } };
+    await page.evaluate(original => {
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: null } }) } };
+      window.ELISTLY_API_URL = '/mock';
+      window.fetch = async () => { throw new Error('remote rejected'); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('Import was not saved; original data was restored.').waitFor();
+    const rollback = await page.evaluate(() => ({ data: App.data, generic: localStorage.getItem('elistlyData'), user: localStorage.getItem('elistlyData:user:user-1'), updated: localStorage.getItem('elistlyData:userUpdated:user-1'), cached: Storage._cached, success: document.body.textContent.includes('Import complete') }));
+    assert.deepEqual(rollback.data, original, 'remote rejection must restore in-memory data');
+    assert.equal(rollback.generic, JSON.stringify(original), 'remote rejection must restore generic cache');
+    assert.equal(rollback.user, JSON.stringify(original), 'remote rejection must restore user cache');
+    assert.equal(rollback.updated, 'before', 'remote rejection must restore user timestamp');
+    assert.deepEqual(rollback.cached, original, 'remote rejection must restore Storage cache');
+    assert.equal(rollback.success, false, 'remote rejection must not report success');
+
+    await page.evaluate(() => { backendClient = { auth: { getUser: async () => ({ data: { user: null } }), getSession: async () => ({ data: { session: null } }) } }; });
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('No signed-in account is available to save this import.').waitFor();
+    assert.deepEqual(await page.evaluate(() => App.data), original, 'missing authenticated user must restore in-memory data');
+
+    await page.evaluate(() => { backendClient = null; window.ELISTLY_API_URL = ''; });
+    await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"triple":{"label":"one"},"triple":{"label":"two"},"triple":{"label":"three"}}}', original, false);
+    const duplicateDescriptions = await page.locator('[data-import-conflict]').evaluateAll(nodes => nodes.map(node => node.textContent));
+    assert.match(duplicateDescriptions[0], /earlier {"label":"one"}; later {"label":"two"}/, 'first duplicate must show first effective value');
+    assert.match(duplicateDescriptions[1], /earlier {"label":"two"}; later {"label":"three"}/, 'second duplicate must show immediately prior effective value');
+    for (const conflict of await page.locator('[data-import-conflict]').all()) await conflict.getByRole('radio', { name: 'Skip' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    assert.equal(await page.evaluate(() => App.data.entityTypes.triple.label), 'one', 'skip chain must retain earlier effective value');
+
+    await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"triple":{"label":"one"},"triple":{"label":"two"},"triple":{"label":"three"}}}', original, false);
+    await page.locator('[data-import-conflict]').nth(0).getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('[data-import-conflict]').nth(1).getByRole('radio', { name: 'Skip' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    assert.equal(await page.evaluate(() => App.data.entityTypes.triple.label), 'two', 'overwrite then skip must retain the immediately prior effective value');
+
+    await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"__proto__":{"label":"polluted"}}}', original, false);
+    await page.getByText('Import contains reserved entityTypes ID: __proto__.').waitFor();
+    const dangerous = await page.evaluate(() => ({ own: Object.prototype.hasOwnProperty.call(App.data.entityTypes, '__proto__'), hasOrdinaryPrototype: Object.getPrototypeOf(App.data.entityTypes) === Object.prototype }));
+    assert.equal(dangerous.own, false, 'dangerous IDs must not be imported');
+    assert.equal(dangerous.hasOrdinaryPrototype, true, 'dangerous IDs must not alter collection prototypes');
+
+    const longCurrent = `current-${'a'.repeat(700)}`;
+    await importFixtureThroughFileInput(page, incoming, null, { ...original, entityTypes: { device: { id: 'device', label: longCurrent, fields: [], categories: [] } } }, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.evaluate(() => { App.data.entityTypes.device.label = `${App.data.entityTypes.device.label.slice(0, 650)}changed`; });
+    await page.locator('#processImportBtn').click();
+    assert.equal(await page.locator('#processImportBtn').isDisabled(), true, 'changes beyond preview truncation must invalidate choices');
+
+    await page.evaluate(() => { let rejected = false; try { App.parseImportJson('{\u00a0"x":1}'); } catch (_) { rejected = true; } window.__nbspRejected = rejected; });
+    assert.equal(await page.evaluate(() => window.__nbspRejected), true, 'non-JSON whitespace must reject');
+  });
+}
+
+const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, importHardening: testImportCollisionHardening, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
