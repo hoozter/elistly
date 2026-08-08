@@ -3896,28 +3896,24 @@ const App = {
       deleteEntity(entityId) {
         const entity = this.data.entities[entityId];
         if (!entity) return;
-        
-        const confirmModal = `
-          <div class="modal" id="confirmDeleteModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('confirmDeleteModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Confirm Delete</h3>
-              </div>
-              <p>Are you sure you want to delete this item?</p>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteModal')">Cancel</button>
-                <button class="btn btn-danger" onclick="App.deleteEntity('${entityId}')">Delete</button>
-              </div>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = confirmModal;
-        document.body.appendChild(div.firstElementChild);
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'confirmDeleteModal';
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        const close = document.createElement('button');
+        close.type = 'button'; close.className = 'modal-close'; close.textContent = '×';
+        close.addEventListener('click', () => this.closeModal('confirmDeleteModal'));
+        const header = document.createElement('div'); header.className = 'modal-header';
+        const heading = document.createElement('h3'); heading.textContent = 'Confirm Delete'; header.appendChild(heading);
+        const message = document.createElement('p'); message.textContent = 'Are you sure you want to delete this item?';
+        const actions = document.createElement('div'); actions.className = 'modal-actions';
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', () => this.closeModal('confirmDeleteModal'));
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn btn-danger'; remove.textContent = 'Delete';
+        remove.addEventListener('click', () => this.confirmDelete(entityId));
+        actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content);
+        document.body.appendChild(modal);
         this.showModal('confirmDeleteModal');
       },
       
@@ -3969,56 +3965,60 @@ const App = {
       },
       
       showCategoryManager() {
-        const modalHtml = `
-          <div class="modal" id="categoryManagerModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('categoryManagerModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Manage Categories</h3>
-              </div>
-              <div class="modal-body modal-body-no-top">
-                <div class="category-list">
-                  ${Object.values(this.data.categories).map(category => `
-                    <div class="category-item">
-                      <div class="category-info">
-                        <span class="material-icons">${category.icon}</span>
-                        <span>${category.label}</span>
-                      </div>
-                      <div class="category-actions">
-                        <button class="btn btn-secondary" title="Edit" onclick="App.editCategory('${category.id}')">
-                          <span class="material-icons">edit</span>
-                        </button>
-                        <button class="btn btn-danger" title="Delete" onclick="App.deleteCategory('${category.id}')">
-                          <span class="material-icons">delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  `).join('')}
-                </div>
-              </div>
-              <div class="modal-actions">
-                <button class="btn btn-primary" onclick="App.showCategoryForm()">
-                  <span class="material-icons">add</span>
-                  New Category
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const icon = (name) => make('span', 'material-icons', name);
+        const modal = make('div', 'modal'); modal.id = 'categoryManagerModal';
+        const content = make('div', 'modal-content');
+        const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('categoryManagerModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Manage Categories'));
+        const body = make('div', 'modal-body modal-body-no-top'); const list = make('div', 'category-list');
+        Object.values(this.data.categories || {}).forEach(category => {
+          const row = make('div', 'category-item'); const info = make('div', 'category-info');
+          info.append(icon(category.icon || 'folder'), make('span', '', category.label || category.id || ''));
+          const actions = make('div', 'category-actions');
+          const edit = make('button', 'btn btn-secondary'); edit.type = 'button'; edit.title = 'Edit'; edit.appendChild(icon('edit')); edit.addEventListener('click', () => this.editCategory(category.id));
+          const remove = make('button', 'btn btn-danger'); remove.type = 'button'; remove.title = 'Delete'; remove.appendChild(icon('delete')); remove.addEventListener('click', () => this.deleteCategory(category.id));
+          actions.append(edit, remove); row.append(info, actions); list.appendChild(row);
+        });
+        body.appendChild(list); const footer = make('div', 'modal-actions'); const add = make('button', 'btn btn-primary', 'New Category'); add.type = 'button'; add.prepend(icon('add')); add.addEventListener('click', () => this.showCategoryForm()); footer.appendChild(add);
+        content.append(close, header, body, footer); modal.appendChild(content); document.body.appendChild(modal);
         this.showModal('categoryManagerModal');
       },
             
       closeCategoryManager() {
         this.closeModal('categoryManagerModal');
       },
+
+      showSafeCategoryForm(categoryId = '') {
+        const category = categoryId ? this.data.categories[categoryId] : null;
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const modal = make('div', 'modal'); modal.id = 'categoryFormModal';
+        const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('categoryFormModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', category ? 'Edit Category' : 'New Category'));
+        const form = make('form'); form.id = 'categoryForm'; form.addEventListener('submit', event => this.saveCategory(event, categoryId));
+        const labelGroup = make('div', 'form-group'); const label = document.createElement('input'); label.type = 'text'; label.name = 'label'; label.value = category?.label || ''; label.required = true; labelGroup.append(make('label', '', 'Category Name *'), label);
+        const iconGroup = make('div', 'form-group'); const iconInput = document.createElement('input'); iconInput.type = 'text'; iconInput.name = 'icon'; iconInput.id = 'categoryIcon'; iconInput.value = category?.icon || 'folder'; iconGroup.append(make('label', '', 'Icon'), iconInput);
+        const visible = make('label', 'checkbox-label'); const visibleInput = document.createElement('input'); visibleInput.type = 'checkbox'; visibleInput.className = 'elistly-checkbox'; visibleInput.name = 'visibleInDashboard'; visibleInput.checked = category?.visibleInDashboard !== false; visible.append(visibleInput, make('span', '', 'Show in Dashboard'));
+        form.append(labelGroup, iconGroup, visible);
+        if (category) {
+          const types = make('div', 'category-entity-types-checkboxes');
+          types.appendChild(make('h4', '', 'Entity types in this category'));
+          Object.values(this.data.entityTypes || {}).forEach(type => { const row = make('label', 'checkbox-label category-entity-type-option'); const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'elistly-checkbox'; input.name = `entityType_${type.id}`; input.value = '1'; input.checked = this.getEntityTypeCategoryIds(type).includes(categoryId); row.append(input, make('span', '', type.label || type.id || '')); types.appendChild(row); });
+          form.appendChild(types);
+        }
+        const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeCategoryForm()); const save = make('button', 'btn btn-primary', category ? 'Save' : 'Create'); save.type = 'submit'; actions.append(cancel, save); form.appendChild(actions); content.append(close, header, form); modal.appendChild(content); document.body.appendChild(modal); this.showModal('categoryFormModal');
+      },
+
+      showSafeCategoryDelete(categoryId) {
+        const category = this.data.categories[categoryId]; if (!category) return;
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const modal = make('div', 'modal'); modal.id = 'confirmDeleteCategoryModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Confirm Delete Category')); const message = make('p', '', `Are you sure you want to delete the category "${category.label || category.id || ''}"?`);
+        const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal')); const remove = make('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDeleteCategory(categoryId)); actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('confirmDeleteCategoryModal');
+      },
       
       showCategoryForm(categoryId = '') {
+        return this.showSafeCategoryForm(categoryId);
         const category = categoryId ? this.data.categories[categoryId] : null;
         const isEdit = !!category;
         const entityTypes = Object.values(this.data.entityTypes || {});
@@ -4133,6 +4133,7 @@ const App = {
       },
       
       deleteCategory(categoryId) {
+        return this.showSafeCategoryDelete(categoryId);
         const category = this.data.categories[categoryId];
         if (!category) return;
         
@@ -4565,65 +4566,30 @@ const App = {
       },
       
       showEntityTypeManager() {
-        const modalHtml = `
-          <div class="modal" id="entityTypeManagerModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('entityTypeManagerModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Manage Entity Types</h3>
-              </div>
-              <div class="modal-body modal-body-no-top">
-                <div class="entity-type-list">
-                  ${Object.values(this.data.entityTypes).map(type => `
-                    <div class="category-item entity-type-row">
-                      <div class="category-info">
-                        <span class="material-icons">${type.icon}</span>
-                        <span>${type.label}</span>
-                      </div>
-                      <div class="category-actions">
-                        <button class="btn btn-secondary" title="Edit" onclick="App.editEntityType('${type.id}')">
-                          <span class="material-icons">edit</span>
-                        </button>
-                        <button class="btn btn-danger" title="Delete" onclick="App.deleteEntityType('${type.id}')">
-                          <span class="material-icons">delete</span>
-                        </button>
-                      </div>
-                    </div>
-                  `).join('')}
-                </div>
-              </div>
-              <div class="modal-actions modal-actions-wrap">
-                <div class="dropdown">
-                  <button type="button" class="btn btn-secondary" onclick="App.toggleDropdown(event, this)">
-                    <span class="material-icons">content_copy</span>
-                    Add from template
-                  </button>
-                  <div class="dropdown-menu dropdown-menu-scroll hidden">
-                    ${this._getTemplateTypeOptions()}
-                  </div>
-                </div>
-                <button class="btn btn-primary" onclick="App.showEntityTypeForm()">
-                  <span class="material-icons">add</span>
-                  New entity type
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('entityTypeManagerModal');
-        document.querySelectorAll('#entityTypeManagerModal .template-type-link').forEach(link => {
-          link.addEventListener('click', (e) => {
-            e.preventDefault();
-            const preset = link.dataset.preset;
-            const typeId = link.dataset.type;
-            if (preset && typeId) this.addEntityTypeFromTemplate(preset, typeId);
-          });
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const icon = (name) => make('span', 'material-icons', name);
+        const modal = make('div', 'modal'); modal.id = 'entityTypeManagerModal'; const content = make('div', 'modal-content');
+        const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('entityTypeManagerModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Manage Entity Types'));
+        const body = make('div', 'modal-body modal-body-no-top'); const list = make('div', 'entity-type-list');
+        Object.values(this.data.entityTypes || {}).forEach(type => {
+          const row = make('div', 'category-item entity-type-row'); const info = make('div', 'category-info'); info.append(icon(type.icon || 'folder'), make('span', '', type.label || type.id || ''));
+          const actions = make('div', 'category-actions');
+          const edit = make('button', 'btn btn-secondary'); edit.type = 'button'; edit.title = 'Edit'; edit.appendChild(icon('edit')); edit.addEventListener('click', () => this.editEntityType(type.id));
+          const remove = make('button', 'btn btn-danger'); remove.type = 'button'; remove.title = 'Delete'; remove.appendChild(icon('delete')); remove.addEventListener('click', () => this.deleteEntityType(type.id));
+          actions.append(edit, remove); row.append(info, actions); list.appendChild(row);
         });
+        body.appendChild(list); const footer = make('div', 'modal-actions modal-actions-wrap');
+        const templateMenu = make('div', 'dropdown-menu dropdown-menu-scroll hidden');
+        ['it', 'library', 'staff', 'property'].forEach(presetKey => {
+          const preset = this._presets[presetKey];
+          Object.entries(preset?.entityTypes || {}).forEach(([typeId, template]) => { const link = make('button', 'template-type-link', template.label || typeId); link.type = 'button'; link.addEventListener('click', () => this.addEntityTypeFromTemplate(presetKey, typeId)); templateMenu.appendChild(link); });
+        });
+        const templateToggle = make('button', 'btn btn-secondary', 'Add from template'); templateToggle.type = 'button'; templateToggle.prepend(icon('content_copy')); templateToggle.addEventListener('click', () => templateMenu.classList.toggle('hidden'));
+        const templateWrap = make('div', 'dropdown'); templateWrap.append(templateToggle, templateMenu);
+        const add = make('button', 'btn btn-primary', 'New entity type'); add.type = 'button'; add.prepend(icon('add')); add.addEventListener('click', () => this.showEntityTypeForm()); footer.append(templateWrap, add);
+        content.append(close, header, body, footer); modal.appendChild(content); document.body.appendChild(modal);
+        this.showModal('entityTypeManagerModal');
       },
 
       _getTemplateTypeOptions() {
@@ -4696,6 +4662,7 @@ const App = {
           const changed = this.normalizeNameComponents();
           if (changed) this.saveData();
         }
+        return this.showSafeEntityTypeEditor(typeId, type);
         const nameComponentsHtml = (() => {
           const fields = Array.isArray(type.fields) ? type.fields.filter(f => f.partOfName) : [];
           const associations = Array.isArray(type.associations) ? type.associations.filter(a => a.partOfName) : [];
@@ -5082,6 +5049,49 @@ const App = {
         // Initialize option containers sortable
         this.initAllOptionSortables();
       },
+
+      showSafeEntityTypeEditor(typeId, type) {
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const input = (name, value, typeName = 'text') => { const el = document.createElement('input'); el.type = typeName; el.name = name; el.value = value == null ? '' : String(value); return el; };
+        const icon = (name) => make('span', 'material-icons', name);
+        const checkbox = (name, checked, text, disabled = false) => { const label = make('label', 'checkbox-label'); const el = input(name, '', 'checkbox'); el.className = 'elistly-checkbox'; el.checked = !!checked; el.disabled = disabled; label.append(el, make('span', '', text)); return label; };
+        const modal = make('div', 'modal'); modal.id = 'entityTypeFormModal'; const content = make('div', 'modal-content');
+        const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeEntityTypeForm());
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', typeId ? (type.label || '') : 'New entity type'));
+        const body = make('div', 'modal-body'); const form = make('form'); form.id = 'entityTypeForm'; form.dataset.typeId = typeId || ''; form.addEventListener('submit', event => this.saveEntityType(event, typeId));
+        const basics = make('div', 'entity-type-editor carded-section');
+        const labelGroup = make('div', 'form-group'); labelGroup.append(make('label', '', 'Label *'), input('label', type.label)); labelGroup.lastChild.required = true;
+        const iconGroup = make('div', 'form-group'); iconGroup.append(make('label', '', 'Icon'), input('icon', type.icon || 'folder'));
+        const categoryGroup = make('div', 'form-group'); categoryGroup.appendChild(make('label', '', 'Categories'));
+        Object.values(this.data.categories || {}).forEach(category => { const item = checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || ''); categoryGroup.appendChild(item); });
+        const nameGroup = make('div', 'checkbox-group'); const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); nameEnabled.querySelector('input').setAttribute('aria-checked', type.enableNameGen ? 'true' : 'false'); nameGroup.appendChild(nameEnabled);
+        const prefixGroup = make('div', 'form-group'); prefixGroup.append(checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'), input('namePrefix', type.nameGen?.prefix || ''));
+        const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number', 'letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); prefixGroup.appendChild(suffix);
+        basics.append(labelGroup, iconGroup, categoryGroup, nameGroup, prefixGroup);
+        const components = make('div', 'sortable-list'); components.id = 'nameComponentsList';
+        (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'association') row.dataset.associationName = component.name || ''; else if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else row.dataset.fieldName = component.name || component || ''; row.appendChild(make('span', 'name-component-label', component.type === 'separator' ? (component.value || '') : (component.name || component))); components.appendChild(row); });
+        basics.appendChild(components);
+        const fieldsSection = make('div', 'modal-group carded-section'); fieldsSection.appendChild(make('h4', '', 'Fields')); const fields = make('div', 'sortable-list'); fields.id = 'fieldsContainer';
+        (type.fields || []).forEach((field, index) => {
+          const card = make('div', 'field-card sortable-item'); card.dataset.index = index; card.dataset.fieldName = field.name || '';
+          const fieldLabel = make('div', 'form-group'); fieldLabel.append(make('label', '', 'Label *'), input(`fields[${index}].label`, field.label)); fieldLabel.lastChild.required = true;
+          const fieldName = input(`fields[${index}].name`, field.name || '', 'hidden');
+          const fieldType = document.createElement('select'); fieldType.name = `fields[${index}].type`; ['text', 'number', 'dropdown', 'textarea', 'date', 'checkbox', 'qr'].forEach(value => fieldType.appendChild(new Option(value, value, false, field.type === value)));
+          card.append(fieldLabel, fieldName, fieldType, checkbox(`fields[${index}].required`, field.required, 'Required'), checkbox(`fields[${index}].visibleInCard`, field.visibleInCard, 'Visible in card'), checkbox(`fields[${index}].partOfName`, field.partOfName, 'In title', !type.enableNameGen));
+          if (field.type === 'dropdown') { const options = make('div', 'option-rows-container'); options.dataset.fieldIndex = index; (field.options || []).forEach((option, optionIndex) => { const row = make('div', 'option-row'); row.dataset.optionIndex = optionIndex; row.append(input(`fields[${index}].options[${optionIndex}].value`, option.value), input(`fields[${index}].options[${optionIndex}].nameValue`, option.nameValue || '')); options.appendChild(row); }); card.appendChild(options); }
+          fields.appendChild(card);
+        });
+        fieldsSection.appendChild(fields);
+        const assocSection = make('div', 'modal-group carded-section'); assocSection.appendChild(make('h4', '', 'Links')); const associations = make('div', 'sortable-list'); associations.id = 'associationsContainer';
+        (type.associations || []).forEach((assoc, index) => {
+          const card = make('div', 'assoc-card association-editor sortable-item'); card.dataset.index = index;
+          const assocLabel = make('div', 'form-group'); assocLabel.append(make('label', '', 'Label *'), input(`associations[${index}].label`, assoc.label)); assocLabel.lastChild.required = true;
+          const assocName = input(`associations[${index}].name`, assoc.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `associations[${index}].association.kind`; ['belongs_to', 'has_many', 'hierarchy'].forEach(value => kind.appendChild(new Option(value, value, false, assoc.association?.kind === value)));
+          const target = document.createElement('select'); target.name = `associations[${index}].association.targetType`; Object.values(this.data.entityTypes || {}).forEach(candidate => target.appendChild(new Option(candidate.label || candidate.id || '', candidate.id || '', false, assoc.association?.targetType === candidate.id)));
+          card.append(assocLabel, assocName, kind, target, checkbox(`associations[${index}].required`, assoc.required, 'Required'), checkbox(`associations[${index}].visibleInCard`, assoc.visibleInCard, 'Visible in card'), checkbox(`associations[${index}].partOfName`, assoc.partOfName, 'In title', !type.enableNameGen)); associations.appendChild(card);
+        });
+        assocSection.appendChild(associations); form.append(basics, fieldsSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = make('button', 'btn btn-primary', 'Save Changes'); save.type = 'submit'; save.prepend(icon('save')); footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); this.showModal('entityTypeFormModal');
+      },
       
       initAllOptionSortables() {
         // Initialize all option sortables
@@ -5387,6 +5397,7 @@ const App = {
       },
       
       deleteEntityType(typeId) {
+        return this.showSafeEntityTypeDelete(typeId);
         const type = this.data.entityTypes[typeId];
         if (!type) return;
         
@@ -5418,6 +5429,14 @@ const App = {
         div.innerHTML = confirmModal;
         document.body.appendChild(div.firstElementChild);
         this.showModal('confirmDeleteTypeModal');
+      },
+
+      showSafeEntityTypeDelete(typeId) {
+        const type = this.data.entityTypes[typeId]; if (!type) return;
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const modal = make('div', 'modal'); modal.id = 'confirmDeleteTypeModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('confirmDeleteTypeModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Confirm Delete Type')); const message = make('p', '', `Are you sure you want to delete the entity type "${type.label || type.id || ''}"?`);
+        const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('confirmDeleteTypeModal')); const remove = make('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDeleteEntityType(typeId)); actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('confirmDeleteTypeModal');
       },
       
       confirmDeleteEntityType(typeId) {
@@ -6805,7 +6824,29 @@ const App = {
           });
         });
       },
+      showSafeExportModal() {
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const checkbox = (name, value, className, checked = false) => { const input = document.createElement('input'); input.type = 'checkbox'; input.name = name; input.value = value; input.className = `elistly-checkbox ${className}`; input.checked = checked; return input; };
+        const modal = make('div', 'modal'); modal.id = 'exportModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('exportModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Export Data')); const body = make('div', 'modal-body modal-body-scroll'); body.appendChild(make('p', '', 'Select the elements you want to export. Only selected items will be included in the export file.')); const form = make('form'); form.id = 'exportForm';
+        const section = title => { const el = make('div', 'restore-defaults-section'); el.appendChild(make('h4', '', title)); return el; };
+        const typeSection = section('Entity Types'); const typeGrid = make('div', 'restore-defaults-grid');
+        Object.entries(this.data.entityTypes || {}).forEach(([typeId, type]) => { const item = make('div', 'restore-item entity-type-card u-pos-relative'); const top = make('div', 'entity-type-header u-flex-between-center'); const details = make('div', 'u-flex-center-gap-07'); details.append(make('span', 'material-icons', type.icon || 'folder')); const label = make('label', 'checkbox-label u-mb-0'); label.append(checkbox('exportEntityTypes', typeId, 'export-entity-type-checkbox'), make('span', '', type.label || typeId || '')); details.appendChild(label); const expand = make('button', 'expand-entity-type expand-toggle material-icons', 'expand_more'); expand.type = 'button'; const fields = make('div', 'entity-fields-list hidden u-mt-050'); expand.addEventListener('click', () => { if (!fields.childNodes.length) this.renderSafeExportFieldsList(typeId, fields); const visible = fields.style.display === 'block'; fields.style.display = visible ? 'none' : 'block'; expand.textContent = visible ? 'expand_more' : 'expand_less'; }); top.append(details, expand); item.append(top, fields); typeGrid.appendChild(item); }); typeSection.appendChild(typeGrid);
+        const categorySection = section('Categories'); const categoryGrid = make('div', 'restore-defaults-grid'); Object.entries(this.data.categories || {}).forEach(([categoryId, category]) => { const item = make('div', 'restore-item'); const label = make('label', 'checkbox-label'); label.append(checkbox('exportCategories', categoryId, 'export-category-checkbox'), make('span', '', category.label || categoryId || '')); item.appendChild(label); categoryGrid.appendChild(item); }); categorySection.appendChild(categoryGrid);
+        const entitySection = section('Entities'); const entityGrid = make('div', 'restore-defaults-grid'); Object.entries(this.data.entities || {}).forEach(([entityId, entity]) => { const item = make('div', 'restore-item'); const label = make('label', 'checkbox-label'); label.append(checkbox('exportEntities', entityId, 'export-entity-checkbox'), make('span', '', this.getEntityCardTitle(entity))); item.appendChild(label); entityGrid.appendChild(item); }); entitySection.appendChild(entityGrid);
+        const settingsSection = section('Settings'); const settingsItem = make('div', 'restore-item'); const settingsLabel = make('label', 'checkbox-label'); settingsLabel.append(checkbox('exportSettings', 'settings', 'export-settings-checkbox', true), make('span', '', 'Settings')); settingsItem.appendChild(settingsLabel); settingsSection.appendChild(settingsItem);
+        form.append(typeSection, categorySection, entitySection, settingsSection); body.appendChild(form); const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('exportModal')); const exportButton = make('button', 'btn btn-primary', 'Export Selected'); exportButton.type = 'button'; exportButton.addEventListener('click', () => this.processExport()); actions.append(cancel, exportButton); content.append(close, header, body, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('exportModal');
+      },
+
+      renderSafeExportFieldsList(typeId, container) {
+        const type = this.data.entityTypes[typeId]; if (!type) return;
+        container.replaceChildren();
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const checkbox = (name, value, className) => { const input = document.createElement('input'); input.type = 'checkbox'; input.name = name; input.value = value; input.checked = true; input.className = `elistly-checkbox ${className}`; input.dataset.typeId = typeId; return input; };
+        (type.fields || []).forEach(field => { const item = make('div', 'restore-field-item restore-field-item-card'); const label = make('label', 'checkbox-label u-mb-0'); label.append(checkbox('exportField', field.name || '', 'export-field-checkbox'), make('span', '', field.label || field.name || '')); item.appendChild(label); if (field.type === 'dropdown') { const options = make('div', 'restore-options-list'); (field.options || []).forEach((option, index) => { const row = make('label', 'checkbox-label restore-option-item u-ml-150'); const input = checkbox('exportOption', String(index), 'export-option-checkbox'); input.dataset.fieldName = field.name || ''; row.append(input, make('span', '', `${option.value || ''} (${option.nameValue || ''})`)); options.appendChild(row); }); item.appendChild(options); } container.appendChild(item); });
+      },
       showExportModal() {
+        return this.showSafeExportModal();
         // Build export selection modal
         const defaultEntityTypes = Object.keys(this.data.entityTypes);
         const modalHtml = `
@@ -6933,6 +6974,7 @@ const App = {
       },
 
       renderExportFieldsList(typeId, container) {
+        return this.renderSafeExportFieldsList(typeId, container);
         const type = this.data.entityTypes[typeId];
         if (!type) return;
         container.innerHTML = (type.fields || []).map((field, fIdx) => {
@@ -6996,13 +7038,13 @@ const App = {
         selectedEntityTypes.forEach(typeId => {
           const type = JSON.parse(JSON.stringify(this.data.entityTypes[typeId]));
           // Only include selected fields
-          const fieldCheckboxes = Array.from(form.querySelectorAll(`input[name='exportField_${typeId}']:checked`));
+          const fieldCheckboxes = Array.from(form.querySelectorAll('.export-field-checkbox:checked')).filter(input => input.dataset.typeId === typeId);
           if (fieldCheckboxes.length > 0) {
             type.fields = type.fields.filter(f => fieldCheckboxes.some(cb => cb.value === f.name));
             // For dropdown fields, filter options
             type.fields.forEach(field => {
               if (field.type === 'dropdown') {
-                const optionCheckboxes = Array.from(form.querySelectorAll(`input[name='exportOption_${typeId}_${field.name}']:checked`));
+                const optionCheckboxes = Array.from(form.querySelectorAll('.export-option-checkbox:checked')).filter(input => input.dataset.typeId === typeId && input.dataset.fieldName === field.name);
                 if (optionCheckboxes.length > 0) {
                   field.options = field.options.filter((opt, idx) => optionCheckboxes.some(cb => parseInt(cb.value) === idx));
                 }

@@ -223,7 +223,125 @@ async function testQrRenderingIsLocalOnly() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly };
+async function testCompleteImportedDataBoundary() {
+  await withPage(async page => {
+    const requests = [];
+    page.on('request', request => requests.push(request.url()));
+    const payload = `<img src="/missing-${marker}-boundary" onerror="window.__boundaryHits=(window.__boundaryHits||0)+1"><svg onload="window.__boundaryHits=(window.__boundaryHits||0)+1"></svg>`;
+    const hostileId = `type'\");window.__boundaryHits=(window.__boundaryHits||0)+1;//`;
+    const hostileField = `field\"><img src=x onerror=window.__boundaryHits=(window.__boundaryHits||0)+1>`;
+    const fixture = {
+      entityTypes: {
+        [hostileId]: {
+          id: hostileId, label: payload, icon: payload, categories: [`cat-${marker}`],
+          fields: [{ name: hostileField, label: payload, type: 'dropdown', options: [{ value: payload, nameValue: `東京 ${payload}` }] }],
+          associations: [{ name: `assoc-${hostileField}`, label: payload, association: { kind: 'belongs_to', targetType: hostileId } }]
+        }
+      },
+      categories: { [`cat-${marker}`]: { id: `cat-${marker}`, label: payload, icon: payload } },
+      entities: { [`entity-${marker}`]: { id: `entity-${marker}`, type: hostileId, name: payload, [hostileField]: payload } }
+    };
+    await importFixtureThroughFileInput(page, fixture);
+    await page.locator('#processImportBtn').click();
+    const persisted = await page.evaluate(({ hostileId, hostileField, payload }) => ({
+      type: App.data.entityTypes[hostileId], entity: App.data.entities[`entity-${window.__marker}`], storage: localStorage.getItem('elistlyData')
+    }), { hostileId, hostileField, payload });
+    assert.equal(persisted.type.fields[0].name, hostileField, 'hostile field name must persist exactly before rendering');
+    assert.equal(persisted.type.fields[0].options[0].value, payload, 'hostile option value must persist exactly before rendering');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const observed = await page.evaluate(({ hostileId, marker }) => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      window.__boundaryHits = 0;
+      App.showSettingsModal();
+      [...document.querySelectorAll('#settingsModal button')].find(button => button.textContent.includes('Entity types')).click();
+      const manager = document.querySelector('#entityTypeManagerModal');
+      const inspect = root => ({
+        activeNodes: root.querySelectorAll('img,svg,script').length,
+        inlineHandlers: [...root.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name))).length
+      });
+      const managerResult = inspect(manager);
+      manager.querySelector('.btn-secondary').click();
+      const editorResult = inspect(document.querySelector('#entityTypeFormModal'));
+      return {
+        manager: managerResult,
+        editor: editorResult,
+        hits: window.__boundaryHits
+      };
+    }, { hostileId, marker });
+    assert.equal(observed.hits, 0, `type manager executed imported payload ${observed.hits} time(s)`);
+    assert.equal(observed.manager.activeNodes, 0, `type manager created ${observed.manager.activeNodes} active imported node(s)`);
+    assert.equal(observed.manager.inlineHandlers, 0, `type manager retained ${observed.manager.inlineHandlers} inline handler(s)`);
+    assert.equal(observed.editor.activeNodes, 0, `type editor created ${observed.editor.activeNodes} active imported node(s)`);
+    assert.equal(observed.editor.inlineHandlers, 0, `type editor retained ${observed.editor.inlineHandlers} inline handler(s)`);
+    assert.ok(!requests.some(url => url.includes(marker)), `boundary marker reached a browser request: ${requests.join(', ')}`);
+  });
+}
+
+async function testManagerAndExportBoundary() {
+  await withPage(async page => {
+    const requests = [];
+    page.on('request', request => requests.push(request.url()));
+    const payload = `<img src="/missing-${marker}-manager-export" onerror="window.__managerExportHits=(window.__managerExportHits||0)+1"><svg onload="window.__managerExportHits=(window.__managerExportHits||0)+1"></svg>`;
+    const hostileId = `type'\");window.__managerExportHits=(window.__managerExportHits||0)+1;//`;
+    const hostileCategoryId = `category'\");window.__managerExportHits=(window.__managerExportHits||0)+1;//`;
+    const hostileField = `field\"><img src=x onerror=window.__managerExportHits=(window.__managerExportHits||0)+1>`;
+    const fixture = {
+      entityTypes: {
+        [hostileId]: {
+          id: hostileId, label: payload, icon: payload, categories: [hostileCategoryId],
+          fields: [{ name: hostileField, label: payload, type: 'dropdown', options: [{ value: payload, nameValue: `東京 ${payload}` }] }],
+          associations: []
+        }
+      },
+      categories: { [hostileCategoryId]: { id: hostileCategoryId, label: payload, icon: payload } },
+      entities: { [`entity-${marker}`]: { id: `entity-${marker}`, type: hostileId, name: payload, [hostileField]: payload } }
+    };
+    await importFixtureThroughFileInput(page, fixture);
+    await page.locator('#processImportBtn').click();
+    const persisted = await page.evaluate(({ hostileId, hostileCategoryId, hostileField, payload }) => ({
+      type: App.data.entityTypes[hostileId], category: App.data.categories[hostileCategoryId], entity: App.data.entities[`entity-${window.__marker}`], storage: localStorage.getItem('elistlyData')
+    }), { hostileId, hostileCategoryId, hostileField, payload });
+    assert.equal(persisted.category.id, hostileCategoryId, 'hostile category ID must persist exactly before rendering');
+    assert.equal(persisted.type.fields[0].options[0].nameValue, `東京 ${payload}`, 'hostile Unicode option must persist exactly before rendering');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const observed = await page.evaluate(({ hostileId, hostileCategoryId, payload }) => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      window.__managerExportHits = 0;
+      const inspect = root => ({
+        activeNodes: root.querySelectorAll('img,svg,script').length,
+        inlineHandlers: [...root.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name))).length
+      });
+      App.showCategoryManager();
+      const categoryManager = document.querySelector('#categoryManagerModal');
+      const categoryManagerResult = inspect(categoryManager);
+      categoryManager.querySelector('.btn-secondary').click();
+      const categoryEditorResult = inspect(document.querySelector('#categoryFormModal'));
+      document.querySelector('#categoryForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const categorySaved = App.data.categories[hostileCategoryId]?.label;
+      App.deleteCategory(hostileCategoryId);
+      const categoryDeleteResult = inspect(document.querySelector('#confirmDeleteCategoryModal'));
+      document.querySelector('#confirmDeleteCategoryModal').remove();
+      App.deleteEntityType(hostileId);
+      const typeDeleteResult = inspect(document.querySelector('#confirmDeleteTypeModal'));
+      document.querySelector('#confirmDeleteTypeModal').remove();
+      App.showExportModal();
+      const exportModal = document.querySelector('#exportModal');
+      const exportResult = inspect(exportModal);
+      exportModal.querySelector('.expand-entity-type').click();
+      const expandedResult = inspect(exportModal);
+      return { categoryManagerResult, categoryEditorResult, categoryDeleteResult, typeDeleteResult, exportResult, expandedResult, categorySaved, hits: window.__managerExportHits };
+    }, { hostileId, hostileCategoryId, payload });
+    assert.equal(observed.categorySaved, payload, 'ordinary category edit/save must preserve the exact persisted label');
+    for (const [surface, result] of Object.entries(observed).filter(([surface]) => !['hits', 'categorySaved'].includes(surface))) {
+      assert.equal(result.activeNodes, 0, `${surface} created ${result.activeNodes} active imported node(s)`);
+      assert.equal(result.inlineHandlers, 0, `${surface} retained ${result.inlineHandlers} inline handler(s)`);
+    }
+    assert.equal(observed.hits, 0, `manager/export ordinary navigation executed imported payload ${observed.hits} time(s)`);
+    assert.ok(!requests.some(url => url.includes(marker)), `manager/export marker reached a browser request: ${requests.join(', ')}`);
+  });
+}
+
+const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
