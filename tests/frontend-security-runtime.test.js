@@ -68,16 +68,27 @@ async function testImportPreviewIsInert() {
     page.on('request', request => requests.push(request.url()));
     const hostileMarkup = `<img src="/missing-${marker}" onerror="window.__elistlyPreviewHandlerHits++"><svg onload="window.__elistlyPreviewHandlerHits++"></svg><script>window.__elistlyPreviewHandlerHits++</script><span title="${marker}\">attribute breakout</span>&lt;svg onload=window.__elistlyPreviewHandlerHits++&gt;`;
     const hostileIdentity = `type');window.__importPostApplyXss++;void('`;
+    const hostileIcon = `<img src="/missing-${marker}-ordinary-click" onerror="window.__importPostApplyXss++">`;
     const benignType = `type-${marker}`;
     const benignId = `entity-${marker}`;
     const fixture = {
       entityTypes: {
-        [hostileIdentity]: { label: hostileMarkup, fields: [], categories: [] },
+        [hostileIdentity]: {
+          label: hostileMarkup,
+          icon: hostileIcon,
+          fields: [{ name: `field\"><img src=x onerror=window.__importPostApplyXss++>`, label: hostileMarkup, type: 'textarea' }],
+          categories: []
+        },
         [benignType]: { label: hostileMarkup, fields: [], categories: [] }
       },
       categories: { [`category-${marker}`]: { label: hostileMarkup } },
       entities: {
-        [hostileIdentity]: { id: hostileIdentity, type: hostileIdentity, name: `Hostile ${marker} ${hostileMarkup}` },
+        [hostileIdentity]: {
+          id: hostileIdentity,
+          type: hostileIdentity,
+          name: `Hostile ${marker} ${hostileMarkup}`,
+          [`field\"><img src=x onerror=window.__importPostApplyXss++>`]: hostileMarkup
+        },
         [benignId]: { id: benignId, type: benignType, name: `Benign ${marker}`, nested: { label: hostileMarkup } }
       }
     };
@@ -107,29 +118,53 @@ async function testImportPreviewIsInert() {
       App.data = JSON.parse(localStorage.getItem('elistlyData'));
       window.__importPostApplyXss = 0;
       window.__elistlyPreviewHandlerHits = 0;
-      App.showEntityForm = (...args) => { window.__entityFormArgs = args; };
       App.handleSearch(`Hostile ${marker}`);
       const result = document.querySelector('.search-results');
       const button = result.querySelector('.entity-actions button');
       const activeNodes = result.querySelectorAll('img, svg, script').length;
       const inlineHandlers = [...result.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name))).length;
       button.click();
-      return { hits: window.__importPostApplyXss, activeNodes, inlineHandlers, previewHandlerHits: window.__elistlyPreviewHandlerHits };
+      const modal = document.querySelector('#entityModal');
+      const modalActiveNodes = modal.querySelectorAll('img, svg, script').length;
+      const modalInlineHandlers = [...modal.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name))).length;
+      modal.querySelector('#entityViewActions button').click();
+      return { hits: window.__importPostApplyXss, activeNodes, inlineHandlers, modalActiveNodes, modalInlineHandlers, previewHandlerHits: window.__elistlyPreviewHandlerHits };
     }, { hostileIdentity, marker });
     assert.equal(hostileResult.hits, 0, `persisted identity payload executed ${hostileResult.hits} time(s) after an ordinary click`);
     assert.equal(hostileResult.activeNodes, 0, `persisted hostile data created active nodes: ${hostileResult.activeNodes}`);
     assert.equal(hostileResult.inlineHandlers, 0, `persisted hostile data created inline handlers: ${hostileResult.inlineHandlers}`);
+    assert.equal(hostileResult.modalActiveNodes, 0, `persisted hostile data created active modal nodes: ${hostileResult.modalActiveNodes}`);
+    assert.equal(hostileResult.modalInlineHandlers, 0, `persisted hostile data created modal inline handlers: ${hostileResult.modalInlineHandlers}`);
+
     assert.equal(hostileResult.previewHandlerHits, 0, `persisted hostile markup executed ${hostileResult.previewHandlerHits} time(s)`);
     assert.ok(!requests.some(url => url.includes(marker)), `import marker reached a browser request: ${requests.join(', ')}`);
     const benignArgs = await page.evaluate(({ benignId, benignType, marker }) => {
       App.data = JSON.parse(localStorage.getItem('elistlyData'));
-      window.__entityFormArgs = null;
+      document.querySelector('#entityModal').remove();
       App.handleSearch(`Benign ${marker}`);
       document.querySelector('.search-results .entity-actions button').click();
-      return window.__entityFormArgs;
+      const form = document.querySelector('#entityForm');
+      return [form.dataset.typeId, form.dataset.entityId];
     }, { benignId, benignType, marker });
     assert.deepEqual(benignArgs, [benignType, benignId], 'benign entity click should retain its exact navigation identity');
-    console.log(`OBSERVED import preview=0 persisted=${persisted.hostileEntity.id === hostileIdentity} reload-click-hits=${hostileResult.hits} active-nodes=${hostileResult.activeNodes} inline-handlers=${hostileResult.inlineHandlers} marker-requests=${requests.filter(url => url.includes(marker)).length} benign-args=${JSON.stringify(benignArgs)}`);
+    const actionLifecycle = await page.evaluate(async ({ benignId, marker }) => {
+      App.handleSearch(`Benign ${marker}`);
+      const staleButton = document.querySelector('.search-results .entity-actions button');
+      for (let i = 0; i < 50; i += 1) App.handleSearch(`Benign ${marker}`);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const registeredActions = App._clickActions.size;
+      window.__staleDetachedCallbackCalls = 0;
+      const originalShowEntityForm = App.showEntityForm;
+      App.showEntityForm = () => { window.__staleDetachedCallbackCalls += 1; };
+      document.body.appendChild(staleButton);
+      staleButton.click();
+      staleButton.remove();
+      App.showEntityForm = originalShowEntityForm;
+      return { registeredActions, staleDetachedCallbackCalls: window.__staleDetachedCallbackCalls };
+    }, { benignId, marker });
+    assert.ok(actionLifecycle.registeredActions <= 1, `normal rerenders retained ${actionLifecycle.registeredActions} stale actions`);
+    assert.equal(actionLifecycle.staleDetachedCallbackCalls, 0, `detached stale action invoked ${actionLifecycle.staleDetachedCallbackCalls} callback(s)`);
+    console.log(`OBSERVED import preview=0 persisted=${persisted.hostileEntity.id === hostileIdentity} reload-click-hits=${hostileResult.hits} active-nodes=${hostileResult.activeNodes} inline-handlers=${hostileResult.inlineHandlers} modal-active-nodes=${hostileResult.modalActiveNodes} modal-inline-handlers=${hostileResult.modalInlineHandlers} marker-requests=${requests.filter(url => url.includes(marker)).length} benign-args=${JSON.stringify(benignArgs)} registered-actions=${actionLifecycle.registeredActions} stale-detached-callbacks=${actionLifecycle.staleDetachedCallbackCalls}`);
   });
 }
 

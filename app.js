@@ -1389,6 +1389,13 @@ const App = {
         if (!this._clickActions) {
           this._clickActions = new Map();
           this._nextClickActionId = 0;
+          const pruneClickActions = () => {
+            this._clickActions.forEach((_, actionId) => {
+              if (!document.querySelector(`[data-elistly-click-action="${actionId}"]`)) {
+                this._clickActions.delete(actionId);
+              }
+            });
+          };
           document.addEventListener('click', event => {
             const target = event.target.closest('[data-elistly-click-action]');
             const callback = target && this._clickActions.get(target.dataset.elistlyClickAction);
@@ -1396,6 +1403,7 @@ const App = {
             event.preventDefault();
             callback();
           });
+          new MutationObserver(pruneClickActions).observe(document.body, { childList: true, subtree: true });
         }
         const actionId = `elistly-action-${++this._nextClickActionId}`;
         this._clickActions.set(actionId, action);
@@ -3614,121 +3622,99 @@ const App = {
         document.querySelectorAll('.dropdown-menu').forEach(menu => {
           menu.style.display = 'none';
         });
-        
-        // Generate form HTML for actual entity (not entity type). Info modal shows all fields with a value (ignores visibleInCard; dashboard cards use visibleInCard).
+        const makeElement = (tag, className, text) => {
+          const element = document.createElement(tag);
+          if (className) element.className = className;
+          if (text !== undefined) element.textContent = text;
+          return element;
+        };
+        const addIcon = (parent, icon) => parent.appendChild(makeElement('span', 'material-icons', icon));
+        const modal = makeElement('div', 'modal');
+        modal.id = 'entityModal';
+        const content = makeElement('div', 'modal-content');
+        modal.appendChild(content);
+        const close = makeElement('button', 'modal-close');
+        close.type = 'button';
+        close.addEventListener('click', () => this.closeModal('entityModal'));
+        addIcon(close, 'close');
+        content.appendChild(close);
         const titleInfo = isEdit ? this.getEntityTitleInfo(entity) : { title: '' };
-        const viewFields = isEdit ? (type.fields || []).map(field => {
-          const value = this.formatFieldValue(field, entity[field.name]);
-          if (!value) return '';
-          const safeLabel = (field.label || '').replace(/</g, '&lt;');
-          const safeValue = String(value).replace(/</g, '&lt;');
-          return `<div class="entity-detail-field"><span class="entity-detail-label">${safeLabel}</span> <span class="entity-detail-value">${safeValue}</span></div>`;
-        }).filter(Boolean).join('') : '';
-        const viewAssocs = isEdit ? (type.associations || []).map(assoc => {
-          const name = this.getEntityDisplayName(entity[assoc.name]);
-          if (!name) return '';
-          const safeLabel = (assoc.label || '').replace(/</g, '&lt;');
-          const safeValue = String(name).replace(/</g, '&lt;');
-          return `<div class="entity-detail-field"><span class="entity-detail-label">${safeLabel}</span> <span class="entity-detail-value">${safeValue}</span></div>`;
-        }).filter(Boolean).join('') : '';
-        const viewTitle = (isEdit && titleInfo.title) ? titleInfo.title.replace(/</g, '&lt;') : '';
-        const modalHeaderTitle = isEdit ? (viewTitle || type.label) : 'New ' + type.label;
-        const modalHtml = `
-          <div class="modal" id="entityModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('entityModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3 id="entityModalTitle">${modalHeaderTitle}</h3>
-              </div>
-              ${isEdit ? `
-                <div class="modal-body entity-detail-view" id="entityView">
-                  <div class="entity-detail-card">
-                    <div class="entity-detail-head">
-                      <span class="material-icons entity-detail-icon" aria-hidden="true">${type.icon || 'folder'}</span>
-                      <div class="entity-detail-title">${viewTitle}</div>
-                    </div>
-                    <div class="entity-detail-properties">
-                      ${viewFields}
-                      ${viewAssocs}
-                    </div>
-                  </div>
-                </div>
-              ` : ''}
-              <form id="entityForm" data-type-id="${entityType}" data-entity-id="${entityId || ''}" autocomplete="off" onsubmit="App.saveEntity(event, '${entityType}', '${entityId}')">
-                <div class="form-sections ${isEdit ? 'hidden' : ''}" id="entityEdit">
-                  <!-- Basic Information Section -->
-                  <div class="modal-group carded-section">
-                    <h4>Basic Information</h4>
-                    
-                    ${type.enableNameGen ? `
-                      <div class="form-group">
-                        <label>Name</label>
-                        <div class="name-lock-row">
-                          <input type="text" name="name" id="nameInput" value="${type.enableNameGen ? (entity?.autoName || entity?.name || '') : (entity?.name || '')}"
-                                 data-unlocked="false" readonly class="name-lock-input">
-                          <button type="button" class="btn btn-secondary" onclick="App.toggleNameLock(this)"
-                                  title="Unlock to edit name manually">
-                            <span class="material-icons">lock</span>
-                          </button>
-                        </div>
-                        <div class="help-text" id="nameGenStatus">Name will be auto-generated based on fields</div>
-                      </div>
-                    ` : ''}
-                    
-                    ${/* Fields based on the entity type definition */ ''}
-                    ${type.fields.map(field => `
-                      <div class="form-group">
-                        <label for="${field.name}">${field.label}${field.required ? ' *' : ''}</label>
-                        ${this.renderFieldInput(field, entity ? entity[field.name] : '')}
-                      </div>
-                    `).join('')}
-                  </div>
-                  
-                  ${/* Associations Section */ ''}
-                  ${type.associations && type.associations.length > 0 ? `
-                    <div class="modal-group carded-section">
-                      <h4>Links</h4>
-                      ${type.associations.map(assoc => `
-                        <div class="form-group association-field-wrap" data-assoc-name="${assoc.name}">
-                          <label for="${assoc.name}">${assoc.label}</label>
-                          ${this.renderAssociationInput(assoc, entity ? entity[assoc.name] : '')}
-                        </div>
-                      `).join('')}
-                    </div>
-                  ` : ''}
-                </div>
-                
-                <div class="modal-actions">
-                  <div id="entityViewActions" class="${isEdit ? '' : 'hidden'}">
-                    <button type="button" class="btn btn-primary" onclick="App.showEntityEditMode(true)">
-                      <span class="material-icons">edit</span>
-                      Edit
-                    </button>
-                  </div>
-                  <div id="entityEditActions" class="${isEdit ? 'hidden' : ''}">
-                    <button type="button" class="btn btn-secondary" onclick="App.tryCloseEntityModal()">Cancel</button>
-                    ${isEdit ? `
-                      <button type="button" class="btn btn-danger" onclick="App.confirmDelete('${entityId}')">
-                        <span class="material-icons">delete</span>
-                        Delete
-                      </button>
-                    ` : ''}
-                    <button type="submit" class="btn btn-primary">
-                      <span class="material-icons">save</span>
-                      Save
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
+        const viewTitle = isEdit ? titleInfo.title : '';
+        const header = makeElement('div', 'modal-header');
+        const heading = makeElement('h3', '', isEdit ? (viewTitle || type.label || '') : `New ${type.label || ''}`);
+        heading.id = 'entityModalTitle';
+        header.appendChild(heading);
+        content.appendChild(header);
+        if (isEdit) {
+          const view = makeElement('div', 'modal-body entity-detail-view');
+          view.id = 'entityView';
+          const card = makeElement('div', 'entity-detail-card');
+          const head = makeElement('div', 'entity-detail-head');
+          const icon = makeElement('span', 'material-icons entity-detail-icon', type.icon || 'folder');
+          icon.setAttribute('aria-hidden', 'true');
+          head.append(icon, makeElement('div', 'entity-detail-title', viewTitle));
+          card.appendChild(head);
+          const properties = makeElement('div', 'entity-detail-properties');
+          const appendDetail = (label, value) => {
+            if (!value) return;
+            const detail = makeElement('div', 'entity-detail-field');
+            detail.append(makeElement('span', 'entity-detail-label', label), document.createTextNode(' '), makeElement('span', 'entity-detail-value', value));
+            properties.appendChild(detail);
+          };
+          (type.fields || []).forEach(field => appendDetail(field.label || '', this.formatFieldValue(field, entity[field.name])));
+          (type.associations || []).forEach(assoc => appendDetail(assoc.label || '', this.getEntityDisplayName(entity[assoc.name])));
+          card.appendChild(properties);
+          view.appendChild(card);
+          content.appendChild(view);
+        }
+        const form = makeElement('form');
+        form.id = 'entityForm';
+        form.dataset.typeId = entityType;
+        form.dataset.entityId = entityId || '';
+        form.autocomplete = 'off';
+        form.addEventListener('submit', event => this.saveEntity(event, entityType, entityId));
+        const sections = makeElement('div', `form-sections${isEdit ? ' hidden' : ''}`);
+        sections.id = 'entityEdit';
+        const basic = makeElement('div', 'modal-group carded-section');
+        basic.appendChild(makeElement('h4', '', 'Basic Information'));
+        if (type.enableNameGen) {
+          const group = makeElement('div', 'form-group');
+          group.appendChild(makeElement('label', '', 'Name'));
+          const lockRow = makeElement('div', 'name-lock-row');
+          const nameInput = document.createElement('input');
+          nameInput.type = 'text'; nameInput.name = 'name'; nameInput.id = 'nameInput'; nameInput.value = entity?.autoName || entity?.name || '';
+          nameInput.dataset.unlocked = 'false'; nameInput.readOnly = true; nameInput.className = 'name-lock-input';
+          const unlock = makeElement('button', 'btn btn-secondary');
+          unlock.type = 'button'; unlock.title = 'Unlock to edit name manually';
+          unlock.addEventListener('click', () => this.toggleNameLock(unlock));
+          addIcon(unlock, 'lock');
+          lockRow.append(nameInput, unlock);
+          group.append(lockRow, makeElement('div', 'help-text', 'Name will be auto-generated based on fields'));
+          group.lastElementChild.id = 'nameGenStatus';
+          basic.appendChild(group);
+        }
+        (type.fields || []).forEach(field => basic.appendChild(this.createEntityFormField(field, entity ? entity[field.name] : '')));
+        sections.appendChild(basic);
+        if (type.associations && type.associations.length) {
+          const associations = makeElement('div', 'modal-group carded-section');
+          associations.appendChild(makeElement('h4', '', 'Links'));
+          type.associations.forEach(assoc => associations.appendChild(this.createEntityAssociationField(assoc, entity ? entity[assoc.name] : '')));
+          sections.appendChild(associations);
+        }
+        form.appendChild(sections);
+        const actions = makeElement('div', 'modal-actions');
+        const viewActions = makeElement('div', ''); viewActions.id = 'entityViewActions'; if (!isEdit) viewActions.classList.add('hidden');
+        const edit = makeElement('button', 'btn btn-primary', 'Edit'); edit.type = 'button'; edit.addEventListener('click', () => this.showEntityEditMode(true));
+        edit.prepend(makeElement('span', 'material-icons', 'edit')); viewActions.appendChild(edit);
+        const editActions = makeElement('div', ''); editActions.id = 'entityEditActions'; if (isEdit) editActions.classList.add('hidden');
+        const cancel = makeElement('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.tryCloseEntityModal()); editActions.appendChild(cancel);
+        if (isEdit) {
+          const remove = makeElement('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDelete(entityId));
+          remove.prepend(makeElement('span', 'material-icons', 'delete')); editActions.appendChild(remove);
+        }
+        const save = makeElement('button', 'btn btn-primary', 'Save'); save.type = 'submit'; save.prepend(makeElement('span', 'material-icons', 'save')); editActions.appendChild(save);
+        actions.append(viewActions, editActions); form.appendChild(actions); content.appendChild(form);
+        document.body.appendChild(modal);
         this.showModal('entityModal');
         
         // Initialize name generation if needed
@@ -3736,86 +3722,73 @@ const App = {
           this.initEntityFormNameGen();
         }
 
-        const form = document.getElementById('entityForm');
-        if (form) {
-          const snapshot = this.serializeFormData(form);
-          form.dataset.initialSnapshot = snapshot;
-          form.dataset.dirty = 'false';
-          form.addEventListener('input', () => {
-            form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
-          });
-          form.addEventListener('change', () => {
-            form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
-          });
-        }
+        const snapshot = this.serializeFormData(form);
+        form.dataset.initialSnapshot = snapshot;
+        form.dataset.dirty = 'false';
+        form.addEventListener('input', () => {
+          form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
+        });
+        form.addEventListener('change', () => {
+          form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
+        });
       },
-      
-      renderFieldInput(field, value) {
-        switch (field.type) {
-          case 'dropdown':
-            return `
-              <select id="${field.name}" name="${field.name}" ${field.required ? 'required' : ''}>
-                <option value="">Select ${field.label}</option>
-                ${(field.options || []).map(opt => `
-                  <option value="${(opt.value || '').replace(/"/g, '&quot;')}" ${value === opt.value ? 'selected' : ''}>
-                    ${(opt.label || opt.value || '').replace(/</g, '&lt;')}
-                  </option>
-                `).join('')}
-              </select>
-            `;
-          case 'qr':
-            const qrValue = value || '';
-            const qr = this.createLocalQrDataUrl(qrValue, 160);
-            return `
-              <div class="qr-field-wrap">
-                <input type="text" id="${field.name}" name="${field.name}" value="${qrValue.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" readonly>
-                ${qr.src ? `<img src="${qr.src}" class="qr-preview" alt="QR code">` : ''}
-              </div>
-              <div class="help-text">${qr.error || 'QR code is generated on save and stays unique to this item.'}</div>
-            `;
-          case 'textarea':
-            return `
-              <textarea id="${field.name}" name="${field.name}" autocomplete="off" ${field.required ? 'required' : ''}>${value || ''}</textarea>
-            `;
-          case 'date':
-            return `
-              <input type="date" id="${field.name}" name="${field.name}" value="${value || ''}" ${field.required ? 'required' : ''}>
-            `;
-          case 'number':
-            return `
-              <input type="number" id="${field.name}" name="${field.name}" value="${value != null && value !== '' ? value : ''}" ${field.required ? 'required' : ''}>
-            `;
-          case 'checkbox':
-            const checked = value === true || value === 'on' || value === '1' || value === 'yes';
-            return `<input type="checkbox" class="elistly-checkbox" id="${field.name}" name="${field.name}" value="yes" ${checked ? 'checked' : ''}>`;
-          default:
-            return `
-              <input type="text" id="${field.name}" name="${field.name}" autocomplete="off" value="${value != null ? value : ''}" ${field.required ? 'required' : ''}>
-            `;
+
+      createEntityFormField(field, value) {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        const label = document.createElement('label');
+        label.htmlFor = field.name;
+        label.textContent = `${field.label || ''}${field.required ? ' *' : ''}`;
+        group.appendChild(label);
+        let input;
+        if (field.type === 'dropdown') {
+          input = document.createElement('select');
+          const placeholder = new Option(`Select ${field.label || ''}`, '');
+          input.appendChild(placeholder);
+          (field.options || []).forEach(option => input.appendChild(new Option(option.label || option.value || '', option.value || '', false, value === option.value)));
+        } else if (field.type === 'textarea') {
+          input = document.createElement('textarea'); input.textContent = value || '';
+        } else if (field.type === 'checkbox') {
+          input = document.createElement('input'); input.type = 'checkbox'; input.className = 'elistly-checkbox'; input.value = 'yes'; input.checked = value === true || value === 'on' || value === '1' || value === 'yes';
+        } else {
+          input = document.createElement('input'); input.type = field.type === 'date' || field.type === 'number' ? field.type : 'text'; input.value = value != null ? value : '';
+          if (field.type === 'qr') {
+            input.readOnly = true;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'qr-field-wrap';
+            input.id = field.name; input.name = field.name;
+            wrapper.appendChild(input);
+            const qr = this.createLocalQrDataUrl(value || '', 160);
+            if (qr.src) {
+              const image = document.createElement('img');
+              image.src = qr.src; image.className = 'qr-preview'; image.alt = 'QR code'; wrapper.appendChild(image);
+            }
+            group.appendChild(wrapper);
+            group.appendChild(Object.assign(document.createElement('div'), { className: 'help-text', textContent: qr.error || 'QR code is generated on save and stays unique to this item.' }));
+            return group;
+          }
         }
+        input.id = field.name; input.name = field.name; input.autocomplete = 'off'; if (field.required) input.required = true;
+        group.appendChild(input);
+        return group;
       },
-      
-      renderAssociationInput(assoc, value) {
+
+      createEntityAssociationField(assoc, value) {
+        const group = document.createElement('div'); group.className = 'form-group association-field-wrap'; group.dataset.assocName = assoc.name;
+        const label = document.createElement('label'); label.htmlFor = assoc.name; label.textContent = assoc.label || ''; group.appendChild(label);
+        const row = document.createElement('div'); row.className = 'association-field-row';
+        const select = document.createElement('select'); select.id = assoc.name; select.name = assoc.name; if (assoc.required) select.required = true; select.appendChild(new Option('— None —', ''));
         const targetType = assoc.association.targetType;
-        const targetTypeLabel = this.data.entityTypes[targetType]?.label || targetType;
-        const options = Object.values(this.data.entities)
-          .filter(e => e.type === targetType);
-        
-        return `
-          <div class="association-field-row">
-            <select id="${assoc.name}" name="${assoc.name}" ${assoc.required ? 'required' : ''}>
-              <option value="">— None —</option>
-              ${options.map(opt => `
-                <option value="${opt.id}" ${value === opt.id ? 'selected' : ''}>
-                  ${this.getEntityDisplayName(opt)}
-                </option>
-              `).join('')}
-            </select>
-            <a href="#" class="association-add-link" data-target-type="${targetType}" data-assoc-name="${assoc.name}" data-target-label="${targetTypeLabel.replace(/"/g, '&quot;')}" onclick="App.showInlineAddEntity(event, this); return false;">
-              <span class="material-icons">add</span> Add ${targetTypeLabel}
-            </a>
-          </div>
-        `;
+        Object.values(this.data.entities).filter(entity => entity.type === targetType).forEach(entity => select.appendChild(new Option(this.getEntityDisplayName(entity), entity.id, false, value === entity.id)));
+        const link = document.createElement('a'); link.href = '#'; link.className = 'association-add-link'; link.dataset.targetType = targetType; link.dataset.assocName = assoc.name; link.dataset.targetLabel = this.data.entityTypes[targetType]?.label || targetType;
+        link.append(document.createTextNode('Add '), document.createTextNode(link.dataset.targetLabel));
+        link.addEventListener('click', event => this.showInlineAddEntity(event, link));
+        row.append(select, link); group.appendChild(row); return group;
+      },
+      renderFieldInput(field, value) {
+        const host = document.createElement('div');
+        host.appendChild(this.createEntityFormField(field, value));
+        return host.innerHTML;
       },
 
       showInlineAddEntity(event, linkEl) {
@@ -3824,36 +3797,30 @@ const App = {
         if (!link || !link.dataset) return;
         const targetType = link.dataset.targetType;
         const assocName = link.dataset.assocName;
-        const targetLabel = (link.dataset.targetLabel || targetType).replace(/&quot;/g, '"');
+        const targetLabel = link.dataset.targetLabel || targetType;
         const wrap = link.closest('.association-field-wrap');
         if (wrap.querySelector('.inline-add-entity')) return;
         const type = this.data.entityTypes[targetType];
         if (!type || !type.fields) return;
-        const fieldsHtml = type.fields.map(f => {
-          const id = `inline_${targetType}_${f.name}`;
-          if (f.type === 'textarea') return `<div class="form-group"><label for="${id}">${f.label}</label><textarea id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></textarea></div>`;
-          if (f.type === 'date') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="date" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
-          if (f.type === 'number') return `<div class="form-group"><label for="${id}">${f.label}</label><input type="number" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
-          if (f.type === 'checkbox') return `<div class="form-group"><label class="checkbox-label"><input type="checkbox" class="elistly-checkbox" id="${id}" name="${f.name}" value="yes"><span>${f.label}</span></label></div>`;
-          if (f.type === 'dropdown' && f.options && f.options.length) return `<div class="form-group"><label for="${id}">${f.label}</label><select id="${id}" name="${f.name}"><option value="">—</option>${f.options.map(o => `<option value="${o.value}">${o.label || o.value}</option>`).join('')}</select></div>`;
-          return `<div class="form-group"><label for="${id}">${f.label}</label><input type="text" id="${id}" name="${f.name}" ${f.required ? 'required' : ''}></div>`;
-        }).join('');
         const inlineEl = document.createElement('div');
         inlineEl.className = 'inline-add-entity';
-        inlineEl.innerHTML = `
-          <div class="inline-add-title">New ${targetLabel}</div>
-          <form class="inline-add-form" data-target-type="${targetType}" data-assoc-name="${assocName}">
-            ${fieldsHtml}
-            <div class="inline-add-actions">
-              <button type="submit" class="btn btn-primary">Add</button>
-              <button type="button" class="btn btn-secondary" onclick="this.closest('.inline-add-entity').remove()">Cancel</button>
-            </div>
-          </form>
-        `;
-        inlineEl.querySelector('form').addEventListener('submit', (e) => {
+        const title = document.createElement('div'); title.className = 'inline-add-title'; title.textContent = `New ${targetLabel}`;
+        const form = document.createElement('form'); form.className = 'inline-add-form'; form.dataset.targetType = targetType; form.dataset.assocName = assocName;
+        type.fields.forEach(field => {
+          const group = this.createEntityFormField({ ...field, name: field.name }, '');
+          const control = group.querySelector('[name]');
+          if (control) control.id = `inline_${targetType}_${field.name}`;
+          const label = group.querySelector('label');
+          if (label && control) label.htmlFor = control.id;
+          form.appendChild(group);
+        });
+        const actions = document.createElement('div'); actions.className = 'inline-add-actions';
+        const add = document.createElement('button'); add.type = 'submit'; add.className = 'btn btn-primary'; add.textContent = 'Add';
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', () => inlineEl.remove());
+        actions.append(add, cancel); form.appendChild(actions); inlineEl.append(title, form);
+        form.addEventListener('submit', (e) => {
           e.preventDefault();
-          const form = e.target;
-          const formData = new FormData(form);
+          const formData = new FormData(e.target);
           const data = { id: this.generateId(), type: targetType };
           formData.forEach((val, key) => { if (val !== '') data[key] = val; });
           const t = this.data.entityTypes[targetType];
@@ -3863,7 +3830,7 @@ const App = {
           else if (t.fields.some(f => f.name === 'name')) data.name = data.name || '';
           this.data.entities[data.id] = data;
           this.saveData();
-          const select = wrap.querySelector(`select[name="${assocName}"]`);
+          const select = wrap.querySelector('select');
           if (select) {
             const opt = document.createElement('option');
             opt.value = data.id;
