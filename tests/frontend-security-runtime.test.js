@@ -583,13 +583,15 @@ async function testImportCollisionHardening() {
   await withPage(async page => {
     const original = { version: 'test', settings: {}, categories: {}, entityTypes: { device: { id: 'device', label: 'current', fields: [], categories: [] } }, entities: {}, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
     const incoming = { entityTypes: { device: { id: 'device', label: 'incoming', fields: [], categories: [] } } };
+
     await page.evaluate(original => {
       localStorage.clear();
       localStorage.setItem('elistlyData', JSON.stringify(original));
       localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
       localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
       Storage._cached = structuredClone(original);
-      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: null } }) } };
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
       window.ELISTLY_API_URL = '/mock';
       window.fetch = async () => { throw new Error('remote rejected'); };
     }, original);
@@ -612,20 +614,121 @@ async function testImportCollisionHardening() {
     await page.getByText('No signed-in account is available to save this import.').waitFor();
     assert.deepEqual(await page.evaluate(() => App.data), original, 'missing authenticated user must restore in-memory data');
 
-    await page.evaluate(() => { backendClient = null; window.ELISTLY_API_URL = ''; });
-    await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"triple":{"label":"one"},"triple":{"label":"two"},"triple":{"label":"three"}}}', original, false);
-    const duplicateDescriptions = await page.locator('[data-import-conflict]').evaluateAll(nodes => nodes.map(node => node.textContent));
-    assert.match(duplicateDescriptions[0], /earlier {"label":"one"}; later {"label":"two"}/, 'first duplicate must show first effective value');
-    assert.match(duplicateDescriptions[1], /earlier {"label":"two"}; later {"label":"three"}/, 'second duplicate must show immediately prior effective value');
-    for (const conflict of await page.locator('[data-import-conflict]').all()) await conflict.getByRole('radio', { name: 'Skip' }).check();
+    await page.evaluate(original => {
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
+      window.fetch = async () => new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 });
+      window.__originalWriteUserCache = Storage._writeUserCache;
+      Storage._writeUserCache = () => {};
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
     await page.locator('#processImportBtn:not([disabled])').click();
-    assert.equal(await page.evaluate(() => App.data.entityTypes.triple.label), 'one', 'skip chain must retain earlier effective value');
+    await page.getByText('Account cache persistence verification failed.').waitFor();
+    const cacheVerificationRollback = await page.evaluate(() => ({ data: App.data, generic: localStorage.getItem('elistlyData'), user: localStorage.getItem('elistlyData:user:user-1'), updated: localStorage.getItem('elistlyData:userUpdated:user-1'), cached: Storage._cached, cachedUserId: Storage._cachedUserId, success: document.body.textContent.includes('Import complete') }));
+    assert.deepEqual(cacheVerificationRollback.data, original, 'cache verification failure must restore in-memory data');
+    assert.equal(cacheVerificationRollback.generic, JSON.stringify(original), 'cache verification failure must restore generic cache');
+    assert.equal(cacheVerificationRollback.user, JSON.stringify(original), 'cache verification failure must restore account cache');
+    assert.equal(cacheVerificationRollback.updated, 'before', 'cache verification failure must restore account timestamp');
+    assert.deepEqual(cacheVerificationRollback.cached, original, 'cache verification failure must restore Storage cache');
+    assert.equal(cacheVerificationRollback.cachedUserId, 'user-1', 'cache verification failure must restore Storage cache ownership');
+    assert.equal(cacheVerificationRollback.success, false, 'cache verification failure must not report success');
+    await page.evaluate(() => { Storage._writeUserCache = window.__originalWriteUserCache; });
 
-    await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"triple":{"label":"one"},"triple":{"label":"two"},"triple":{"label":"three"}}}', original, false);
-    await page.locator('[data-import-conflict]').nth(0).getByRole('radio', { name: 'Overwrite' }).check();
-    await page.locator('[data-import-conflict]').nth(1).getByRole('radio', { name: 'Skip' }).check();
+    await page.evaluate(original => {
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTIifQ.' } } }) } };
+      window.__putCalls = 0;
+      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
     await page.locator('#processImportBtn:not([disabled])').click();
-    assert.equal(await page.evaluate(() => App.data.entityTypes.triple.label), 'two', 'overwrite then skip must retain the immediately prior effective value');
+    await page.getByText('Import was not saved; original data was restored.').waitFor();
+    const mismatchedIdentity = await page.evaluate(() => ({ puts: window.__putCalls, data: App.data, user1: localStorage.getItem('elistlyData:user:user-1'), user2: localStorage.getItem('elistlyData:user:user-2'), success: document.body.textContent.includes('Import complete') }));
+    assert.equal(mismatchedIdentity.puts, 0, 'user and exact bearer mismatch must reject before PUT');
+    assert.deepEqual(mismatchedIdentity.data, original, 'user and exact bearer mismatch must restore in-memory data');
+    assert.equal(mismatchedIdentity.user1, JSON.stringify(original), 'user and exact bearer mismatch must preserve original account cache');
+    assert.equal(mismatchedIdentity.user2, null, 'user and exact bearer mismatch must not write a different account cache');
+    assert.equal(mismatchedIdentity.success, false, 'user and exact bearer mismatch must not report success');
+
+    await page.evaluate(original => {
+      let userId = 'user-1';
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: userId } } }),
+        getSession: async () => ({ data: { session: { access_token: userId === 'user-1' ? 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' : 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTIifQ.' } } })
+      } };
+      window.__switchImportIdentity = () => { userId = 'user-2'; };
+      window.__putCalls = 0;
+      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.evaluate(() => window.__switchImportIdentity());
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('Signed-in account changed. Reload and review this import again.').waitFor();
+    const changedIdentity = await page.evaluate(() => ({ puts: window.__putCalls, data: App.data, preview: App._importDataPreview, success: document.body.textContent.includes('Import complete') }));
+    assert.equal(changedIdentity.puts, 0, 'identity change after preview must reject before PUT');
+    assert.deepEqual(changedIdentity.data, original, 'identity change after preview must preserve in-memory data');
+    assert.equal(changedIdentity.preview, null, 'identity change after preview must invalidate the preview');
+    assert.equal(changedIdentity.success, false, 'identity change after preview must not report success');
+
+    await page.evaluate(original => {
+      localStorage.clear();
+      localStorage.setItem('elistlyData', JSON.stringify(original));
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(original));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'before');
+      Storage._cached = structuredClone(original);
+      Storage._cachedUserId = 'user-1';
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
+      window.__authorizations = [];
+      window.fetch = async (_, options) => { window.__authorizations.push(options.headers.Authorization); return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+    }, original);
+    await importFixtureThroughFileInput(page, incoming, null, original, false);
+    await page.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').click();
+    await page.getByText('Import complete:').waitFor();
+    const matchedIdentity = await page.evaluate(() => ({ authorizations: window.__authorizations, user1: localStorage.getItem('elistlyData:user:user-1'), user2: localStorage.getItem('elistlyData:user:user-2'), updated1: localStorage.getItem('elistlyData:userUpdated:user-1'), success: document.body.textContent.includes('Import complete') }));
+    assert.deepEqual(matchedIdentity.authorizations, ['Bearer eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.'], 'PUT must use the exact captured bearer');
+    assert.match(matchedIdentity.user1, /incoming/, 'matching bearer must write the matching account cache');
+    assert.equal(matchedIdentity.user2, null, 'matching bearer must not write another account cache');
+    assert.equal(matchedIdentity.updated1, 'after', 'matching bearer must verify the matching account timestamp');
+    assert.equal(matchedIdentity.success, true, 'matching bearer and account identity must report success');
+
+    await page.evaluate(() => { backendClient = null; window.ELISTLY_API_URL = ''; });
+    const tripleRaw = '{"entityTypes":{"triple":{"label":"one"},"triple":{"label":"two"},"triple":{"label":"three"}}}';
+    for (const [choices, expected, duplicateSkipped, duplicateOverwritten, displayedEarlier] of [
+      [['Skip', 'Skip'], 'one', 2, 0, 'one'],
+      [['Skip', 'Overwrite'], 'three', 1, 1, 'one'],
+      [['Overwrite', 'Skip'], 'two', 1, 1, 'two'],
+      [['Overwrite', 'Overwrite'], 'three', 0, 2, 'two']
+    ]) {
+      await importFixtureThroughFileInput(page, {}, tripleRaw, original, false);
+      const conflicts = page.locator('[data-import-conflict]');
+      await conflicts.nth(0).getByRole('radio', { name: choices[0] }).check();
+      assert.match(await conflicts.nth(1).textContent(), new RegExp(`earlier \\{"label":"${displayedEarlier}"\\}; later \\{"label":"three"\\}`), `${choices.join('/')} must describe the effective earlier value after the upstream choice`);
+      await conflicts.nth(1).getByRole('radio', { name: choices[1] }).check();
+      await page.locator('#processImportBtn:not([disabled])').click();
+      const outcome = await page.evaluate(() => ({ final: App.data.entityTypes.triple.label, notice: document.body.textContent }));
+      assert.equal(outcome.final, expected, `${choices.join('/')} must retain the decision-driven effective duplicate value`);
+      assert.match(outcome.notice, new RegExp(`duplicate members skipped ${duplicateSkipped}; duplicate members overwritten ${duplicateOverwritten}`), `${choices.join('/')} must report duplicate-member outcomes separately`);
+    }
 
     await importFixtureThroughFileInput(page, {}, '{"entityTypes":{"__proto__":{"label":"polluted"}}}', original, false);
     await page.getByText('Import contains reserved entityTypes ID: __proto__.').waitFor();

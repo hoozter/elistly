@@ -73,10 +73,24 @@ async function getAuthUser() {
   return user || null;
 }
 
+function getAccessTokenSubject(accessToken) {
+  if (typeof accessToken !== 'string') return null;
+  const payload = accessToken.split('.')[1];
+  if (!payload) return null;
+  try {
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(normalized.padEnd(normalized.length + (4 - normalized.length % 4) % 4, '='));
+    const subject = JSON.parse(json).sub;
+    return typeof subject === 'string' && subject ? subject : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function apiRequest(path, options = {}) {
   const apiUrl = getApiUrl();
   if (!apiUrl) throw new Error('ELISTLY_API_URL is not configured.');
-  const session = await getAuthSession();
+  const session = Object.prototype.hasOwnProperty.call(options, 'authSession') ? options.authSession : await getAuthSession();
   const headers = Object.assign({}, options.headers || {});
   if (session && session.access_token && !headers.Authorization) {
     headers.Authorization = `Bearer ${session.access_token}`;
@@ -108,6 +122,7 @@ const Storage = {
   USER_CACHE_PREFIX: 'elistlyData:user:',
   USER_UPDATED_PREFIX: 'elistlyData:userUpdated:',
   _cached: null,
+  _cachedUserId: null,
 
   _getUserCacheKey(userId) {
     return `${this.USER_CACHE_PREFIX}${userId}`;
@@ -157,6 +172,21 @@ const Storage = {
     } catch (_) {}
   },
 
+  async getImportIdentity() {
+    if (!backendClient) return null;
+    const session = await getAuthSession();
+    const user = await getAuthUser();
+    const accessToken = session && session.access_token;
+    const userId = user && user.id;
+    const bearerUserId = getAccessTokenSubject(accessToken);
+    const sessionUserId = session && session.user && session.user.id;
+    if (!accessToken || !userId) throw new Error('No signed-in account is available to save this import.');
+    if (!bearerUserId || bearerUserId !== userId || (sessionUserId && sessionUserId !== bearerUserId)) {
+      throw new Error('Signed-in account identity could not be confirmed.');
+    }
+    return Object.freeze({ userId: bearerUserId, accessToken });
+  },
+
   getAppData(options = {}) {
     if (backendClient) return this.getAppDataAsync(options);
     try {
@@ -180,6 +210,7 @@ const Storage = {
 
         if (cachedPayload) {
           this._cached = cachedPayload;
+          this._cachedUserId = user.id;
           this.syncRemoteInBackground(user.id, cachedUpdatedAt, onRemoteSync);
           return this._cached;
         }
@@ -191,6 +222,7 @@ const Storage = {
         }
         const remote = res.data || {};
         this._cached = remote && remote.payload ? remote.payload : null;
+        this._cachedUserId = user.id;
         this._writeUserCache(user.id, this._cached || {}, remote && remote.updated_at ? remote.updated_at : '');
         return this._cached;
       } catch (e) {
@@ -218,6 +250,7 @@ const Storage = {
       const remotePayload = data && data.payload ? data.payload : null;
       const changed = JSON.stringify(remotePayload || {}) !== JSON.stringify(this._cached || {});
       this._cached = remotePayload;
+      this._cachedUserId = userId;
       this._writeUserCache(userId, remotePayload || {}, remoteUpdatedAt);
 
       if (changed && onRemoteSync) onRemoteSync(remotePayload);
@@ -240,6 +273,7 @@ const Storage = {
         const user = await getAuthUser();
         if (!user) return;
         this._cached = data;
+        this._cachedUserId = user.id;
         const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
         if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
         const row = res.data || {};
@@ -257,18 +291,18 @@ const Storage = {
     }
   },
 
-  async setAppDataForImport(data) {
+  async setAppDataForImport(data, identity) {
     if (backendClient) {
-      const user = await getAuthUser();
-      if (!user) throw new Error('No signed-in account is available to save this import.');
-      const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
+      if (!identity || !identity.userId || !identity.accessToken || this._cachedUserId !== identity.userId) throw new Error('Signed-in account identity could not be confirmed.');
+      const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
       this._cached = data;
-      this._writeUserCache(user.id, data, updatedAt);
+      this._cachedUserId = identity.userId;
+      this._writeUserCache(identity.userId, data, updatedAt);
       const serialized = JSON.stringify(data);
-      if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(user.id)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(user.id)) !== String(updatedAt)) {
+      if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(identity.userId)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(identity.userId)) !== String(updatedAt)) {
         throw new Error('Account cache persistence verification failed.');
       }
       return true;
@@ -1007,6 +1041,7 @@ const App = {
         this.closeModal('settingsModal');
         await backendClient.auth.signOut();
         Storage._cached = null;
+        Storage._cachedUserId = null;
         window.location.reload();
       },
 
@@ -7209,12 +7244,13 @@ const App = {
           if (!file) return;
           if (file.size > App.importLimits.maxBytes) return App.showImportError('Import file exceeds the 1 MiB limit.');
           const reader = new FileReader();
-          reader.onload = function(ev) {
+          reader.onload = async function(ev) {
             try {
               const parsed = App.parseImportJson(ev.target.result);
               App._importRawText = ev.target.result;
               App._importDuplicateConflicts = parsed.duplicates;
               App._importDataPreview = parsed.value;
+              try { App._importPreviewIdentity = await Storage.getImportIdentity(); } catch (_) { App._importPreviewIdentity = null; }
               App.renderImportPreview(parsed.value);
             } catch (err) {
               App.showImportError(err.message || 'Invalid JSON file.');
@@ -7237,6 +7273,7 @@ const App = {
         this._importDataPreview = null;
         this._importDuplicateConflicts = [];
         this._importRawText = null;
+        this._importPreviewIdentity = null;
       },
 
       parseImportJson(source) {
@@ -7458,13 +7495,14 @@ const App = {
           const key = localStorage.key(i);
           if (key !== null) entries.push([key, localStorage.getItem(key)]);
         }
-        return { entries, cached: Storage._cached };
+        return { entries, cached: Storage._cached, cachedUserId: Storage._cachedUserId };
       },
 
       restoreImportStorageState(snapshot) {
         localStorage.clear();
         for (const [key, value] of snapshot.entries) localStorage.setItem(key, value);
         Storage._cached = snapshot.cached;
+        Storage._cachedUserId = snapshot.cachedUserId;
       },
 
       renderImportConflict(conflict) {
@@ -7472,9 +7510,8 @@ const App = {
         item.className = 'restore-item';
         item.dataset.importConflict = conflict.id;
         const description = document.createElement('p');
-        description.textContent = conflict.kind === 'duplicate'
-          ? `${conflict.path}: earlier ${this.importSafeText(conflict.earlier)}; later ${this.importSafeText(conflict.later)}`
-          : `${conflict.collection} ID ${conflict.idValue}: current ${this.importSafeText(conflict.current)}; incoming ${this.importSafeText(conflict.incoming)}`;
+        description.dataset.importConflictDescription = conflict.id;
+        description.textContent = this.importConflictDescription(conflict);
         item.appendChild(description);
         for (const choice of ['skip', 'overwrite']) {
           const label = document.createElement('label');
@@ -7489,8 +7526,43 @@ const App = {
         return item;
       },
 
-      collectImportConflicts(imported, duplicates) {
-        const conflicts = duplicates.map(conflict => ({ ...conflict, signature: `${conflict.path}\n${this.importFingerprint(conflict.earlier)}\n${this.importFingerprint(conflict.later)}` }));
+      importConflictDescription(conflict) {
+        return conflict.kind === 'duplicate'
+          ? `${conflict.path}: earlier ${this.importSafeText(conflict.earlier)}; later ${this.importSafeText(conflict.later)}`
+          : `${conflict.collection} ID ${conflict.idValue}: current ${this.importSafeText(conflict.current)}; incoming ${this.importSafeText(conflict.incoming)}`;
+      },
+
+      readImportConflictDecisions() {
+        return new Map((this._importConflicts || []).map(conflict => [conflict.id, document.querySelector(`[data-import-conflict="${CSS.escape(conflict.id)}"] input[type="radio"]:checked`)?.value]));
+      },
+
+      resolveImportDuplicateConflicts(duplicates, decisions = new Map()) {
+        const effectiveByOwner = new Map();
+        return duplicates.map(duplicate => {
+          let effectiveByKey = effectiveByOwner.get(duplicate.owner);
+          if (!effectiveByKey) {
+            effectiveByKey = new Map();
+            effectiveByOwner.set(duplicate.owner, effectiveByKey);
+          }
+          const earlier = effectiveByKey.has(duplicate.key) ? effectiveByKey.get(duplicate.key) : duplicate.owner[duplicate.key];
+          const effective = decisions.get(duplicate.id) === 'overwrite' ? duplicate.later : earlier;
+          effectiveByKey.set(duplicate.key, effective);
+          return { ...duplicate, earlier, effective, signature: `${duplicate.path}\n${this.importFingerprint(earlier)}\n${this.importFingerprint(duplicate.later)}` };
+        });
+      },
+
+      refreshImportDuplicateConflicts() {
+        const duplicates = this.resolveImportDuplicateConflicts(this._importDuplicateConflicts || [], this.readImportConflictDecisions());
+        const byId = new Map(duplicates.map(conflict => [conflict.id, conflict]));
+        this._importConflicts = (this._importConflicts || []).map(conflict => byId.get(conflict.id) || conflict);
+        for (const conflict of duplicates) {
+          const description = document.querySelector(`[data-import-conflict-description="${CSS.escape(conflict.id)}"]`);
+          if (description) description.textContent = this.importConflictDescription(conflict);
+        }
+      },
+
+      collectImportConflicts(imported, duplicates, decisions = new Map()) {
+        const conflicts = this.resolveImportDuplicateConflicts(duplicates, decisions);
         const collections = [['entityTypes', this.data.entityTypes], ['categories', this.data.categories], ['entities', this.data.entities]];
         for (const [collection, current] of collections) {
           for (const [id, incoming] of Object.entries(imported[collection] || {})) {
@@ -7505,6 +7577,7 @@ const App = {
       updateImportApplyState() {
         const button = document.getElementById('processImportBtn');
         if (!button) return;
+        this.refreshImportDuplicateConflicts();
         const unresolved = (this._importConflicts || []).some(conflict => !document.querySelector(`[data-import-conflict="${CSS.escape(conflict.id)}"] input[type="radio"]:checked`));
         button.disabled = !this._importDataPreview || unresolved;
       },
@@ -7518,7 +7591,8 @@ const App = {
         const importSettings = document.querySelector('input[name="importSettings"]:checked');
         let parsed;
         try { parsed = this.parseImportJson(this._importRawText); this.assertSafeImportIds(parsed.value); } catch (err) { return this.showImportError(err.message || 'Invalid JSON file.'); }
-        const freshConflicts = this.collectImportConflicts(parsed.value, parsed.duplicates);
+        const decisions = this.readImportConflictDecisions();
+        const freshConflicts = this.collectImportConflicts(parsed.value, parsed.duplicates, decisions);
         const oldSignatures = (this._importConflicts || []).map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
         const freshSignatures = freshConflicts.map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
         if (oldSignatures !== freshSignatures) {
@@ -7527,9 +7601,21 @@ const App = {
           this.renderImportPreview(parsed.value);
           return this.showNotification('Import conflicts changed. Review every choice again before applying.', 'error');
         }
-        const decisions = new Map(freshConflicts.map(conflict => [conflict.id, document.querySelector(`[data-import-conflict="${CSS.escape(conflict.id)}"] input[type="radio"]:checked`)?.value]));
         if ([...decisions.values()].some(choice => !choice)) return this.updateImportApplyState();
-        for (const duplicate of parsed.duplicates) if (decisions.get(duplicate.id) === 'overwrite') duplicate.owner[duplicate.key] = duplicate.later;
+        let importIdentity;
+        try {
+          importIdentity = await Storage.getImportIdentity();
+        } catch (err) {
+          return this.showImportError(`Import was not saved; original data was restored. ${err.message || ''}`);
+        }
+        if (backendClient && (!this._importPreviewIdentity || this._importPreviewIdentity.userId !== importIdentity.userId || Storage._cachedUserId !== importIdentity.userId)) {
+          return this.showImportError('Signed-in account changed. Reload and review this import again.');
+        }
+        let duplicateSkipped = 0, duplicateOverwritten = 0;
+        for (const duplicate of freshConflicts.filter(conflict => conflict.kind === 'duplicate')) {
+          if (decisions.get(duplicate.id) === 'overwrite') duplicateOverwritten++; else duplicateSkipped++;
+          Object.defineProperty(duplicate.owner, duplicate.key, { value: duplicate.effective, writable: true, enumerable: true, configurable: true });
+        }
         const imported = parsed.value;
         const beforeData = this.data;
         const beforeStorage = this.captureImportStorageState();
@@ -7559,7 +7645,7 @@ const App = {
           this.data.settings = this.normalizeSettings(this.data.settings);
           const dataToSave = { ...this.data, version: this.data.version };
           if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
-          if (await Storage.setAppDataForImport(dataToSave) !== true) throw new Error('Import persistence was not confirmed.');
+          if (await Storage.setAppDataForImport(dataToSave, importIdentity) !== true) throw new Error('Import persistence was not confirmed.');
         } catch (err) {
           this.data = beforeData;
           this.restoreImportStorageState(beforeStorage);
@@ -7567,8 +7653,9 @@ const App = {
         }
         this.closeModal('importModal');
         this.loadView('dashboard');
-        this.showNotification(`Import complete: created ${created}; overwritten ${overwritten}; skipped ${skipped}; rejected 0.`, 'success');
+        this.showNotification(`Import complete: created ${created}; overwritten ${overwritten}; skipped ${skipped}; rejected 0; duplicate members skipped ${duplicateSkipped}; duplicate members overwritten ${duplicateOverwritten}.`, 'success');
         this._importDataPreview = null;
+        this._importPreviewIdentity = null;
       }
     };
 
