@@ -429,7 +429,7 @@ const App = {
           try {
             const userData = stored;
             const storedVersion = userData.version || '1.0.0';
-            this.data.settings = { ...this.data.settings, ...(userData.settings || {}) };
+            this.data.settings = this.normalizeSettings(userData.settings, this.data.settings);
             if (userData.workspaces && typeof userData.currentWorkspaceId === 'string') {
               this.data.workspaces = userData.workspaces;
               this.data.currentWorkspaceId = userData.currentWorkspaceId;
@@ -1163,6 +1163,7 @@ const App = {
             entities: { ...this.data.entities }
           };
         }
+        this.data.settings = this.normalizeSettings(this.data.settings);
         const dataToSave = { ...this.data, version: this.data.version };
         if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
         Storage.setAppData(dataToSave);
@@ -1174,7 +1175,7 @@ const App = {
         const current = new URL(window.location);
         const activeView = current.searchParams.get('category') || current.searchParams.get('view') || 'dashboard';
 
-        this.data.settings = { ...this.data.settings, ...(remoteData.settings || {}) };
+        this.data.settings = this.normalizeSettings(remoteData.settings, this.data.settings);
         if (remoteData.workspaces && typeof remoteData.currentWorkspaceId === 'string') {
           this.data.workspaces = remoteData.workspaces;
           this.data.currentWorkspaceId = remoteData.currentWorkspaceId;
@@ -1990,13 +1991,20 @@ const App = {
       buildIconGrid() {
         const iconGrid = document.getElementById('iconGrid');
         if (!iconGrid) return;
-        
-        iconGrid.innerHTML = this.data.settings.materialIcons.map(icon => `
-          <div class="icon-option" data-icon="${icon}">
-            <span class="material-icons">${icon}</span>
-            <span class="icon-label">${icon}</span>
-          </div>
-        `).join('');
+        const icons = Array.isArray(this.data.settings?.materialIcons) ? this.data.settings.materialIcons : MATERIAL_ICONS;
+        iconGrid.replaceChildren(...icons.map(icon => {
+          const option = document.createElement('div');
+          option.className = 'icon-option';
+          option.dataset.icon = icon;
+          const glyph = document.createElement('span');
+          glyph.className = 'material-icons';
+          glyph.textContent = icon;
+          const label = document.createElement('span');
+          label.className = 'icon-label';
+          label.textContent = icon;
+          option.append(glyph, label);
+          return option;
+        }));
       },
       
       getCurrentWorkspaceName() {
@@ -3589,6 +3597,56 @@ const App = {
         return ['small', 'normal', 'large', 'larger'].includes(fontSize) ? fontSize : 'normal';
       },
 
+      normalizeSettings(incoming, existing = {}) {
+        const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+        const isSafeKey = key => !['__proto__', 'constructor', 'prototype'].includes(key);
+        const source = isPlainObject(incoming) ? incoming : {};
+        const fallback = isPlainObject(existing) ? existing : {};
+        const result = {};
+        const copyOpaqueScalars = value => {
+          if (!isPlainObject(value)) return;
+          Object.entries(value).forEach(([key, candidate]) => {
+            if (!isSafeKey(key) || ['fontSize', 'materialIcons', 'dashboard', 'notifications'].includes(key)) return;
+            if (typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean') result[key] = candidate;
+          });
+        };
+        const normalizeMaterialIcons = value => Array.isArray(value)
+          ? value.filter(icon => typeof icon === 'string' && MATERIAL_ICONS.includes(icon))
+          : null;
+        const normalizeDashboard = value => {
+          if (!isPlainObject(value)) return null;
+          const dashboard = {};
+          if (['categoryCards', 'list', 'gallery'].includes(value.viewMode)) dashboard.viewMode = value.viewMode;
+          if (typeof value.groupByCategory === 'boolean') dashboard.groupByCategory = value.groupByCategory;
+          if (Number.isInteger(value.itemsPerCategory) && (value.itemsPerCategory === -1 || (value.itemsPerCategory >= 1 && value.itemsPerCategory <= 100))) dashboard.itemsPerCategory = value.itemsPerCategory;
+          if (Array.isArray(value.categoryOrder)) dashboard.categoryOrder = value.categoryOrder.filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id));
+          return dashboard;
+        };
+        const normalizeNotifications = value => {
+          if (!isPlainObject(value)) return null;
+          const notifications = {};
+          if (Number.isInteger(value.duration) && value.duration >= 0 && value.duration <= 300000) notifications.duration = value.duration;
+          return notifications;
+        };
+
+        copyOpaqueScalars(fallback);
+        copyOpaqueScalars(source);
+        result.defaultView = typeof source.defaultView === 'string'
+          ? source.defaultView
+          : (typeof fallback.defaultView === 'string' ? fallback.defaultView : 'dashboard');
+        const fontSize = ['small', 'normal', 'large', 'larger'].includes(source.fontSize)
+          ? source.fontSize
+          : (['small', 'normal', 'large', 'larger'].includes(fallback.fontSize) ? fallback.fontSize : 'normal');
+        result.fontSize = fontSize;
+        const materialIcons = normalizeMaterialIcons(source.materialIcons) || normalizeMaterialIcons(fallback.materialIcons) || MATERIAL_ICONS;
+        result.materialIcons = materialIcons.length ? materialIcons : MATERIAL_ICONS.slice();
+        const dashboard = normalizeDashboard(source.dashboard) || normalizeDashboard(fallback.dashboard);
+        if (dashboard) result.dashboard = dashboard;
+        const notifications = normalizeNotifications(source.notifications) || normalizeNotifications(fallback.notifications);
+        if (notifications) result.notifications = notifications;
+        return result;
+      },
+
       setFontSizeStep(delta) {
         const steps = ['small', 'normal', 'large', 'larger'];
         const current = this.getSafeFontSize();
@@ -5088,7 +5146,7 @@ const App = {
           prior.forEach(item => { if (item.type === 'separator') addSeparator(decodeURIComponent(item.value || '')); else { const card = candidates.get(`${item.type}:${item.name}`); if (card) { appendComponent(item.type, card); candidates.delete(`${item.type}:${item.name}`); } } });
           candidates.forEach((card, key) => appendComponent(key.split(':')[0], card)); updatePreview();
         };
-        const addSeparator = value => { if (!value) return; const row = make('div', 'name-component-item name-separator-item sortable-item'); row.dataset.componentType = 'separator'; row.dataset.separatorValue = encodeURIComponent(value); const remove = button('Remove', 'btn btn-secondary btn-sm'); remove.addEventListener('click', () => { row.remove(); updatePreview(); }); row.append(make('span', 'material-icons drag-handle', 'drag_indicator'), make('span', 'separator-pill', value === ' ' ? 'Space' : value), remove); components.appendChild(row); };
+        const addSeparator = value => { if (!value) return; const row = make('div', 'name-component-item name-separator-item sortable-item'); row.dataset.componentType = 'separator'; row.dataset.separatorValue = encodeURIComponent(value); const remove = button('Remove', 'btn btn-secondary btn-sm'); remove.addEventListener('click', () => { row.remove(); updatePreview(); }); row.append(make('span', 'material-icons drag-handle', 'drag_indicator'), make('span', 'separator-pill', value === ' ' ? 'Space' : value), remove); const fieldComponents = [...components.querySelectorAll('[data-component-type="field"]')]; if (fieldComponents.length >= 2) components.insertBefore(row, fieldComponents[1]); else if (fieldComponents.length === 1) components.insertBefore(row, fieldComponents[0].nextSibling); else components.appendChild(row); };
         const renderOptions = (card, index, options = []) => {
           card.querySelector('.field-options')?.remove(); if (card.querySelector('select[name$=".type"]').value !== 'dropdown') return;
           const group = make('div', 'form-group field-options'); group.appendChild(make('label', '', 'Options')); const container = make('div', 'option-rows-container'); container.dataset.fieldIndex = index;
@@ -5102,7 +5160,7 @@ const App = {
         const close = button('×', 'modal-close'); close.addEventListener('click', () => this.closeEntityTypeForm()); const header = make('div', 'modal-header'); header.appendChild(make('h3', '', typeId ? type.label || '' : 'New entity type'));
         const basics = make('div', 'entity-type-editor carded-section'); const label = input('label', type.label || ''); label.required = true; const iconInput = input('icon', type.icon || 'folder', 'hidden'); iconInput.id = 'entityTypeIcon'; const iconPicker = button('Choose icon'); iconPicker.addEventListener('click', () => this.showIconPicker('entityTypeIcon')); basics.append(make('label', '', 'Label *'), label, iconInput, iconPicker);
         Object.values(this.data.categories || {}).forEach(category => basics.appendChild(checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || '')));
-        const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); const nameSection = make('div', `name-generation-settings${type.enableNameGen ? '' : ' hidden'}`); const prefixEnabled = checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'); const prefix = input('namePrefix', type.nameGen?.prefix || ''); prefix.disabled = !type.nameGen?.prefixEnabled; const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number','letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); const separatorActions = make('div', 'name-separator-actions'); [' ','-','_','.'].forEach(value => { const add = button(value === ' ' ? 'Space' : value, 'btn btn-secondary btn-sm'); add.addEventListener('click', () => { addSeparator(value); updatePreview(); }); separatorActions.appendChild(add); }); nameSection.append(prefixEnabled, prefix, suffix, components, separatorActions, preview, suffixPreview); nameEnabled.querySelector('input').addEventListener('change', event => { nameSection.classList.toggle('hidden', !event.target.checked); fields.querySelectorAll('input[name$=".partOfName"], input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); associations.querySelectorAll('input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); syncComponents(); }); prefixEnabled.querySelector('input').addEventListener('change', event => { prefix.disabled = !event.target.checked; updatePreview(); }); prefix.addEventListener('input', updatePreview); suffix.addEventListener('change', updatePreview);
+        const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); const nameSection = make('div', `name-generation-settings${type.enableNameGen ? '' : ' hidden'}`); const prefixEnabled = checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'); const prefix = input('namePrefix', type.nameGen?.prefix || ''); prefix.disabled = !type.nameGen?.prefixEnabled; const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number','letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); const separatorActions = make('div', 'name-separator-actions'); [' ','-','_','.'].forEach(value => { const add = button(value === ' ' ? 'Space' : value, 'btn btn-secondary btn-sm'); add.addEventListener('click', () => { addSeparator(value); updatePreview(); }); separatorActions.appendChild(add); }); const customSeparator = input('', ''); customSeparator.id = 'customSeparatorInput'; customSeparator.placeholder = 'Custom separator'; const insertCustomSeparator = button('Insert', 'btn btn-secondary btn-sm'); insertCustomSeparator.addEventListener('click', () => { const value = customSeparator.value; addSeparator(value); customSeparator.value = ''; updatePreview(); }); const customSeparatorControls = make('div', 'custom-separator'); customSeparatorControls.append(customSeparator, insertCustomSeparator); separatorActions.appendChild(customSeparatorControls); nameSection.append(prefixEnabled, prefix, suffix, components, separatorActions, preview, suffixPreview); nameEnabled.querySelector('input').addEventListener('change', event => { nameSection.classList.toggle('hidden', !event.target.checked); fields.querySelectorAll('input[name$=".partOfName"], input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); associations.querySelectorAll('input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); syncComponents(); }); prefixEnabled.querySelector('input').addEventListener('change', event => { prefix.disabled = !event.target.checked; updatePreview(); }); prefix.addEventListener('input', updatePreview); suffix.addEventListener('change', updatePreview);
         const fieldSection = make('div', 'modal-group carded-section'); fieldSection.append(make('h4', '', 'Fields'), fields); const addFieldButton = button('Add Field', 'btn btn-add-field'); addFieldButton.addEventListener('click', () => addField({ type: 'text', visibleInCard: true })); fieldSection.appendChild(addFieldButton); const assocSection = make('div', 'modal-group carded-section'); assocSection.append(make('h4', '', 'Links'), associations); const addAssociationButton = button('Add link', 'btn btn-add-field'); addAssociationButton.addEventListener('click', () => addAssociation({ association: { kind: 'belongs_to', targetType: Object.keys(this.data.entityTypes || {})[0] || '' } })); assocSection.appendChild(addAssociationButton);
         (type.fields || []).forEach(addField); (type.associations || []).forEach(addAssociation); (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else if (component.type === 'association') row.dataset.associationName = component.name || ''; else row.dataset.fieldName = component.name || component || ''; components.appendChild(row); }); basics.append(nameEnabled, nameSection); form.append(basics, fieldSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = button('Cancel'); cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = button('Save Changes', 'btn btn-primary'); save.type = 'submit'; footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); syncComponents(); this.showModal('entityTypeFormModal'); if (window.Sortable) this.initNameComponentsDragDrop();
       },
@@ -7277,7 +7335,7 @@ const App = {
         }
         // Settings
         if (importSettings && imported.settings) {
-          this.data.settings = JSON.parse(JSON.stringify(imported.settings));
+          this.data.settings = this.normalizeSettings(imported.settings, this.data.settings);
           importedCount++;
         }
         this.saveData();

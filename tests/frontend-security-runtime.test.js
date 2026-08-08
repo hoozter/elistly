@@ -425,23 +425,38 @@ async function testImportedSettingsBoundary() {
   await withPage(async page => {
     const requests = [];
     page.on('request', request => requests.push(request.url()));
-    const hostileFontSize = `<img src="/missing-${marker}-settings" onerror="window.__settingsHits=(window.__settingsHits||0)+1"><svg onload="window.__settingsHits=(window.__settingsHits||0)+1"></svg>`;
-    await importFixtureThroughFileInput(page, { settings: { fontSize: hostileFontSize, dashboard: { viewMode: 'gallery', groupByCategory: false, itemsPerCategory: 12 }, unicodeNote: 'räksmörgås 東京' } });
+    await page.evaluate(() => { window.__settingsHits = 0; });
+    const hostileMarkup = `<img src="/missing-${marker}-settings" onerror="window.__settingsHits=(window.__settingsHits||0)+1"><svg onload="window.__settingsHits=(window.__settingsHits||0)+1"></svg>`;
+    await importFixtureThroughFileInput(page, {
+      settings: {
+        fontSize: hostileMarkup,
+        materialIcons: ['memory', hostileMarkup],
+        dashboard: { viewMode: 'gallery', groupByCategory: false, itemsPerCategory: 12, categoryOrder: ['safe-category', hostileMarkup] },
+        notifications: { duration: hostileMarkup },
+        unicodeNote: 'räksmörgås 東京',
+        unsupportedBranch: { payload: hostileMarkup }
+      },
+      categories: { 'safe-category': { id: 'safe-category', label: 'Safe category' } }
+    });
     await page.locator('#processImportBtn').click();
     await page.reload({ waitUntil: 'domcontentloaded' });
     const observed = await page.evaluate(() => {
-      window.__settingsHits = 0;
+      // The local fixture intentionally has no backend configuration, so app init
+      // stops at its setup-required screen. Rehydrate the exact persisted payload
+      // and invoke the same ordinary startup renderer directly.
       App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      App.buildIconGrid();
       App.showSettingsModal();
       const modal = document.querySelector('#settingsModal');
       const textSize = modal.querySelector('.text-size-label')?.textContent;
       const dashboardMode = modal.querySelector('[name="dashboardViewMode"]')?.value;
       const items = modal.querySelector('[name="dashboardItemsPerCategoryNumber"]')?.value;
       return {
-        hits: window.__settingsHits,
-        activeNodes: modal.querySelectorAll('img, svg, script').length,
-        inlineHandlers: [...modal.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name) && attribute.value.includes('ELISTLY_FRONTEND_SECURITY_MARKER_20260808'))).length,
-        textSize, dashboardMode, items, persisted: App.data.settings
+        hits: window.__settingsHits || 0,
+        activeNodes: document.querySelectorAll('img[src*="ELISTLY_FRONTEND_SECURITY_MARKER_20260808"], svg[onload*="__settingsHits"]').length,
+        inlineHandlers: [...document.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name) && attribute.value.includes('ELISTLY_FRONTEND_SECURITY_MARKER_20260808'))).length,
+        textSize, dashboardMode, items, persisted: App.data.settings,
+        iconTexts: [...document.querySelectorAll('#iconGrid .icon-label')].map(node => node.textContent)
       };
     });
     assert.equal(observed.hits, 0, `persisted settings payload executed ${observed.hits} time(s)`);
@@ -451,11 +466,73 @@ async function testImportedSettingsBoundary() {
     assert.equal(observed.dashboardMode, 'gallery', 'valid imported dashboard setting must render');
     assert.equal(observed.items, '12', 'valid imported numeric setting must render');
     assert.equal(observed.persisted.unicodeNote, 'räksmörgås 東京', 'unrelated valid Unicode settings must persist');
+    assert.deepEqual(observed.iconTexts, ['memory'], 'invalid material icon entries must be rejected before ordinary startup rendering');
+    assert.deepEqual(observed.persisted.dashboard.categoryOrder, ['safe-category'], 'invalid dashboard nested entries must be rejected');
+    assert.deepEqual(observed.persisted.notifications, {}, 'invalid notification settings must be rejected');
+    assert.equal('unsupportedBranch' in observed.persisted, false, 'unsupported object settings must not persist');
     assert.ok(!requests.some(url => url.includes(marker)), `settings marker reached a browser request: ${requests.join(', ')}`);
   });
 }
 
-const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary };
+async function testCustomTitleSeparatorParity() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        version: 'test', settings: {}, entities: {},
+        categories: { hardware: { id: 'hardware', label: 'Hardware' } },
+        entityTypes: {
+          device: {
+            id: 'device', label: 'Device', icon: 'memory', categories: ['hardware'], enableNameGen: true,
+            nameGen: { prefix: '', prefixEnabled: false, suffixType: 'number', componentsOrder: [] },
+            fields: [
+              { name: 'serial', label: 'Serial', type: 'text', visibleInCard: true, partOfName: true },
+              { name: 'model', label: 'Model', type: 'text', visibleInCard: true, partOfName: true }
+            ], associations: []
+          }
+        },
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default'
+      };
+      App.editEntityType('device');
+      const form = document.querySelector('#entityTypeForm');
+      const customInput = form.querySelector('#customSeparatorInput');
+      const insert = [...form.querySelectorAll('button')].find(button => button.textContent.includes('Insert'));
+      if (!customInput || !insert) throw new Error('Missing custom separator controls');
+      customInput.value = ' / ';
+      insert.click();
+      const inserted = [...form.querySelectorAll('.name-separator-item')].map(row => decodeURIComponent(row.dataset.separatorValue));
+      const inputWasCleared = customInput.value === '';
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const savedWithCustom = structuredClone(App.data.entityTypes.device.nameGen.componentsOrder);
+      App.editEntityType('device');
+      const remove = document.querySelector('.name-separator-item .btn-secondary');
+      if (!remove) throw new Error('Missing separator remove control');
+      remove.click();
+      document.querySelector('#entityTypeForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const savedAfterRemove = structuredClone(App.data.entityTypes.device.nameGen.componentsOrder);
+      App.editEntityType('device');
+      document.querySelector('#entityTypeForm input[name="label"]').value = 'Discarded';
+      [...document.querySelectorAll('#entityTypeFormModal button')].find(button => button.textContent.includes('Cancel')).click();
+      return { inserted, inputWasCleared, savedWithCustom, savedAfterRemove, labelAfterCancel: App.data.entityTypes.device.label, storage: localStorage.getItem('elistlyData') };
+    });
+    assert.deepEqual(result.inserted, [' / '], 'custom Insert must add the entered separator');
+    assert.equal(result.inputWasCleared, true, 'custom separator input must clear after insertion');
+    assert.deepEqual(result.savedWithCustom, [
+      { type: 'field', name: 'serial' }, { type: 'separator', value: ' / ' }, { type: 'field', name: 'model' }
+    ], 'save must persist the exact custom separator');
+    assert.deepEqual(result.savedAfterRemove, [
+      { type: 'field', name: 'serial' }, { type: 'field', name: 'model' }
+    ], 'remove must remove the exact custom separator');
+    assert.equal(result.labelAfterCancel, 'Device', 'cancel must not persist editor changes');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const persisted = await page.evaluate(() => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      return App.data.entityTypes.device.nameGen.componentsOrder;
+    });
+    assert.deepEqual(persisted, result.savedAfterRemove, 'saved separator removal must survive ordinary reload');
+  });
+}
+
+const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
