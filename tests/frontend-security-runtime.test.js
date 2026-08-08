@@ -64,11 +64,22 @@ async function importFixtureThroughFileInput(page, fixture) {
 
 async function testImportPreviewIsInert() {
   await withPage(async page => {
+    const requests = [];
+    page.on('request', request => requests.push(request.url()));
     const hostileMarkup = `<img src="/missing-${marker}" onerror="window.__elistlyPreviewHandlerHits++"><svg onload="window.__elistlyPreviewHandlerHits++"></svg><script>window.__elistlyPreviewHandlerHits++</script><span title="${marker}\">attribute breakout</span>&lt;svg onload=window.__elistlyPreviewHandlerHits++&gt;`;
+    const hostileIdentity = `type');window.__importPostApplyXss++;void('`;
+    const benignType = `type-${marker}`;
+    const benignId = `entity-${marker}`;
     const fixture = {
-      entityTypes: { [`type-${marker}`]: { label: hostileMarkup, fields: [], categories: [] } },
+      entityTypes: {
+        [hostileIdentity]: { label: hostileMarkup, fields: [], categories: [] },
+        [benignType]: { label: hostileMarkup, fields: [], categories: [] }
+      },
       categories: { [`category-${marker}`]: { label: hostileMarkup } },
-      entities: { [`entity-${marker}`]: { id: `entity-${marker}`, type: `type-${marker}`, name: hostileMarkup, nested: { label: hostileMarkup } } }
+      entities: {
+        [hostileIdentity]: { id: hostileIdentity, type: hostileIdentity, name: `Hostile ${marker} ${hostileMarkup}` },
+        [benignId]: { id: benignId, type: benignType, name: `Benign ${marker}`, nested: { label: hostileMarkup } }
+      }
     };
     await importFixtureThroughFileInput(page, fixture);
     const preview = await page.locator('#importPreviewArea').evaluate(area => ({
@@ -80,14 +91,45 @@ async function testImportPreviewIsInert() {
     assert.equal(preview.activeNodes, 0, `attacker markup created active nodes: ${preview.activeNodes}`);
     assert.equal(preview.handlerHits, 0, `attacker handler executed ${preview.handlerHits} time(s)`);
     assert.match(preview.text, new RegExp(marker));
-    assert.deepEqual(preview.checkboxValues.sort(), [`category-${marker}`, `entity-${marker}`, `type-${marker}`].sort());
+    assert.deepEqual(preview.checkboxValues.sort(), [`category-${marker}`, hostileIdentity, benignId, hostileIdentity, benignType].sort());
     await page.locator('#processImportBtn').click();
-    const persisted = await page.evaluate(marker => ({
-      entity: App.data.entities[`entity-${marker}`],
+    const persisted = await page.evaluate(({ hostileIdentity, benignId }) => ({
+      hostileEntity: App.data.entities[hostileIdentity],
+      benignEntity: App.data.entities[benignId],
       storage: localStorage.getItem('elistlyData')
-    }), marker);
-    assert.equal(persisted.entity.name, hostileMarkup, 'selected hostile fixture should persist as data, not preview DOM');
+    }), { hostileIdentity, benignId });
+    assert.equal(persisted.hostileEntity.id, hostileIdentity, 'selected hostile identity should persist as data');
+    assert.equal(persisted.hostileEntity.type, hostileIdentity, 'selected hostile identity should persist as data');
+    assert.equal(persisted.benignEntity.name, `Benign ${marker}`, 'selected benign fixture should persist as data');
     assert.match(persisted.storage, new RegExp(marker));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const hostileResult = await page.evaluate(({ hostileIdentity, marker }) => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      window.__importPostApplyXss = 0;
+      window.__elistlyPreviewHandlerHits = 0;
+      App.showEntityForm = (...args) => { window.__entityFormArgs = args; };
+      App.handleSearch(`Hostile ${marker}`);
+      const result = document.querySelector('.search-results');
+      const button = result.querySelector('.entity-actions button');
+      const activeNodes = result.querySelectorAll('img, svg, script').length;
+      const inlineHandlers = [...result.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name))).length;
+      button.click();
+      return { hits: window.__importPostApplyXss, activeNodes, inlineHandlers, previewHandlerHits: window.__elistlyPreviewHandlerHits };
+    }, { hostileIdentity, marker });
+    assert.equal(hostileResult.hits, 0, `persisted identity payload executed ${hostileResult.hits} time(s) after an ordinary click`);
+    assert.equal(hostileResult.activeNodes, 0, `persisted hostile data created active nodes: ${hostileResult.activeNodes}`);
+    assert.equal(hostileResult.inlineHandlers, 0, `persisted hostile data created inline handlers: ${hostileResult.inlineHandlers}`);
+    assert.equal(hostileResult.previewHandlerHits, 0, `persisted hostile markup executed ${hostileResult.previewHandlerHits} time(s)`);
+    assert.ok(!requests.some(url => url.includes(marker)), `import marker reached a browser request: ${requests.join(', ')}`);
+    const benignArgs = await page.evaluate(({ benignId, benignType, marker }) => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      window.__entityFormArgs = null;
+      App.handleSearch(`Benign ${marker}`);
+      document.querySelector('.search-results .entity-actions button').click();
+      return window.__entityFormArgs;
+    }, { benignId, benignType, marker });
+    assert.deepEqual(benignArgs, [benignType, benignId], 'benign entity click should retain its exact navigation identity');
+    console.log(`OBSERVED import preview=0 persisted=${persisted.hostileEntity.id === hostileIdentity} reload-click-hits=${hostileResult.hits} active-nodes=${hostileResult.activeNodes} inline-handlers=${hostileResult.inlineHandlers} marker-requests=${requests.filter(url => url.includes(marker)).length} benign-args=${JSON.stringify(benignArgs)}`);
   });
 }
 

@@ -1375,14 +1375,56 @@ const App = {
         return this.getEntityTitleInfo(entity).title;
       },
 
+      escapeHtmlText(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        })[character]);
+      },
+
+      registerClickAction(action) {
+        if (!this._clickActions) {
+          this._clickActions = new Map();
+          this._nextClickActionId = 0;
+          document.addEventListener('click', event => {
+            const target = event.target.closest('[data-elistly-click-action]');
+            const callback = target && this._clickActions.get(target.dataset.elistlyClickAction);
+            if (!callback) return;
+            event.preventDefault();
+            callback();
+          });
+        }
+        const actionId = `elistly-action-${++this._nextClickActionId}`;
+        this._clickActions.set(actionId, action);
+        return actionId;
+      },
+
+      entityFormActionAttribute(entity) {
+        const actionId = this.registerClickAction(() => this.showEntityForm(entity.type, entity.id));
+        return `data-elistly-click-action="${actionId}"`;
+      },
+
+      newEntityFormActionAttribute(typeId) {
+        const actionId = this.registerClickAction(() => this.showEntityForm(typeId));
+        return `data-elistly-click-action="${actionId}"`;
+      },
+
+      viewActionAttribute(view) {
+        const actionId = this.registerClickAction(() => this.loadView(view));
+        return `data-elistly-click-action="${actionId}"`;
+      },
+
       renderEntityMiniCard(entity) {
         const type = this.data.entityTypes[entity.type];
         const titleInfo = this.getEntityTitleInfo(entity);
         const title = titleInfo.title;
         if (!type) {
-          return `<div class="mini-card" onclick="App.showEntityForm('${entity.type}','${entity.id}')">
+          return `<div class="mini-card" ${this.entityFormActionAttribute(entity)}>
             <div class="mini-card-icon"><span class="material-icons">folder</span></div>
-            <div class="mini-card-fields"><div class="mini-field-label">${title || entity.id}</div></div>
+            <div class="mini-card-fields"><div class="mini-field-label">${this.escapeHtmlText(title || entity.id)}</div></div>
           </div>`;
         }
         const visibleFields = (type.fields || [])
@@ -1392,7 +1434,7 @@ const App = {
           .filter(a => a.visibleInCard && entity[a.name])
           .map(a => {
             const name = this.getEntityDisplayName(entity[a.name]);
-            return name ? `<div class="mini-field"><span class="mini-field-label">${(a.label || '').replace(/</g, '&lt;')}:</span> <span>${String(name).replace(/</g, '&lt;')}</span></div>` : '';
+            return name ? `<div class="mini-field"><span class="mini-field-label">${this.escapeHtmlText(a.label)}:</span> <span>${this.escapeHtmlText(name)}</span></div>` : '';
           })
           .filter(Boolean)
           .join('');
@@ -1408,21 +1450,21 @@ const App = {
           } else if (field.type === 'qr') {
             const qr = this.createLocalQrDataUrl(value, 80);
             value = qr.src ? `<img src="${qr.src}" class="qr-preview qr-preview-inline" alt="QR code">` : '';
-            const safeLabel = (field.label || '').replace(/</g, '&lt;');
+            const safeLabel = this.escapeHtmlText(field.label);
             return value
               ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> ${value}</div>`
               : (qr.error ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> <span>${qr.error}</span></div>` : '');
           } else {
             value = (value != null && value !== '') ? String(value) : '';
           }
-          const safeLabel = (field.label || '').replace(/</g, '&lt;');
-          const safeValue = String(value ?? '').replace(/</g, '&lt;');
+          const safeLabel = this.escapeHtmlText(field.label);
+          const safeValue = this.escapeHtmlText(value);
           return `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> <span>${safeValue}</span></div>`;
         }).join('');
-        return `<div class="mini-card" onclick="App.showEntityForm('${entity.type}','${entity.id}')">
-          <div class="mini-card-icon"><span class="material-icons">${type.icon}</span></div>
+        return `<div class="mini-card" ${this.entityFormActionAttribute(entity)}>
+          <div class="mini-card-icon"><span class="material-icons">${this.escapeHtmlText(type.icon)}</span></div>
           <div class="mini-card-fields">
-            ${title ? `<div class="mini-card-title">${title.replace(/</g, '&lt;')}</div>` : ''}
+            ${title ? `<div class="mini-card-title">${this.escapeHtmlText(title)}</div>` : ''}
             <div class="mini-card-properties">
               ${fieldsHtml}
               ${assocLines}
@@ -2152,9 +2194,9 @@ const App = {
           .map(category => `
             <li>
               <a href="#" class="${currentCategory === category.id ? 'active' : ''}"
-                 onclick="App.loadView('${category.id}'); return false;">
-                <span class="material-icons">${category.icon}</span>
-                ${category.label}
+                 ${this.viewActionAttribute(category.id)}>
+                <span class="material-icons">${this.escapeHtmlText(category.icon)}</span>
+                ${this.escapeHtmlText(category.label)}
               </a>
             </li>
           `).join('');
@@ -2253,14 +2295,14 @@ const App = {
           return `
             <div class="entity-list-item">
               <div class="entity-info">
-                <span class="material-icons">${type?.icon || 'folder'}</span>
+                <span class="material-icons">${this.escapeHtmlText(type?.icon || 'folder')}</span>
                 <div>
-                  <div>${this.getEntityCardTitle(entity)}</div>
-                  ${lentToName ? `<div class="mini-field-desc">${lentToName} · Due ${formatDate(dueVal)}</div>` : `<div class="mini-field-desc">Due ${formatDate(dueVal)}</div>`}
+                  <div>${this.escapeHtmlText(this.getEntityCardTitle(entity))}</div>
+                  ${lentToName ? `<div class="mini-field-desc">${this.escapeHtmlText(lentToName)} · Due ${formatDate(dueVal)}</div>` : `<div class="mini-field-desc">Due ${formatDate(dueVal)}</div>`}
                 </div>
               </div>
               <div class="entity-actions">
-                <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                <button class="btn btn-secondary" ${this.entityFormActionAttribute(entity)}>
                   <span class="material-icons">edit</span>
                 </button>
               </div>
@@ -2446,7 +2488,7 @@ const App = {
               const emptyState = '<p class="empty-state">No items yet</p>';
               html += `
                 <section class="icon-group">
-                  <h3><span class="material-icons">${category.icon}</span> ${category.label}</h3>
+                  <h3><span class="material-icons">${this.escapeHtmlText(category.icon)}</span> ${this.escapeHtmlText(category.label)}</h3>
                   <div class="gallery-cards">
                     ${categoryEntities.length > 0
                       ? categoryEntities.map(entity => this.renderEntityMiniCard(entity)).join('')
@@ -2471,7 +2513,7 @@ const App = {
             letters.forEach(letter => {
               html += `
                 <section class="icon-group">
-                  <h3>${letter}</h3>
+                  <h3>${this.escapeHtmlText(letter)}</h3>
                   <div class="gallery-cards">
                     ${letterGroups[letter].map(entity => this.renderEntityMiniCard(entity)).join('')}
                   </div>
@@ -2502,15 +2544,15 @@ const App = {
           }
           let html = `<div class="dashboard-list"><div class="card">`;
           letters.forEach(letter => {
-            html += `<div class="entity-list-letter">${letter}</div><div class="entity-list">` +
+            html += `<div class="entity-list-letter">${this.escapeHtmlText(letter)}</div><div class="entity-list">` +
               letterGroups[letter].map(entity => `
                 <div class="entity-list-item">
                   <div class="entity-info">
-                    <span class="material-icons">${this.data.entityTypes[entity.type]?.icon || 'folder'}</span>
-                    ${this.getEntityCardTitle(entity)}
+                    <span class="material-icons">${this.escapeHtmlText(this.data.entityTypes[entity.type]?.icon || 'folder')}</span>
+                    ${this.escapeHtmlText(this.getEntityCardTitle(entity))}
                   </div>
                   <div class="entity-actions">
-                    <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                    <button class="btn btn-secondary" ${this.entityFormActionAttribute(entity)}>
                       <span class="material-icons">edit</span>
                     </button>
                   </div>
@@ -2545,7 +2587,7 @@ const App = {
           return `
             <div class="card">
               <div class="card-header">
-                <h2><span class="material-icons">${category.icon}</span> ${category.label}</h2>
+                <h2><span class="material-icons">${this.escapeHtmlText(category.icon)}</span> ${this.escapeHtmlText(category.label)}</h2>
               </div>
               ${
                 viewMode === 'list'
@@ -2558,17 +2600,17 @@ const App = {
                       return acc;
                     }, {});
                     return Object.keys(letterGroups).sort().map(letter =>
-                      `<div class="entity-list-letter">${letter}</div>
+                      `<div class="entity-list-letter">${this.escapeHtmlText(letter)}</div>
                       <div class="entity-list">
                         ${
                           letterGroups[letter].map(entity => `
                             <div class="entity-list-item">
                               <div class="entity-info">
-                                <span class="material-icons">${this.data.entityTypes[entity.type]?.icon || 'folder'}</span>
-                                ${this.getEntityCardTitle(entity)}
+                                <span class="material-icons">${this.escapeHtmlText(this.data.entityTypes[entity.type]?.icon || 'folder')}</span>
+                                ${this.escapeHtmlText(this.getEntityCardTitle(entity))}
                               </div>
                               <div class="entity-actions">
-                                <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                                <button class="btn btn-secondary" ${this.entityFormActionAttribute(entity)}>
                                   <span class="material-icons">edit</span>
                                 </button>
                               </div>
@@ -2620,16 +2662,16 @@ const App = {
             <div class="card">
               <div class="card-header">
                 <h2>
-                  <span class="material-icons">${category.icon}</span>
-                  ${category.label}
+                  <span class="material-icons">${this.escapeHtmlText(category.icon)}</span>
+                  ${this.escapeHtmlText(category.label)}
                 </h2>
                 <div class="button-group button-group-row">
                   ${categoryEntityTypes.length > 0 ? (
                     categoryEntityTypes.length === 1
                       ? `
-                    <button class="btn btn-primary" onclick="App.showEntityForm('${categoryEntityTypes[0].id}')">
+                    <button class="btn btn-primary" ${this.newEntityFormActionAttribute(categoryEntityTypes[0].id)}>
                       <span class="material-icons">add</span>
-                      Add ${categoryEntityTypes[0].label}
+                      Add ${this.escapeHtmlText(categoryEntityTypes[0].label)}
                     </button>
                   `
                       : `
@@ -2640,9 +2682,9 @@ const App = {
                       </button>
                       <div class="dropdown-menu hidden">
                         ${categoryEntityTypes.map(type => `
-                          <a href="#" onclick="event.preventDefault(); App.showEntityForm('${type.id}')">
-                            <span class="material-icons">${type.icon}</span>
-                            ${type.label}
+                          <a href="#" ${this.newEntityFormActionAttribute(type.id)}>
+                            <span class="material-icons">${this.escapeHtmlText(type.icon)}</span>
+                            ${this.escapeHtmlText(type.label)}
                           </a>
                         `).join('')}
                       </div>
@@ -2686,11 +2728,11 @@ const App = {
                 return `
                 <div class="entity-list-item">
                   <div class="entity-info">
-                    <span class="material-icons">${icon}</span>
-                    ${this.getEntityCardTitle(entity)}
+                    <span class="material-icons">${this.escapeHtmlText(icon)}</span>
+                    ${this.escapeHtmlText(this.getEntityCardTitle(entity))}
                   </div>
                   <div class="entity-actions">
-                    <button class="btn btn-secondary" onclick="App.showEntityForm('${entity.type}', '${entity.id}')">
+                    <button class="btn btn-secondary" ${this.entityFormActionAttribute(entity)}>
                       <span class="material-icons">edit</span>
                     </button>
                   </div>
