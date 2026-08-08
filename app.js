@@ -459,7 +459,7 @@ const App = {
               dataMutatedDuringInit = true;
             }
             this.normalizeEntityTypeCategories();
-              const fontSize = this.data.settings.fontSize || 'normal';
+              const fontSize = this.getSafeFontSize();
               document.documentElement.setAttribute('data-font-size', ['small','normal','large','larger'].includes(fontSize) ? fontSize : 'normal');
 
             if (this.compareVersions(CURRENT_VERSION, storedVersion) > 0) {
@@ -543,7 +543,7 @@ const App = {
         const componentsChanged = this.normalizeNameComponents();
         const schemaChanged = this.normalizeEntityTypeSchema();
         const namesChanged = this.normalizeAutoNames();
-        document.documentElement.setAttribute('data-font-size', this.data.settings.fontSize || 'normal');
+        document.documentElement.setAttribute('data-font-size', this.getSafeFontSize());
         if (componentsChanged || schemaChanged || namesChanged) dataMutatedDuringInit = true;
         if (dataMutatedDuringInit) this.saveData();
         this.buildIconGrid();
@@ -2824,7 +2824,7 @@ const App = {
                             <span class="text-size-a text-size-a-large">A</span>
                           </button>
                         </div>
-                        <div class="help-text text-size-label">${(this.data.settings.fontSize || 'normal').charAt(0).toUpperCase() + (this.data.settings.fontSize || 'normal').slice(1)}</div>
+                        <div class="help-text text-size-label">Normal</div>
                       </div>
                     </div>
                   </div>
@@ -2973,6 +2973,9 @@ const App = {
         const div = document.createElement('div');
         div.innerHTML = modalHtml;
         document.body.appendChild(div.firstElementChild);
+        const textSizeLabel = document.querySelector('#settingsModal .text-size-label');
+        const fontSize = this.getSafeFontSize();
+        if (textSizeLabel) textSizeLabel.textContent = fontSize.charAt(0).toUpperCase() + fontSize.slice(1);
         this.showModal('settingsModal');
         this.initDashboardSettings();
       },
@@ -3581,9 +3584,14 @@ const App = {
         if (themeToggle) themeToggle.setAttribute('data-theme', theme);
       },
 
+      getSafeFontSize() {
+        const fontSize = this.data?.settings?.fontSize;
+        return ['small', 'normal', 'large', 'larger'].includes(fontSize) ? fontSize : 'normal';
+      },
+
       setFontSizeStep(delta) {
         const steps = ['small', 'normal', 'large', 'larger'];
-        const current = this.data.settings.fontSize || 'normal';
+        const current = this.getSafeFontSize();
         let idx = steps.indexOf(current);
         if (idx < 0) idx = 1;
         idx = Math.max(0, Math.min(steps.length - 1, idx + delta));
@@ -5053,44 +5061,50 @@ const App = {
       showSafeEntityTypeEditor(typeId, type) {
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const input = (name, value, typeName = 'text') => { const el = document.createElement('input'); el.type = typeName; el.name = name; el.value = value == null ? '' : String(value); return el; };
-        const icon = (name) => make('span', 'material-icons', name);
-        const checkbox = (name, checked, text, disabled = false) => { const label = make('label', 'checkbox-label'); const el = input(name, '', 'checkbox'); el.className = 'elistly-checkbox'; el.checked = !!checked; el.disabled = disabled; label.append(el, make('span', '', text)); return label; };
-        const modal = make('div', 'modal'); modal.id = 'entityTypeFormModal'; const content = make('div', 'modal-content');
-        const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeEntityTypeForm());
-        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', typeId ? (type.label || '') : 'New entity type'));
-        const body = make('div', 'modal-body'); const form = make('form'); form.id = 'entityTypeForm'; form.dataset.typeId = typeId || ''; form.addEventListener('submit', event => this.saveEntityType(event, typeId));
-        const basics = make('div', 'entity-type-editor carded-section');
-        const labelGroup = make('div', 'form-group'); labelGroup.append(make('label', '', 'Label *'), input('label', type.label)); labelGroup.lastChild.required = true;
-        const iconGroup = make('div', 'form-group'); iconGroup.append(make('label', '', 'Icon'), input('icon', type.icon || 'folder'));
-        const categoryGroup = make('div', 'form-group'); categoryGroup.appendChild(make('label', '', 'Categories'));
-        Object.values(this.data.categories || {}).forEach(category => { const item = checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || ''); categoryGroup.appendChild(item); });
-        const nameGroup = make('div', 'checkbox-group'); const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); nameEnabled.querySelector('input').setAttribute('aria-checked', type.enableNameGen ? 'true' : 'false'); nameGroup.appendChild(nameEnabled);
-        const prefixGroup = make('div', 'form-group'); prefixGroup.append(checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'), input('namePrefix', type.nameGen?.prefix || ''));
-        const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number', 'letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); prefixGroup.appendChild(suffix);
-        basics.append(labelGroup, iconGroup, categoryGroup, nameGroup, prefixGroup);
-        const components = make('div', 'sortable-list'); components.id = 'nameComponentsList';
-        (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'association') row.dataset.associationName = component.name || ''; else if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else row.dataset.fieldName = component.name || component || ''; row.appendChild(make('span', 'name-component-label', component.type === 'separator' ? (component.value || '') : (component.name || component))); components.appendChild(row); });
-        basics.appendChild(components);
-        const fieldsSection = make('div', 'modal-group carded-section'); fieldsSection.appendChild(make('h4', '', 'Fields')); const fields = make('div', 'sortable-list'); fields.id = 'fieldsContainer';
-        (type.fields || []).forEach((field, index) => {
-          const card = make('div', 'field-card sortable-item'); card.dataset.index = index; card.dataset.fieldName = field.name || '';
-          const fieldLabel = make('div', 'form-group'); fieldLabel.append(make('label', '', 'Label *'), input(`fields[${index}].label`, field.label)); fieldLabel.lastChild.required = true;
-          const fieldName = input(`fields[${index}].name`, field.name || '', 'hidden');
-          const fieldType = document.createElement('select'); fieldType.name = `fields[${index}].type`; ['text', 'number', 'dropdown', 'textarea', 'date', 'checkbox', 'qr'].forEach(value => fieldType.appendChild(new Option(value, value, false, field.type === value)));
-          card.append(fieldLabel, fieldName, fieldType, checkbox(`fields[${index}].required`, field.required, 'Required'), checkbox(`fields[${index}].visibleInCard`, field.visibleInCard, 'Visible in card'), checkbox(`fields[${index}].partOfName`, field.partOfName, 'In title', !type.enableNameGen));
-          if (field.type === 'dropdown') { const options = make('div', 'option-rows-container'); options.dataset.fieldIndex = index; (field.options || []).forEach((option, optionIndex) => { const row = make('div', 'option-row'); row.dataset.optionIndex = optionIndex; row.append(input(`fields[${index}].options[${optionIndex}].value`, option.value), input(`fields[${index}].options[${optionIndex}].nameValue`, option.nameValue || '')); options.appendChild(row); }); card.appendChild(options); }
-          fields.appendChild(card);
-        });
-        fieldsSection.appendChild(fields);
-        const assocSection = make('div', 'modal-group carded-section'); assocSection.appendChild(make('h4', '', 'Links')); const associations = make('div', 'sortable-list'); associations.id = 'associationsContainer';
-        (type.associations || []).forEach((assoc, index) => {
-          const card = make('div', 'assoc-card association-editor sortable-item'); card.dataset.index = index;
-          const assocLabel = make('div', 'form-group'); assocLabel.append(make('label', '', 'Label *'), input(`associations[${index}].label`, assoc.label)); assocLabel.lastChild.required = true;
-          const assocName = input(`associations[${index}].name`, assoc.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `associations[${index}].association.kind`; ['belongs_to', 'has_many', 'hierarchy'].forEach(value => kind.appendChild(new Option(value, value, false, assoc.association?.kind === value)));
-          const target = document.createElement('select'); target.name = `associations[${index}].association.targetType`; Object.values(this.data.entityTypes || {}).forEach(candidate => target.appendChild(new Option(candidate.label || candidate.id || '', candidate.id || '', false, assoc.association?.targetType === candidate.id)));
-          card.append(assocLabel, assocName, kind, target, checkbox(`associations[${index}].required`, assoc.required, 'Required'), checkbox(`associations[${index}].visibleInCard`, assoc.visibleInCard, 'Visible in card'), checkbox(`associations[${index}].partOfName`, assoc.partOfName, 'In title', !type.enableNameGen)); associations.appendChild(card);
-        });
-        assocSection.appendChild(associations); form.append(basics, fieldsSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = make('button', 'btn btn-primary', 'Save Changes'); save.type = 'submit'; save.prepend(icon('save')); footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); this.showModal('entityTypeFormModal');
+        const checkbox = (name, checked, text, disabled = false) => { const label = make('label', 'checkbox-label'); const el = input(name, 'on', 'checkbox'); el.className = 'elistly-checkbox'; el.checked = !!checked; el.disabled = disabled; label.append(el, make('span', '', text)); return label; };
+        const button = (text, className = 'btn btn-secondary') => { const el = make('button', className, text); el.type = 'button'; return el; };
+        const modal = make('div', 'modal'); modal.id = 'entityTypeFormModal'; const content = make('div', 'modal-content'); const body = make('div', 'modal-body');
+        const form = make('form'); form.id = 'entityTypeForm'; form.dataset.typeId = typeId || ''; form.addEventListener('submit', event => this.saveEntityType(event, typeId));
+        const fields = make('div', 'sortable-list'); fields.id = 'fieldsContainer'; const associations = make('div', 'sortable-list'); associations.id = 'associationsContainer';
+        const components = make('div', 'sortable-list'); components.id = 'nameComponentsList'; const preview = make('div', 'preview-value'); preview.id = 'namePreview'; const suffixPreview = make('div', 'preview-value'); suffixPreview.id = 'suffixPreview';
+        const renumber = (container, prefix) => container.querySelectorAll(prefix === 'fields' ? '.field-card' : '.assoc-card').forEach((card, index) => { card.dataset.index = index; card.querySelectorAll('[name]').forEach(el => { el.name = el.name.replace(new RegExp(`${prefix}\\[\\d+\\]`), `${prefix}[${index}]`); }); });
+        const updatePreview = () => {
+          const prefixEnabled = form.querySelector('[name="prefixEnabled"]').checked;
+          const prefix = prefixEnabled ? form.querySelector('[name="namePrefix"]').value : '';
+          const values = [];
+          components.querySelectorAll('.name-component-item').forEach(item => {
+            if (item.dataset.componentType === 'separator') values.push(decodeURIComponent(item.dataset.separatorValue || ''));
+            else values.push(item.querySelector('.name-component-label').textContent);
+          });
+          const value = prefix + values.join(''); preview.textContent = value || 'No name components selected'; suffixPreview.textContent = value ? value + (form.querySelector('[name="suffixType"]').value === 'letter' ? 'A' : '01') : 'No name components selected';
+        };
+        const syncComponents = () => {
+          const prior = [...components.querySelectorAll('.name-component-item')].map(item => ({ type: item.dataset.componentType, name: item.dataset.fieldName || item.dataset.associationName, value: item.dataset.separatorValue }));
+          const fieldCards = [...fields.querySelectorAll('.field-card')].filter(card => card.querySelector('input[name$=".partOfName"]').checked);
+          const assocCards = [...associations.querySelectorAll('.assoc-card')].filter(card => card.querySelector('input[name$=".partOfName"]').checked);
+          const candidates = new Map([...fieldCards.map(card => [`field:${card.querySelector('input[name$=".name"]').value}`, card]), ...assocCards.map(card => [`association:${card.querySelector('input[name$=".name"]').value}`, card])]);
+          components.replaceChildren();
+          const appendComponent = (kind, card) => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = kind; const nameInput = card.querySelector(`input[name$=".name"]`); const labelInput = card.querySelector(`input[name$=".label"]`); const name = nameInput.value || labelInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); nameInput.value = name; if (kind === 'field') row.dataset.fieldName = name; else row.dataset.associationName = name; row.append(make('span', 'material-icons drag-handle', 'drag_indicator'), make('span', 'name-component-label', labelInput.value || name)); components.appendChild(row); };
+          prior.forEach(item => { if (item.type === 'separator') addSeparator(decodeURIComponent(item.value || '')); else { const card = candidates.get(`${item.type}:${item.name}`); if (card) { appendComponent(item.type, card); candidates.delete(`${item.type}:${item.name}`); } } });
+          candidates.forEach((card, key) => appendComponent(key.split(':')[0], card)); updatePreview();
+        };
+        const addSeparator = value => { if (!value) return; const row = make('div', 'name-component-item name-separator-item sortable-item'); row.dataset.componentType = 'separator'; row.dataset.separatorValue = encodeURIComponent(value); const remove = button('Remove', 'btn btn-secondary btn-sm'); remove.addEventListener('click', () => { row.remove(); updatePreview(); }); row.append(make('span', 'material-icons drag-handle', 'drag_indicator'), make('span', 'separator-pill', value === ' ' ? 'Space' : value), remove); components.appendChild(row); };
+        const renderOptions = (card, index, options = []) => {
+          card.querySelector('.field-options')?.remove(); if (card.querySelector('select[name$=".type"]').value !== 'dropdown') return;
+          const group = make('div', 'form-group field-options'); group.appendChild(make('label', '', 'Options')); const container = make('div', 'option-rows-container'); container.dataset.fieldIndex = index;
+          const appendOption = option => { const row = make('div', 'option-row'); const value = input(`fields[${index}].options[0].value`, option.value || ''); const nameValue = input(`fields[${index}].options[0].nameValue`, option.nameValue || ''); const remove = button('Remove', 'btn btn-danger'); remove.addEventListener('click', () => { row.remove(); renumberOptions(); }); row.append(value, nameValue, remove); container.appendChild(row); };
+          const renumberOptions = () => container.querySelectorAll('.option-row').forEach((row, optionIndex) => { row.dataset.optionIndex = optionIndex; row.querySelectorAll('[name]').forEach(el => { el.name = el.name.replace(/options\[\d+\]/, `options[${optionIndex}]`); }); });
+          (options.length ? options : [{ value: '', nameValue: '' }]).forEach(appendOption); const add = button('Add Option', 'btn btn-secondary btn-add-field'); add.addEventListener('click', () => { appendOption({}); renumberOptions(); }); group.append(container, add); card.appendChild(group); renumberOptions();
+        };
+        const nameGenerationEnabled = () => form.querySelector('[name="enableNameGen"]')?.checked ?? !!type.enableNameGen;
+        const addField = field => { const index = fields.querySelectorAll('.field-card').length; const card = make('div', 'field-card sortable-item'); card.dataset.index = index; const fieldLabel = input(`fields[${index}].label`, field.label || ''); fieldLabel.required = true; const fieldName = input(`fields[${index}].name`, field.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `fields[${index}].type`; ['text','number','dropdown','textarea','date','checkbox','qr'].forEach(value => kind.appendChild(new Option(value, value, false, (field.type || 'text') === value))); const part = checkbox(`fields[${index}].partOfName`, field.partOfName, 'In title', !nameGenerationEnabled()); part.querySelector('input').addEventListener('change', syncComponents); const remove = button('Remove Field', 'btn btn-danger'); remove.addEventListener('click', () => { card.remove(); renumber(fields, 'fields'); syncComponents(); }); kind.addEventListener('change', () => renderOptions(card, Number(card.dataset.index))); fieldLabel.addEventListener('input', () => { if (!fieldName.value) fieldName.value = fieldLabel.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); syncComponents(); }); card.append(make('div', 'form-group', 'Label *'), fieldLabel, fieldName, kind, checkbox(`fields[${index}].required`, field.required, 'Required'), checkbox(`fields[${index}].visibleInCard`, field.visibleInCard, 'Visible in card'), part, remove); fields.appendChild(card); renderOptions(card, index, field.options || []); };
+        const addAssociation = assoc => { const index = associations.querySelectorAll('.assoc-card').length; const card = make('div', 'assoc-card association-editor sortable-item'); card.dataset.index = index; const label = input(`associations[${index}].label`, assoc.label || ''); label.required = true; const name = input(`associations[${index}].name`, assoc.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `associations[${index}].association.kind`; ['belongs_to','has_many','hierarchy'].forEach(value => kind.appendChild(new Option(value, value, false, (assoc.association?.kind || 'belongs_to') === value))); const target = document.createElement('select'); target.name = `associations[${index}].association.targetType`; Object.values(this.data.entityTypes || {}).forEach(candidate => target.appendChild(new Option(candidate.label || candidate.id || '', candidate.id || '', false, assoc.association?.targetType === candidate.id))); const part = checkbox(`associations[${index}].partOfName`, assoc.partOfName, 'In title', !nameGenerationEnabled()); part.querySelector('input').addEventListener('change', syncComponents); const remove = button('Remove link', 'btn btn-danger'); remove.addEventListener('click', () => { card.remove(); renumber(associations, 'associations'); syncComponents(); }); label.addEventListener('input', () => { if (!name.value) name.value = label.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); syncComponents(); }); card.append(make('div', 'form-group', 'Label *'), label, name, kind, target, checkbox(`associations[${index}].required`, assoc.required, 'Required'), checkbox(`associations[${index}].visibleInCard`, assoc.visibleInCard, 'Visible in card'), part, remove); associations.appendChild(card); };
+        const close = button('×', 'modal-close'); close.addEventListener('click', () => this.closeEntityTypeForm()); const header = make('div', 'modal-header'); header.appendChild(make('h3', '', typeId ? type.label || '' : 'New entity type'));
+        const basics = make('div', 'entity-type-editor carded-section'); const label = input('label', type.label || ''); label.required = true; const iconInput = input('icon', type.icon || 'folder', 'hidden'); iconInput.id = 'entityTypeIcon'; const iconPicker = button('Choose icon'); iconPicker.addEventListener('click', () => this.showIconPicker('entityTypeIcon')); basics.append(make('label', '', 'Label *'), label, iconInput, iconPicker);
+        Object.values(this.data.categories || {}).forEach(category => basics.appendChild(checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || '')));
+        const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); const nameSection = make('div', `name-generation-settings${type.enableNameGen ? '' : ' hidden'}`); const prefixEnabled = checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'); const prefix = input('namePrefix', type.nameGen?.prefix || ''); prefix.disabled = !type.nameGen?.prefixEnabled; const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number','letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); const separatorActions = make('div', 'name-separator-actions'); [' ','-','_','.'].forEach(value => { const add = button(value === ' ' ? 'Space' : value, 'btn btn-secondary btn-sm'); add.addEventListener('click', () => { addSeparator(value); updatePreview(); }); separatorActions.appendChild(add); }); nameSection.append(prefixEnabled, prefix, suffix, components, separatorActions, preview, suffixPreview); nameEnabled.querySelector('input').addEventListener('change', event => { nameSection.classList.toggle('hidden', !event.target.checked); fields.querySelectorAll('input[name$=".partOfName"], input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); associations.querySelectorAll('input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); syncComponents(); }); prefixEnabled.querySelector('input').addEventListener('change', event => { prefix.disabled = !event.target.checked; updatePreview(); }); prefix.addEventListener('input', updatePreview); suffix.addEventListener('change', updatePreview);
+        const fieldSection = make('div', 'modal-group carded-section'); fieldSection.append(make('h4', '', 'Fields'), fields); const addFieldButton = button('Add Field', 'btn btn-add-field'); addFieldButton.addEventListener('click', () => addField({ type: 'text', visibleInCard: true })); fieldSection.appendChild(addFieldButton); const assocSection = make('div', 'modal-group carded-section'); assocSection.append(make('h4', '', 'Links'), associations); const addAssociationButton = button('Add link', 'btn btn-add-field'); addAssociationButton.addEventListener('click', () => addAssociation({ association: { kind: 'belongs_to', targetType: Object.keys(this.data.entityTypes || {})[0] || '' } })); assocSection.appendChild(addAssociationButton);
+        (type.fields || []).forEach(addField); (type.associations || []).forEach(addAssociation); (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else if (component.type === 'association') row.dataset.associationName = component.name || ''; else row.dataset.fieldName = component.name || component || ''; components.appendChild(row); }); basics.append(nameEnabled, nameSection); form.append(basics, fieldSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = button('Cancel'); cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = button('Save Changes', 'btn btn-primary'); save.type = 'submit'; footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); syncComponents(); this.showModal('entityTypeFormModal'); if (window.Sortable) this.initNameComponentsDragDrop();
       },
       
       initAllOptionSortables() {

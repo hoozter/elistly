@@ -341,7 +341,121 @@ async function testManagerAndExportBoundary() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary };
+async function testEntityTypeEditorParity() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      const original = {
+        id: 'device', label: 'Device', icon: 'memory', categories: ['hardware'], enableNameGen: false,
+        nameGen: { prefix: '', prefixEnabled: false, suffixType: 'number', componentsOrder: [] },
+        fields: [{ name: 'serial', label: 'Serial', type: 'text', required: true, visibleInCard: true, partOfName: false }],
+        associations: [{ name: 'owner', label: 'Owner', type: 'association', required: false, visibleInCard: false, partOfName: false, association: { kind: 'belongs_to', targetType: 'person' } }]
+      };
+      App.data = {
+        version: 'test', settings: {}, entities: {},
+        categories: { hardware: { id: 'hardware', label: 'Hardware' } },
+        entityTypes: {
+          device: structuredClone(original),
+          person: { id: 'person', label: 'Person', icon: 'person', categories: ['hardware'], fields: [], associations: [] }
+        },
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default'
+      };
+      App.editEntityType('device');
+      const form = document.querySelector('#entityTypeForm');
+      const byText = (selector, text) => [...form.querySelectorAll(selector)].find(element => element.textContent.includes(text));
+      const click = (selector, text) => {
+        const element = byText(selector, text);
+        if (!element) throw new Error(`Missing ${text}`);
+        element.click();
+      };
+      click('button', 'Add Field');
+      const addedField = form.querySelectorAll('.field-card, .field-editor')[1];
+      addedField.querySelector('input[name$=".label"]').value = 'Status';
+      const type = addedField.querySelector('select[name$=".type"]');
+      type.value = 'dropdown';
+      type.dispatchEvent(new Event('change', { bubbles: true }));
+      click('button', 'Add Option');
+      const optionRowsBeforeRemove = addedField.querySelectorAll('.option-row').length;
+      addedField.querySelector('.option-row .btn-danger').click();
+      const optionRowsAfterRemove = addedField.querySelectorAll('.option-row').length;
+      click('button', 'Add link');
+      const associationsAfterAdd = form.querySelectorAll('.assoc-card, .association-editor').length;
+      form.querySelectorAll('.assoc-card, .association-editor')[1].querySelector('.btn-danger').click();
+      const associationsAfterRemove = form.querySelectorAll('.assoc-card, .association-editor').length;
+      const nameGen = form.querySelector('input[name="enableNameGen"]');
+      nameGen.checked = true;
+      nameGen.dispatchEvent(new Event('change', { bubbles: true }));
+      const prefixEnabled = form.querySelector('input[name="prefixEnabled"]');
+      prefixEnabled.checked = true;
+      prefixEnabled.dispatchEvent(new Event('change', { bubbles: true }));
+      form.querySelector('input[name="namePrefix"]').value = 'Unit-';
+      addedField.querySelector('input[name$=".partOfName"]').checked = true;
+      addedField.querySelector('input[name$=".partOfName"]').dispatchEvent(new Event('change', { bubbles: true }));
+      const preview = form.querySelector('#namePreview')?.textContent || '';
+      form.querySelectorAll('.field-card, .field-editor')[0].querySelector('.btn-danger').click();
+      const fieldsAfterRemove = form.querySelectorAll('.field-card, .field-editor').length;
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const saved = App.data.entityTypes.device;
+      App.editEntityType('device');
+      const cancelForm = document.querySelector('#entityTypeForm');
+      cancelForm.querySelector('input[name="label"]').value = 'Discarded';
+      [...document.querySelectorAll('#entityTypeFormModal button')].find(element => element.textContent.includes('Cancel')).click();
+      return {
+        optionRowsBeforeRemove, optionRowsAfterRemove, associationsAfterAdd, associationsAfterRemove,
+        fieldsAfterRemove, preview, nameSectionVisible: !form.querySelector('.name-generation-settings')?.classList.contains('hidden'),
+        prefixEnabled: !form.querySelector('input[name="namePrefix"]').disabled,
+        saved, labelAfterCancel: App.data.entityTypes.device.label
+      };
+    });
+    assert.equal(result.optionRowsBeforeRemove, 2, 'dropdown type switch must create an option and add must append another');
+    assert.equal(result.optionRowsAfterRemove, 1, 'option removal must remove exactly one option');
+    assert.equal(result.associationsAfterAdd, 2, 'link add must append an association editor');
+    assert.equal(result.associationsAfterRemove, 1, 'link removal must remove exactly one association editor');
+    assert.equal(result.fieldsAfterRemove, 1, 'field removal must remove exactly one field editor');
+    assert.equal(result.nameSectionVisible, true, 'title generator interactions must reveal the editor');
+    assert.equal(result.prefixEnabled, true, 'prefix interaction must enable the prefix input');
+    assert.match(result.preview, /Unit-/, 'title generator interactions must update preview');
+    assert.deepEqual(result.saved.fields.map(field => ({ label: field.label, type: field.type, options: field.options })), [{ label: 'Status', type: 'dropdown', options: [] }]);
+    assert.equal(result.saved.associations.length, 1, 'save must retain the remaining association');
+    assert.deepEqual(result.saved.nameGen, { prefixEnabled: true, prefix: 'Unit-', partOfNamePrefix: true, suffixType: 'number', componentsOrder: [{ type: 'field', name: 'status' }] }, 'save must retain title-generator interaction data shape');
+    assert.equal(result.labelAfterCancel, 'Device', 'cancel must not persist editor changes');
+  });
+}
+
+async function testImportedSettingsBoundary() {
+  await withPage(async page => {
+    const requests = [];
+    page.on('request', request => requests.push(request.url()));
+    const hostileFontSize = `<img src="/missing-${marker}-settings" onerror="window.__settingsHits=(window.__settingsHits||0)+1"><svg onload="window.__settingsHits=(window.__settingsHits||0)+1"></svg>`;
+    await importFixtureThroughFileInput(page, { settings: { fontSize: hostileFontSize, dashboard: { viewMode: 'gallery', groupByCategory: false, itemsPerCategory: 12 }, unicodeNote: 'räksmörgås 東京' } });
+    await page.locator('#processImportBtn').click();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const observed = await page.evaluate(() => {
+      window.__settingsHits = 0;
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      App.showSettingsModal();
+      const modal = document.querySelector('#settingsModal');
+      const textSize = modal.querySelector('.text-size-label')?.textContent;
+      const dashboardMode = modal.querySelector('[name="dashboardViewMode"]')?.value;
+      const items = modal.querySelector('[name="dashboardItemsPerCategoryNumber"]')?.value;
+      return {
+        hits: window.__settingsHits,
+        activeNodes: modal.querySelectorAll('img, svg, script').length,
+        inlineHandlers: [...modal.querySelectorAll('*')].filter(node => [...node.attributes].some(attribute => /^on/i.test(attribute.name) && attribute.value.includes('ELISTLY_FRONTEND_SECURITY_MARKER_20260808'))).length,
+        textSize, dashboardMode, items, persisted: App.data.settings
+      };
+    });
+    assert.equal(observed.hits, 0, `persisted settings payload executed ${observed.hits} time(s)`);
+    assert.equal(observed.activeNodes, 0, `persisted settings created ${observed.activeNodes} active node(s)`);
+    assert.equal(observed.inlineHandlers, 0, `persisted settings created ${observed.inlineHandlers} inline handler(s)`);
+    assert.equal(observed.textSize, 'Normal', 'invalid font size must default at the settings semantic boundary');
+    assert.equal(observed.dashboardMode, 'gallery', 'valid imported dashboard setting must render');
+    assert.equal(observed.items, '12', 'valid imported numeric setting must render');
+    assert.equal(observed.persisted.unicodeNote, 'räksmörgås 東京', 'unrelated valid Unicode settings must persist');
+    assert.ok(!requests.some(url => url.includes(marker)), `settings marker reached a browser request: ${requests.join(', ')}`);
+  });
+}
+
+const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
