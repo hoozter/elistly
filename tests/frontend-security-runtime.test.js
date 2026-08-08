@@ -431,9 +431,12 @@ async function testImportedSettingsBoundary() {
       settings: {
         fontSize: hostileMarkup,
         materialIcons: ['memory', hostileMarkup],
+        defaultView: hostileMarkup,
         dashboard: { viewMode: 'gallery', groupByCategory: false, itemsPerCategory: 12, categoryOrder: ['safe-category', hostileMarkup] },
         notifications: { duration: hostileMarkup },
-        unicodeNote: 'räksmörgås 東京',
+        unknownText: 'räksmörgås 東京',
+        unknownNumber: 17,
+        unknownBoolean: true,
         unsupportedBranch: { payload: hostileMarkup }
       },
       categories: { 'safe-category': { id: 'safe-category', label: 'Safe category' } }
@@ -465,55 +468,66 @@ async function testImportedSettingsBoundary() {
     assert.equal(observed.textSize, 'Normal', 'invalid font size must default at the settings semantic boundary');
     assert.equal(observed.dashboardMode, 'gallery', 'valid imported dashboard setting must render');
     assert.equal(observed.items, '12', 'valid imported numeric setting must render');
-    assert.equal(observed.persisted.unicodeNote, 'räksmörgås 東京', 'unrelated valid Unicode settings must persist');
+    assert.equal(observed.persisted.defaultView, 'dashboard', 'unsupported default view must fall back to dashboard');
     assert.deepEqual(observed.iconTexts, ['memory'], 'invalid material icon entries must be rejected before ordinary startup rendering');
     assert.deepEqual(observed.persisted.dashboard.categoryOrder, ['safe-category'], 'invalid dashboard nested entries must be rejected');
     assert.deepEqual(observed.persisted.notifications, {}, 'invalid notification settings must be rejected');
+    assert.equal('unknownText' in observed.persisted, false, 'unknown Unicode string settings must not persist');
+    assert.equal('unknownNumber' in observed.persisted, false, 'unknown numeric settings must not persist');
+    assert.equal('unknownBoolean' in observed.persisted, false, 'unknown boolean settings must not persist');
     assert.equal('unsupportedBranch' in observed.persisted, false, 'unsupported object settings must not persist');
+    const validDefaultView = await page.evaluate(() => App.normalizeSettings({ defaultView: 'dashboard' }, {}).defaultView);
+    assert.equal(validDefaultView, 'dashboard', 'supported default view must survive normalization');
     assert.ok(!requests.some(url => url.includes(marker)), `settings marker reached a browser request: ${requests.join(', ')}`);
   });
 }
 
 async function testCustomTitleSeparatorParity() {
   await withPage(async page => {
-    const result = await page.evaluate(() => {
-      App.data = {
-        version: 'test', settings: {}, entities: {},
-        categories: { hardware: { id: 'hardware', label: 'Hardware' } },
-        entityTypes: {
-          device: {
-            id: 'device', label: 'Device', icon: 'memory', categories: ['hardware'], enableNameGen: true,
-            nameGen: { prefix: '', prefixEnabled: false, suffixType: 'number', componentsOrder: [] },
-            fields: [
-              { name: 'serial', label: 'Serial', type: 'text', visibleInCard: true, partOfName: true },
-              { name: 'model', label: 'Model', type: 'text', visibleInCard: true, partOfName: true }
-            ], associations: []
-          }
-        },
-        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default'
-      };
-      App.editEntityType('device');
-      const form = document.querySelector('#entityTypeForm');
-      const customInput = form.querySelector('#customSeparatorInput');
-      const insert = [...form.querySelectorAll('button')].find(button => button.textContent.includes('Insert'));
-      if (!customInput || !insert) throw new Error('Missing custom separator controls');
-      customInput.value = ' / ';
-      insert.click();
-      const inserted = [...form.querySelectorAll('.name-separator-item')].map(row => decodeURIComponent(row.dataset.separatorValue));
-      const inputWasCleared = customInput.value === '';
-      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      const savedWithCustom = structuredClone(App.data.entityTypes.device.nameGen.componentsOrder);
-      App.editEntityType('device');
-      const remove = document.querySelector('.name-separator-item .btn-secondary');
-      if (!remove) throw new Error('Missing separator remove control');
-      remove.click();
-      document.querySelector('#entityTypeForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      const savedAfterRemove = structuredClone(App.data.entityTypes.device.nameGen.componentsOrder);
-      App.editEntityType('device');
-      document.querySelector('#entityTypeForm input[name="label"]').value = 'Discarded';
-      [...document.querySelectorAll('#entityTypeFormModal button')].find(button => button.textContent.includes('Cancel')).click();
-      return { inserted, inputWasCleared, savedWithCustom, savedAfterRemove, labelAfterCancel: App.data.entityTypes.device.label, storage: localStorage.getItem('elistlyData') };
+    await importFixtureThroughFileInput(page, {
+      entityTypes: {
+        device: {
+          id: 'device', label: 'Device', icon: 'memory', categories: ['hardware'], enableNameGen: true,
+          nameGen: { prefix: '', prefixEnabled: false, suffixType: 'number', componentsOrder: [] },
+          fields: [
+            { name: 'serial', label: 'Serial', type: 'text', visibleInCard: true, partOfName: true },
+            { name: 'model', label: 'Model', type: 'text', visibleInCard: true, partOfName: true }
+          ], associations: []
+        }
+      },
+      categories: { hardware: { id: 'hardware', label: 'Hardware' } }
     });
+    await page.locator('#processImportBtn').click();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      App.showSettingsModal();
+    });
+    await page.locator('#settingsModal button', { hasText: 'Entity types' }).click();
+    await page.locator('#entityTypeManagerModal button[title="Edit"]').click();
+    const customInput = page.locator('#customSeparatorInput');
+    await customInput.fill(' / ');
+    await page.locator('#entityTypeForm button', { hasText: 'Insert' }).click();
+    const inserted = await page.locator('.name-separator-item').evaluateAll(rows => rows.map(row => decodeURIComponent(row.dataset.separatorValue)));
+    const inputWasCleared = await customInput.inputValue() === '';
+    await page.locator('#entityTypeFormModal .modal-actions button[type="submit"]', { hasText: 'Save Changes' }).click();
+    const savedWithCustom = await page.evaluate(() => structuredClone(App.data.entityTypes.device.nameGen.componentsOrder));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const persisted = await page.evaluate(() => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      return App.data.entityTypes.device.nameGen.componentsOrder;
+    });
+    await page.evaluate(() => App.showSettingsModal());
+    await page.locator('#settingsModal button', { hasText: 'Entity types' }).click();
+    await page.locator('#entityTypeManagerModal button[title="Edit"]').click();
+    await page.locator('.name-separator-item .btn-secondary', { hasText: 'Remove' }).click();
+    await page.locator('#entityTypeFormModal .modal-actions button[type="submit"]', { hasText: 'Save Changes' }).click();
+    const savedAfterRemove = await page.evaluate(() => structuredClone(App.data.entityTypes.device.nameGen.componentsOrder));
+    await page.evaluate(() => App.editEntityType('device'));
+    await page.locator('#entityTypeFormModal').last().locator('input[name="label"]').fill('Discarded');
+    await page.locator('#entityTypeFormModal').last().locator('button', { hasText: 'Cancel' }).click();
+    const labelAfterCancel = await page.evaluate(() => App.data.entityTypes.device.label);
+    const result = { inserted, inputWasCleared, savedWithCustom, savedAfterRemove, labelAfterCancel };
     assert.deepEqual(result.inserted, [' / '], 'custom Insert must add the entered separator');
     assert.equal(result.inputWasCleared, true, 'custom separator input must clear after insertion');
     assert.deepEqual(result.savedWithCustom, [
@@ -523,12 +537,7 @@ async function testCustomTitleSeparatorParity() {
       { type: 'field', name: 'serial' }, { type: 'field', name: 'model' }
     ], 'remove must remove the exact custom separator');
     assert.equal(result.labelAfterCancel, 'Device', 'cancel must not persist editor changes');
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    const persisted = await page.evaluate(() => {
-      App.data = JSON.parse(localStorage.getItem('elistlyData'));
-      return App.data.entityTypes.device.nameGen.componentsOrder;
-    });
-    assert.deepEqual(persisted, result.savedAfterRemove, 'saved separator removal must survive ordinary reload');
+    assert.deepEqual(persisted, result.savedWithCustom, 'visible Save Changes must persist the exact inserted separator through reload');
   });
 }
 

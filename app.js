@@ -3599,17 +3599,10 @@ const App = {
 
       normalizeSettings(incoming, existing = {}) {
         const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-        const isSafeKey = key => !['__proto__', 'constructor', 'prototype'].includes(key);
         const source = isPlainObject(incoming) ? incoming : {};
         const fallback = isPlainObject(existing) ? existing : {};
         const result = {};
-        const copyOpaqueScalars = value => {
-          if (!isPlainObject(value)) return;
-          Object.entries(value).forEach(([key, candidate]) => {
-            if (!isSafeKey(key) || ['fontSize', 'materialIcons', 'dashboard', 'notifications'].includes(key)) return;
-            if (typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean') result[key] = candidate;
-          });
-        };
+        const supportedDefaultViews = ['dashboard'];
         const normalizeMaterialIcons = value => Array.isArray(value)
           ? value.filter(icon => typeof icon === 'string' && MATERIAL_ICONS.includes(icon))
           : null;
@@ -3629,11 +3622,9 @@ const App = {
           return notifications;
         };
 
-        copyOpaqueScalars(fallback);
-        copyOpaqueScalars(source);
-        result.defaultView = typeof source.defaultView === 'string'
+        result.defaultView = supportedDefaultViews.includes(source.defaultView)
           ? source.defaultView
-          : (typeof fallback.defaultView === 'string' ? fallback.defaultView : 'dashboard');
+          : (supportedDefaultViews.includes(fallback.defaultView) ? fallback.defaultView : 'dashboard');
         const fontSize = ['small', 'normal', 'large', 'larger'].includes(source.fontSize)
           ? source.fontSize
           : (['small', 'normal', 'large', 'larger'].includes(fallback.fontSize) ? fallback.fontSize : 'normal');
@@ -5162,7 +5153,7 @@ const App = {
         Object.values(this.data.categories || {}).forEach(category => basics.appendChild(checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || '')));
         const nameEnabled = checkbox('enableNameGen', type.enableNameGen, 'Enable title generator'); nameEnabled.querySelector('input').setAttribute('role', 'switch'); const nameSection = make('div', `name-generation-settings${type.enableNameGen ? '' : ' hidden'}`); const prefixEnabled = checkbox('prefixEnabled', type.nameGen?.prefixEnabled, 'Use prefix'); const prefix = input('namePrefix', type.nameGen?.prefix || ''); prefix.disabled = !type.nameGen?.prefixEnabled; const suffix = document.createElement('select'); suffix.name = 'suffixType'; ['number','letter'].forEach(value => suffix.appendChild(new Option(value === 'number' ? 'Numbers (1, 2, 3...)' : 'Letters (A, B, C...)', value, false, type.nameGen?.suffixType === value))); const separatorActions = make('div', 'name-separator-actions'); [' ','-','_','.'].forEach(value => { const add = button(value === ' ' ? 'Space' : value, 'btn btn-secondary btn-sm'); add.addEventListener('click', () => { addSeparator(value); updatePreview(); }); separatorActions.appendChild(add); }); const customSeparator = input('', ''); customSeparator.id = 'customSeparatorInput'; customSeparator.placeholder = 'Custom separator'; const insertCustomSeparator = button('Insert', 'btn btn-secondary btn-sm'); insertCustomSeparator.addEventListener('click', () => { const value = customSeparator.value; addSeparator(value); customSeparator.value = ''; updatePreview(); }); const customSeparatorControls = make('div', 'custom-separator'); customSeparatorControls.append(customSeparator, insertCustomSeparator); separatorActions.appendChild(customSeparatorControls); nameSection.append(prefixEnabled, prefix, suffix, components, separatorActions, preview, suffixPreview); nameEnabled.querySelector('input').addEventListener('change', event => { nameSection.classList.toggle('hidden', !event.target.checked); fields.querySelectorAll('input[name$=".partOfName"], input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); associations.querySelectorAll('input[name$=".partOfName"]').forEach(el => { el.disabled = !event.target.checked; }); syncComponents(); }); prefixEnabled.querySelector('input').addEventListener('change', event => { prefix.disabled = !event.target.checked; updatePreview(); }); prefix.addEventListener('input', updatePreview); suffix.addEventListener('change', updatePreview);
         const fieldSection = make('div', 'modal-group carded-section'); fieldSection.append(make('h4', '', 'Fields'), fields); const addFieldButton = button('Add Field', 'btn btn-add-field'); addFieldButton.addEventListener('click', () => addField({ type: 'text', visibleInCard: true })); fieldSection.appendChild(addFieldButton); const assocSection = make('div', 'modal-group carded-section'); assocSection.append(make('h4', '', 'Links'), associations); const addAssociationButton = button('Add link', 'btn btn-add-field'); addAssociationButton.addEventListener('click', () => addAssociation({ association: { kind: 'belongs_to', targetType: Object.keys(this.data.entityTypes || {})[0] || '' } })); assocSection.appendChild(addAssociationButton);
-        (type.fields || []).forEach(addField); (type.associations || []).forEach(addAssociation); (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else if (component.type === 'association') row.dataset.associationName = component.name || ''; else row.dataset.fieldName = component.name || component || ''; components.appendChild(row); }); basics.append(nameEnabled, nameSection); form.append(basics, fieldSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = button('Cancel'); cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = button('Save Changes', 'btn btn-primary'); save.type = 'submit'; footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); syncComponents(); this.showModal('entityTypeFormModal'); if (window.Sortable) this.initNameComponentsDragDrop();
+        (type.fields || []).forEach(addField); (type.associations || []).forEach(addAssociation); (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else if (component.type === 'association') row.dataset.associationName = component.name || ''; else row.dataset.fieldName = component.name || component || ''; components.appendChild(row); }); basics.append(nameEnabled, nameSection); form.append(basics, fieldSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = button('Cancel'); cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = button('Save Changes', 'btn btn-primary'); save.type = 'submit'; save.setAttribute('form', form.id); footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); syncComponents(); this.showModal('entityTypeFormModal'); if (window.Sortable) this.initNameComponentsDragDrop();
       },
       
       initAllOptionSortables() {
