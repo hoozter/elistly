@@ -7186,21 +7186,117 @@ const App = {
         fileInput.addEventListener('change', function(e) {
           const file = e.target.files[0];
           if (!file) return;
+          if (file.size > App.importLimits.maxBytes) return App.showImportError('Import file exceeds the 1 MiB limit.');
           const reader = new FileReader();
           reader.onload = function(ev) {
             try {
-              const imported = JSON.parse(ev.target.result);
-              App.renderImportPreview(imported);
-              document.getElementById('processImportBtn').disabled = false;
-              App._importDataPreview = imported;
+              const parsed = App.parseImportJson(ev.target.result);
+              App._importRawText = ev.target.result;
+              App._importDuplicateConflicts = parsed.duplicates;
+              App._importDataPreview = parsed.value;
+              App.renderImportPreview(parsed.value);
             } catch (err) {
-              document.getElementById('importPreviewArea').innerHTML = '<div class="text-danger">Invalid JSON file.</div>';
-              document.getElementById('processImportBtn').disabled = true;
-              App._importDataPreview = null;
+              App.showImportError(err.message || 'Invalid JSON file.');
             }
           };
           reader.readAsText(file);
         });
+      },
+
+      importLimits: { maxBytes: 1024 * 1024, maxDepth: 32, maxMembers: 5000, maxConflicts: 200, maxPreviewText: 500 },
+
+      showImportError(message) {
+        const preview = document.getElementById('importPreviewArea');
+        preview.replaceChildren();
+        const error = document.createElement('div');
+        error.className = 'text-danger';
+        error.textContent = message;
+        preview.appendChild(error);
+        document.getElementById('processImportBtn').disabled = true;
+        this._importDataPreview = null;
+        this._importDuplicateConflicts = [];
+        this._importRawText = null;
+      },
+
+      parseImportJson(source) {
+        if (typeof source !== 'string' || source.length > this.importLimits.maxBytes) throw new Error('Import file exceeds the 1 MiB limit.');
+        let index = 0;
+        let members = 0;
+        const duplicates = [];
+        const fail = message => { throw new Error(`Invalid JSON: ${message}`); };
+        const whitespace = () => { while (/\s/.test(source[index] || '')) index++; };
+        const string = () => {
+          if (source[index++] !== '"') fail('expected string');
+          let out = '';
+          while (index < source.length) {
+            const char = source[index++];
+            if (char === '"') return out;
+            if (char === '\\') {
+              const escape = source[index++];
+              const map = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+              if (escape === 'u') {
+                const hex = source.slice(index, index + 4);
+                if (!/^[0-9a-f]{4}$/i.test(hex)) fail('bad unicode escape');
+                out += String.fromCharCode(parseInt(hex, 16)); index += 4;
+              } else if (Object.prototype.hasOwnProperty.call(map, escape)) out += map[escape];
+              else fail('bad escape');
+            } else {
+              if (char < ' ') fail('control character in string');
+              out += char;
+            }
+          }
+          fail('unterminated string');
+        };
+        const scalar = () => {
+          const start = index;
+          while (index < source.length && !/[\s,\]}]/.test(source[index])) index++;
+          const token = source.slice(start, index);
+          if (token === 'true') return true;
+          if (token === 'false') return false;
+          if (token === 'null') return null;
+          if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(token)) return Number(token);
+          fail('invalid value');
+        };
+        const value = (path, depth) => {
+          if (depth > this.importLimits.maxDepth) throw new Error('Import JSON exceeds the nesting limit.');
+          whitespace();
+          if (source[index] === '"') return string();
+          if (source[index] === '[') {
+            index++; const array = []; whitespace();
+            if (source[index] === ']') { index++; return array; }
+            while (true) {
+              if (array.length >= this.importLimits.maxMembers) throw new Error('Import JSON exceeds the collection limit.');
+              array.push(value(`${path}[${array.length}]`, depth + 1)); whitespace();
+              if (source[index] === ']') { index++; return array; }
+              if (source[index++] !== ',') fail('expected comma in array'); whitespace();
+            }
+          }
+          if (source[index] === '{') {
+            index++; const object = Object.create(null); const seen = new Map(); whitespace();
+            if (source[index] === '}') { index++; return object; }
+            while (true) {
+              whitespace(); if (source[index] !== '"') fail('expected object key');
+              const key = string(); whitespace(); if (source[index++] !== ':') fail('expected colon');
+              if (++members > this.importLimits.maxMembers) throw new Error('Import JSON exceeds the member limit.');
+              const childPath = `${path}[${JSON.stringify(key)}]`;
+              const child = value(childPath, depth + 1);
+              if (seen.has(key)) {
+                if (duplicates.length >= this.importLimits.maxConflicts) throw new Error('Import JSON exceeds the conflict limit.');
+                duplicates.push({ id: `duplicate:${childPath}:${duplicates.length}`, kind: 'duplicate', path: childPath, key, earlier: seen.get(key), later: child, owner: object });
+              } else {
+                seen.set(key, child);
+                Object.defineProperty(object, key, { value: child, writable: true, enumerable: true, configurable: true });
+              }
+              whitespace(); if (source[index] === '}') { index++; return object; }
+              if (source[index++] !== ',') fail('expected comma in object'); whitespace();
+            }
+          }
+          return scalar();
+        };
+        const result = value('$', 0); whitespace();
+        if (index !== source.length) fail('unexpected trailing data');
+        if (!result || Array.isArray(result) || typeof result !== 'object') throw new Error('Import JSON must contain an object.');
+        return { value: result, duplicates };
       },
 
       renderImportPreview(imported) {
@@ -7284,55 +7380,138 @@ const App = {
           previewArea.appendChild(section);
         }
 
+        const conflicts = this.collectImportConflicts(imported, this._importDuplicateConflicts || []);
+        this._importConflicts = conflicts;
+        if (conflicts.length) {
+          const section = document.createElement('div');
+          section.className = 'restore-defaults-section';
+          const title = document.createElement('h4');
+          title.textContent = 'Import conflicts — choose Skip or Overwrite for every conflict';
+          section.appendChild(title);
+          const duplicates = conflicts.filter(conflict => conflict.kind === 'duplicate');
+          if (duplicates.length) {
+            const duplicateTitle = document.createElement('h5');
+            duplicateTitle.textContent = 'Duplicate JSON members';
+            section.appendChild(duplicateTitle);
+            for (const conflict of duplicates) section.appendChild(this.renderImportConflict(conflict));
+          }
+          const idConflicts = conflicts.filter(conflict => conflict.kind === 'id');
+          if (idConflicts.length) {
+            const idTitle = document.createElement('h5');
+            idTitle.textContent = 'Existing record IDs';
+            section.appendChild(idTitle);
+            for (const conflict of idConflicts) section.appendChild(this.renderImportConflict(conflict));
+          }
+          previewArea.appendChild(section);
+        }
         if (!hasImportableData) previewArea.textContent = 'No importable data found in file.';
+        this.updateImportApplyState();
+      },
+
+      importSafeText(value) {
+        let text;
+        try { text = JSON.stringify(value); } catch (_) { text = String(value); }
+        return text.length > this.importLimits.maxPreviewText ? `${text.slice(0, this.importLimits.maxPreviewText)}…` : text;
+      },
+
+      renderImportConflict(conflict) {
+        const item = document.createElement('div');
+        item.className = 'restore-item';
+        item.dataset.importConflict = conflict.id;
+        const description = document.createElement('p');
+        description.textContent = conflict.kind === 'duplicate'
+          ? `${conflict.path}: earlier ${this.importSafeText(conflict.earlier)}; later ${this.importSafeText(conflict.later)}`
+          : `${conflict.collection} ID ${conflict.idValue}: current ${this.importSafeText(conflict.current)}; incoming ${this.importSafeText(conflict.incoming)}`;
+        item.appendChild(description);
+        for (const choice of ['skip', 'overwrite']) {
+          const label = document.createElement('label');
+          label.className = 'checkbox-label';
+          const input = document.createElement('input');
+          input.type = 'radio'; input.name = `import-conflict-${conflict.id}`; input.value = choice;
+          input.addEventListener('change', () => this.updateImportApplyState());
+          const text = document.createElement('span');
+          text.textContent = choice === 'skip' ? 'Skip' : 'Overwrite';
+          label.append(input, text); item.appendChild(label);
+        }
+        return item;
+      },
+
+      collectImportConflicts(imported, duplicates) {
+        const conflicts = duplicates.map(conflict => ({ ...conflict, signature: `${conflict.path}\n${this.importSafeText(conflict.earlier)}\n${this.importSafeText(conflict.later)}` }));
+        const collections = [['entityTypes', this.data.entityTypes], ['categories', this.data.categories], ['entities', this.data.entities]];
+        for (const [collection, current] of collections) {
+          for (const [id, incoming] of Object.entries(imported[collection] || {})) {
+            if (Object.prototype.hasOwnProperty.call(current || {}, id)) conflicts.push({ id: `id:${collection}:${id}`, kind: 'id', collection, idValue: id, current: current[id], incoming, signature: `${collection}\n${id}\n${this.importSafeText(current[id])}\n${this.importSafeText(incoming)}` });
+          }
+        }
+        if (imported.settings && this.data.settings && Object.keys(this.data.settings).length) conflicts.push({ id: 'id:settings:settings', kind: 'id', collection: 'settings', idValue: 'settings', current: this.data.settings, incoming: imported.settings, signature: `settings\n${this.importSafeText(this.data.settings)}\n${this.importSafeText(imported.settings)}` });
+        if (conflicts.length > this.importLimits.maxConflicts) throw new Error('Import JSON exceeds the conflict limit.');
+        return conflicts;
+      },
+
+      updateImportApplyState() {
+        const button = document.getElementById('processImportBtn');
+        if (!button) return;
+        const unresolved = (this._importConflicts || []).some(conflict => !document.querySelector(`[data-import-conflict="${CSS.escape(conflict.id)}"] input[type="radio"]:checked`));
+        button.disabled = !this._importDataPreview || unresolved;
       },
 
       processImport() {
-        const form = document.getElementById('importModal');
         if (!this._importDataPreview) return;
         // Get selected checkboxes
         const selectedEntityTypes = Array.from(document.querySelectorAll('input[name="importEntityTypes"]:checked')).map(input => input.value);
         const selectedCategories = Array.from(document.querySelectorAll('input[name="importCategories"]:checked')).map(input => input.value);
         const selectedEntities = Array.from(document.querySelectorAll('input[name="importEntities"]:checked')).map(input => input.value);
         const importSettings = document.querySelector('input[name="importSettings"]:checked');
-        const imported = this._importDataPreview;
-        let importedCount = 0;
+        let parsed;
+        try { parsed = this.parseImportJson(this._importRawText); } catch (err) { return this.showImportError(err.message || 'Invalid JSON file.'); }
+        const freshConflicts = this.collectImportConflicts(parsed.value, parsed.duplicates);
+        const oldSignatures = (this._importConflicts || []).map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
+        const freshSignatures = freshConflicts.map(conflict => `${conflict.id}\n${conflict.signature}`).join('\u0000');
+        if (oldSignatures !== freshSignatures) {
+          this._importDuplicateConflicts = parsed.duplicates;
+          this._importDataPreview = parsed.value;
+          this.renderImportPreview(parsed.value);
+          return this.showNotification('Import conflicts changed. Review every choice again before applying.', 'error');
+        }
+        const decisions = new Map(freshConflicts.map(conflict => [conflict.id, document.querySelector(`[data-import-conflict="${CSS.escape(conflict.id)}"] input[type="radio"]:checked`)?.value]));
+        if ([...decisions.values()].some(choice => !choice)) return this.updateImportApplyState();
+        for (const duplicate of parsed.duplicates) if (decisions.get(duplicate.id) === 'overwrite') duplicate.owner[duplicate.key] = duplicate.later;
+        const imported = parsed.value;
+        const beforeData = this.data;
+        const beforeStorage = localStorage.getItem(Storage.KEY);
+        const candidate = JSON.parse(JSON.stringify(this.data));
+        let created = 0, overwritten = 0, skipped = 0;
+        const applyCollection = (collection, selected) => {
+          for (const id of selected) {
+            if (!Object.prototype.hasOwnProperty.call(imported[collection] || {}, id)) continue;
+            const collision = freshConflicts.find(conflict => conflict.kind === 'id' && conflict.collection === collection && conflict.idValue === id);
+            if (collision && decisions.get(collision.id) === 'skip') { skipped++; continue; }
+            if (collision) overwritten++; else created++;
+            candidate[collection][id] = JSON.parse(JSON.stringify(imported[collection][id]));
+          }
+        };
         // Entity Types
-        if (imported.entityTypes) {
-          for (const typeId of selectedEntityTypes) {
-            if (imported.entityTypes[typeId]) {
-              this.data.entityTypes[typeId] = JSON.parse(JSON.stringify(imported.entityTypes[typeId]));
-              importedCount++;
-            }
-          }
-        }
-        // Categories
-        if (imported.categories) {
-          for (const catId of selectedCategories) {
-            if (imported.categories[catId]) {
-              this.data.categories[catId] = JSON.parse(JSON.stringify(imported.categories[catId]));
-              importedCount++;
-            }
-          }
-        }
-        // Entities
-        if (imported.entities) {
-          for (const entityId of selectedEntities) {
-            if (imported.entities[entityId]) {
-              this.data.entities[entityId] = JSON.parse(JSON.stringify(imported.entities[entityId]));
-              importedCount++;
-            }
-          }
-        }
-        // Settings
+        applyCollection('entityTypes', selectedEntityTypes);
+        applyCollection('categories', selectedCategories);
+        applyCollection('entities', selectedEntities);
         if (importSettings && imported.settings) {
-          this.data.settings = this.normalizeSettings(imported.settings, this.data.settings);
-          importedCount++;
+          const settingsConflict = freshConflicts.find(conflict => conflict.collection === 'settings');
+          if (settingsConflict && decisions.get(settingsConflict.id) === 'skip') skipped++;
+          else { candidate.settings = this.normalizeSettings(imported.settings, candidate.settings); settingsConflict ? overwritten++ : created++; }
         }
-        this.saveData();
+        try {
+          this.data = candidate;
+          this.saveData();
+          if (!backendClient && localStorage.getItem(Storage.KEY) !== JSON.stringify({ ...this.data, version: this.data.version })) throw new Error('Local persistence verification failed.');
+        } catch (err) {
+          this.data = beforeData;
+          if (beforeStorage === null) localStorage.removeItem(Storage.KEY); else localStorage.setItem(Storage.KEY, beforeStorage);
+          return this.showImportError(`Import was not saved; original data was restored. ${err.message || ''}`);
+        }
         this.closeModal('importModal');
         this.loadView('dashboard');
-        this.showNotification(`Imported ${importedCount} item${importedCount === 1 ? '' : 's'} successfully`, 'success');
+        this.showNotification(`Import complete: created ${created}; overwritten ${overwritten}; skipped ${skipped}; rejected 0.`, 'success');
         this._importDataPreview = null;
       }
     };

@@ -44,22 +44,23 @@ async function withPage(run) {
   }
 }
 
-async function importFixtureThroughFileInput(page, fixture) {
-  await page.evaluate(() => {
+async function importFixtureThroughFileInput(page, fixture, rawJson = null, initialData = undefined, waitForApply = true) {
+  await page.evaluate(initialData => {
     window.__elistlyPreviewHandlerHits = 0;
-    App.data = {
+    if (initialData !== null) App.data = initialData || {
       version: 'test', settings: {}, categories: {}, entityTypes: {}, entities: {},
       workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } },
       currentWorkspaceId: 'default'
     };
+    document.querySelectorAll('#importModal').forEach(modal => modal.remove());
     App.showImportModal();
-  });
+  }, initialData);
   await page.locator('#importFileInput').setInputFiles({
     name: 'hostile-import.json',
     mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify(fixture), 'utf8')
+    buffer: Buffer.from(rawJson === null ? JSON.stringify(fixture) : rawJson, 'utf8')
   });
-  await page.locator('#processImportBtn:not([disabled])').waitFor();
+  if (waitForApply) await page.locator('#processImportBtn:not([disabled])').waitFor();
 }
 
 async function testImportPreviewIsInert() {
@@ -541,7 +542,44 @@ async function testCustomTitleSeparatorParity() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
+async function testImportCollisionChoices() {
+  await withPage(async page => {
+    const original = {
+      version: 'test', settings: {}, categories: {},
+      entityTypes: { device: { id: 'device', label: 'Original device', fields: [], categories: [] } },
+      entities: {}, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } },
+      currentWorkspaceId: 'default'
+    };
+    const rawJson = '{"entityTypes":{"device":{"id":"device","label":"Earlier","fields":[],"categories":[]},"device":{"id":"device","label":"Later","fields":[],"categories":[]}},"categories":{"new-category":{"id":"new-category","label":"New"}}}';
+    await importFixtureThroughFileInput(page, {}, rawJson, original, false);
+    await page.locator('#importPreviewArea').getByText('Duplicate JSON members').waitFor();
+    assert.equal(await page.locator('#processImportBtn').isDisabled(), true, 'Apply must stay disabled while collision choices are unresolved');
+    const conflicts = await page.locator('[data-import-conflict]').count();
+    assert.equal(conflicts, 2, 'duplicate member and existing ID must each be previewed');
+    await page.locator('[data-import-conflict]').nth(0).getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('[data-import-conflict]').nth(1).getByRole('radio', { name: 'Skip' }).check();
+    await page.locator('#processImportBtn:not([disabled])').waitFor();
+    await page.evaluate(() => { App.data.entityTypes.device.label = 'Changed while reviewing'; });
+    await page.locator('#processImportBtn').click();
+    assert.equal(await page.locator('#processImportBtn').isDisabled(), true, 'changed current data must invalidate earlier collision choices');
+    await page.locator('[data-import-conflict]').nth(0).getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('[data-import-conflict]').nth(1).getByRole('radio', { name: 'Skip' }).check();
+    await page.locator('#processImportBtn:not([disabled])').waitFor();
+    await page.locator('#processImportBtn').click();
+    const skipped = await page.evaluate(() => ({ device: App.data.entityTypes.device.label, category: App.data.categories['new-category']?.label, notification: document.body.textContent }));
+    assert.equal(skipped.device, 'Changed while reviewing', 'existing-ID Skip must preserve changed current data after renewed review');
+    assert.equal(skipped.category, 'New', 'non-conflicting selections must still import');
+
+    await importFixtureThroughFileInput(page, {}, rawJson, null, false);
+    for (const conflict of await page.locator('[data-import-conflict]').all()) await conflict.getByRole('radio', { name: 'Overwrite' }).check();
+    await page.locator('#processImportBtn:not([disabled])').waitFor();
+    await page.locator('#processImportBtn').click();
+    const overwritten = await page.evaluate(() => App.data.entityTypes.device.label);
+    assert.equal(overwritten, 'Later', 'duplicate Overwrite plus existing-ID Overwrite must apply the later incoming value');
+  });
+}
+
+const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
