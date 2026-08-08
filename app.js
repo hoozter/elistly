@@ -1406,9 +1406,12 @@ const App = {
           } else if (field.type === 'checkbox') {
             value = value === true || value === 'on' || value === '1' || value === 'yes' ? 'Yes' : 'No';
           } else if (field.type === 'qr') {
-            value = value ? `<img src="https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(value)}" class="qr-preview qr-preview-inline" alt="QR code">` : '';
+            const qr = this.createLocalQrDataUrl(value, 80);
+            value = qr.src ? `<img src="${qr.src}" class="qr-preview qr-preview-inline" alt="QR code">` : '';
             const safeLabel = (field.label || '').replace(/</g, '&lt;');
-            return value ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> ${value}</div>` : '';
+            return value
+              ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> ${value}</div>`
+              : (qr.error ? `<div class="mini-field"><span class="mini-field-label">${safeLabel}:</span> <span>${qr.error}</span></div>` : '');
           } else {
             value = (value != null && value !== '') ? String(value) : '';
           }
@@ -1441,6 +1444,23 @@ const App = {
         }
         if (field.type === 'qr') return value || '';
         return (value != null && value !== '') ? String(value) : '';
+      },
+
+      createLocalQrDataUrl(value, targetSize) {
+        if (value == null || value === '') return { src: '', error: '' };
+        const payload = String(value);
+        if (new TextEncoder().encode(payload).length > 1024) {
+          return { src: '', error: 'QR value is too long to generate locally.' };
+        }
+        try {
+          const qr = qrcode(0, 'M');
+          qr.addData(payload, 'Byte');
+          qr.make();
+          const cellSize = Math.max(1, Math.floor(targetSize / (qr.getModuleCount() + 8)));
+          return { src: qr.createDataURL(cellSize, cellSize * 4), error: '' };
+        } catch (error) {
+          return { src: '', error: 'QR value cannot be encoded locally.' };
+        }
       },
 
       showEntityEditMode(show) {
@@ -3703,13 +3723,13 @@ const App = {
             `;
           case 'qr':
             const qrValue = value || '';
-            const qrSrc = qrValue ? `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(qrValue)}` : '';
+            const qr = this.createLocalQrDataUrl(qrValue, 160);
             return `
               <div class="qr-field-wrap">
-                <input type="text" id="${field.name}" name="${field.name}" value="${qrValue.replace(/"/g, '&quot;')}" readonly>
-                ${qrSrc ? `<img src="${qrSrc}" class="qr-preview" alt="QR code">` : ''}
+                <input type="text" id="${field.name}" name="${field.name}" value="${qrValue.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" readonly>
+                ${qr.src ? `<img src="${qr.src}" class="qr-preview" alt="QR code">` : ''}
               </div>
-              <div class="help-text">QR code is generated on save and stays unique to this item.</div>
+              <div class="help-text">${qr.error || 'QR code is generated on save and stays unique to this item.'}</div>
             `;
           case 'textarea':
             return `
@@ -7070,93 +7090,87 @@ const App = {
       },
 
       renderImportPreview(imported) {
-        // Render a modular preview of what will be imported (entity types, categories, entities, settings)
-        let html = '';
-        // Entity Types
-        if (imported.entityTypes && Object.keys(imported.entityTypes).length > 0) {
-          html += `<div class='restore-defaults-section'><h4>Entity Types</h4><div class='restore-defaults-grid'>`;
-          for (const [typeId, type] of Object.entries(imported.entityTypes)) {
-            let badge = '';
-            if (!this.data.entityTypes[typeId]) {
-              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
-            } else if (JSON.stringify(this.data.entityTypes[typeId]) !== JSON.stringify(type)) {
-              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
-            } else {
-              badge = `<span class='modify-badge original'>Unchanged</span>`;
-            }
-            html += `<div class='restore-item'>
-              <label class='checkbox-label'>
-                <input type='checkbox' name='importEntityTypes' value='${typeId}' class='elistly-checkbox import-entity-type-checkbox' checked>
-                <span>${type.label}</span>
-              </label>
-              ${badge}
-            </div>`;
-          }
-          html += `</div></div>`;
-        }
-        // Categories
-        if (imported.categories && Object.keys(imported.categories).length > 0) {
-          html += `<div class='restore-defaults-section'><h4>Categories</h4><div class='restore-defaults-grid'>`;
-          for (const [catId, cat] of Object.entries(imported.categories)) {
-            let badge = '';
-            if (!this.data.categories[catId]) {
-              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
-            } else if (JSON.stringify(this.data.categories[catId]) !== JSON.stringify(cat)) {
-              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
-            } else {
-              badge = `<span class='modify-badge original'>Unchanged</span>`;
-            }
-            html += `<div class='restore-item'>
-              <label class='checkbox-label'>
-                <input type='checkbox' name='importCategories' value='${catId}' class='elistly-checkbox import-category-checkbox' checked>
-                <span>${cat.label}</span>
-              </label>
-              ${badge}
-            </div>`;
-          }
-          html += `</div></div>`;
-        }
-        // Entities
-        if (imported.entities && Object.keys(imported.entities).length > 0) {
-          html += `<div class='restore-defaults-section'><h4>Entities</h4><div class='restore-defaults-grid'>`;
-          for (const [entityId, entity] of Object.entries(imported.entities)) {
-            let badge = '';
-            if (!this.data.entities[entityId]) {
-              badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
-            } else if (JSON.stringify(this.data.entities[entityId]) !== JSON.stringify(entity)) {
-              badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
-            } else {
-              badge = `<span class='modify-badge original'>Unchanged</span>`;
-            }
-            html += `<div class='restore-item'>
-              <label class='checkbox-label'>
-                <input type='checkbox' name='importEntities' value='${entityId}' class='elistly-checkbox import-entity-checkbox' checked>
-                <span>${this.getEntityCardTitle(entity)}</span>
-              </label>
-              ${badge}
-            </div>`;
-          }
-          html += `</div></div>`;
-        }
-        // Settings
-        if (imported.settings) {
-          let badge = '';
-          if (!this.data.settings) {
-            badge = `<span class='modify-badge original modify-badge-new'>New</span>`;
-          } else if (JSON.stringify(this.data.settings) !== JSON.stringify(imported.settings)) {
-            badge = `<span class='modify-badge modify-badge-overwrite'>Will Overwrite</span>`;
+        const previewArea = document.getElementById('importPreviewArea');
+        previewArea.replaceChildren();
+        let hasImportableData = false;
+
+        const appendBadge = (item, existing, incoming) => {
+          const badge = document.createElement('span');
+          badge.classList.add('modify-badge');
+          if (!existing) {
+            badge.classList.add('original', 'modify-badge-new');
+            badge.textContent = 'New';
+          } else if (JSON.stringify(existing) !== JSON.stringify(incoming)) {
+            badge.classList.add('modify-badge-overwrite');
+            badge.textContent = 'Will Overwrite';
           } else {
-            badge = `<span class='modify-badge original'>Unchanged</span>`;
+            badge.classList.add('original');
+            badge.textContent = 'Unchanged';
           }
-          html += `<div class='restore-defaults-section'><h4>Settings</h4><div class='restore-item'>
-            <label class='checkbox-label'>
-              <input type='checkbox' name='importSettings' value='settings' class='elistly-checkbox import-settings-checkbox' checked>
-              <span>Settings</span>
-            </label>
-            ${badge}
-          </div></div>`;
+          item.appendChild(badge);
+        };
+
+        const appendSection = (heading, entries, inputName, inputClass, labelForEntry, existingEntries) => {
+          if (!entries || Object.keys(entries).length === 0) return;
+          hasImportableData = true;
+          const section = document.createElement('div');
+          section.className = 'restore-defaults-section';
+          const title = document.createElement('h4');
+          title.textContent = heading;
+          const grid = document.createElement('div');
+          grid.className = 'restore-defaults-grid';
+          for (const [id, incoming] of Object.entries(entries)) {
+            const item = document.createElement('div');
+            item.className = 'restore-item';
+            const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.name = inputName;
+            input.value = id;
+            input.checked = true;
+            input.className = `elistly-checkbox ${inputClass}`;
+            const text = document.createElement('span');
+            text.textContent = labelForEntry(incoming, id);
+            label.append(input, text);
+            item.appendChild(label);
+            appendBadge(item, existingEntries[id], incoming);
+            grid.appendChild(item);
+          }
+          section.append(title, grid);
+          previewArea.appendChild(section);
+        };
+
+        appendSection('Entity Types', imported.entityTypes, 'importEntityTypes', 'import-entity-type-checkbox', type => type?.label ?? '', this.data.entityTypes);
+        appendSection('Categories', imported.categories, 'importCategories', 'import-category-checkbox', category => category?.label ?? '', this.data.categories);
+        appendSection('Entities', imported.entities, 'importEntities', 'import-entity-checkbox', entity => this.getEntityCardTitle(entity), this.data.entities);
+
+        if (imported.settings) {
+          hasImportableData = true;
+          const section = document.createElement('div');
+          section.className = 'restore-defaults-section';
+          const title = document.createElement('h4');
+          title.textContent = 'Settings';
+          const item = document.createElement('div');
+          item.className = 'restore-item';
+          const label = document.createElement('label');
+          label.className = 'checkbox-label';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.name = 'importSettings';
+          input.value = 'settings';
+          input.checked = true;
+          input.className = 'elistly-checkbox import-settings-checkbox';
+          const text = document.createElement('span');
+          text.textContent = 'Settings';
+          label.append(input, text);
+          item.appendChild(label);
+          appendBadge(item, this.data.settings, imported.settings);
+          section.append(title, item);
+          previewArea.appendChild(section);
         }
-        document.getElementById('importPreviewArea').innerHTML = html || '<div>No importable data found in file.</div>';
+
+        if (!hasImportableData) previewArea.textContent = 'No importable data found in file.';
       },
 
       processImport() {
