@@ -15,9 +15,9 @@ This is a core Elistly use case, not an incidental import format. It must be saf
 3. The collector runs without administrator privileges and creates one versioned JSON report in a location chosen by the user.
 4. The user opens **Settings → Data → Device Intake** and selects or pastes that report.
 5. Elistly validates the entire report without changing application data.
-6. Elistly shows the person and computer fields, possible existing matches, and whether each record would be created or updated.
+6. Elistly shows the person and computer fields, possible existing matches, whether each record would be created or updated, and any additive category/type/field schema changes needed to make the collected values visible in normal Elistly views.
 7. Ambiguous matches require an explicit user choice. Elistly never silently chooses between multiple records.
-8. Only **Confirm import** may change data. The operation must either save successfully as one coherent change or report failure without claiming success.
+8. Only **Confirm import** may change data. The report records and disclosed additive schema changes are saved as one coherent revision-aware change. A failed pre-commit save restores the previous local state; a successful remote save followed by a local-cache failure must instead report that the remote commit succeeded and require reload.
 
 ## Report contract
 

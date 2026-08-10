@@ -50,7 +50,7 @@ function matchingTests() {
     byEmail: { id: 'byEmail', type: 'person', name: 'Alex E', email: 'ALEX@example.com' },
     byAccount: { id: 'byAccount', type: 'person', name: 'Alex Account', accountName: 'alex', domain: 'acme' },
     byName: { id: 'byName', type: 'person', name: 'Alex Example' }
-  } };
+  }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
   const before = JSON.stringify(data);
   const plan = Intake.createPlan(report, data);
   assert.equal(JSON.stringify(data), before, 'preview must not mutate source data');
@@ -64,13 +64,26 @@ function matchingTests() {
   assert.equal(plan.person.status, 'conflict');
   assert.deepEqual(plan.person.candidates.map(x => x.id), ['byEmail', 'byAccount']);
   assert.equal(plan.person.candidates.some(x => x.id === 'byName'), false, 'name-only must never match');
+  assert.ok(plan.schemaChanges.entityTypes.some(change => change.id === 'computer'), 'preview must disclose a missing computer schema');
+  assert.ok(plan.schemaChanges.entityTypes.some(change => change.id === 'person'), 'preview must disclose a missing person schema');
   assert.throws(() => Intake.materializePlan(plan, data, {}), /explicit choice/i);
   const candidate = Intake.materializePlan(plan, data, { computer: 'pcSerial', person: 'byEmail' });
   assert.equal(data.entities.pcSerial.name, 'Old', 'materialization must not mutate current data');
   assert.equal(candidate.entities.pcSerial.hostname, 'LAPTOP-01');
   assert.equal(candidate.entities.pcSerial.assignedTo, 'byEmail');
   assert.equal(candidate.entities.byEmail.email, 'alex@example.com');
+  assert.ok(candidate.entityTypes.computer.fields.some(field => field.name === 'hostname'), 'confirmed import must add a visible hostname field');
+  assert.ok(candidate.entityTypes.computer.fields.some(field => field.name === 'serialNumber'), 'confirmed import must add a visible serial field');
+  assert.ok(candidate.entityTypes.person.fields.some(field => field.name === 'accountName'), 'confirmed import must add visible person identity fields');
+  assert.deepEqual(candidate.workspaces.default.entityTypes, candidate.entityTypes, 'confirmed schema migration must persist in the active workspace');
   assert.ok(plan.computer.changes.some(change => change.field === 'hostname' && change.before === 'OTHER' && change.after === 'LAPTOP-01'));
+
+  const identityConflict = Intake.createPlan(Intake.parseReport(JSON.stringify(valid({
+    person: { email: 'alex@example.com', upn: 'other@example.com' },
+    computer: { manufacturer: 'Dell', serialNumber: 'ABC123' }
+  }))), { ...data, entities: { ...data.entities, byUpn: { id: 'byUpn', type: 'person', name: 'Other', upn: 'other@example.com' } } });
+  assert.equal(identityConflict.person.status, 'conflict', 'email and UPN matching different people must conflict');
+  assert.deepEqual(identityConflict.person.candidates.map(x => x.id), ['byEmail', 'byUpn']);
 
   const serialOnly = Intake.createPlan(Intake.parseReport(JSON.stringify(valid({ computer: { manufacturer: 'Dell', serialNumber: 'ABC123' } }))), data);
   assert.equal(serialOnly.computer.status, 'update');

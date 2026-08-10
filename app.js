@@ -308,12 +308,19 @@ const Storage = {
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
-      this._cached = data;
-      this._cachedUserId = identity.userId;
-      this._writeUserCache(identity.userId, data, updatedAt);
-      const serialized = JSON.stringify(data);
-      if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(identity.userId)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(identity.userId)) !== String(updatedAt)) {
-        throw new Error('Account cache persistence verification failed.');
+      try {
+        this._cached = data;
+        this._cachedUserId = identity.userId;
+        this._writeUserCache(identity.userId, data, updatedAt);
+        const serialized = JSON.stringify(data);
+        if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(identity.userId)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(identity.userId)) !== String(updatedAt)) {
+          throw new Error('Account cache persistence verification failed.');
+        }
+      } catch (cacheError) {
+        const error = new Error('The import was saved remotely, but the local cache could not be updated. Reload before continuing.');
+        error.remoteCommitted = true;
+        error.cause = cacheError;
+        throw error;
       }
       return true;
     }
@@ -7224,6 +7231,7 @@ const App = {
       showDeviceIntake() {
         document.getElementById('deviceIntakeModal')?.remove();
         this._deviceIntakePlan = null;
+        this._deviceIntakePreviewIdentity = null;
         this._deviceIntakeChoices = {};
         const modal = document.createElement('div');
         modal.className = 'modal';
@@ -7253,7 +7261,7 @@ const App = {
 
       async readDeviceIntakeReport(event) {
         const preview = document.getElementById('deviceIntakePreview');
-        preview.replaceChildren(); this._deviceIntakePlan = null; this._deviceIntakeChoices = {};
+        preview.replaceChildren(); this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null; this._deviceIntakeChoices = {};
         document.getElementById('confirmDeviceIntake').disabled = true;
         try {
           const file = event.target.files?.[0];
@@ -7261,6 +7269,7 @@ const App = {
           if (file.size > ElistlyDeviceIntake.limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
           const report = ElistlyDeviceIntake.parseReport(await file.text());
           this._deviceIntakePlan = ElistlyDeviceIntake.createPlan(report, this.data);
+          this._deviceIntakePreviewIdentity = await Storage.getImportIdentity();
           this.renderDeviceIntakePlan(this._deviceIntakePlan);
         } catch (error) {
           const message = document.createElement('p'); message.className = 'error-message'; message.textContent = error.message || 'The report could not be read.'; preview.appendChild(message);
@@ -7271,6 +7280,22 @@ const App = {
         const preview = document.getElementById('deviceIntakePreview'); preview.replaceChildren();
         const collected = document.createElement('p'); collected.textContent = `Collected ${plan.report.collectedAt} by collector ${plan.report.collector.version}.`;
         preview.appendChild(collected);
+        if (plan.schemaChanges.categories.length || plan.schemaChanges.entityTypes.length) {
+          const schema = document.createElement('section'); schema.className = 'restore-defaults-section';
+          const heading = document.createElement('h4'); heading.textContent = 'Schema additions included in this confirmed import'; schema.appendChild(heading);
+          const list = document.createElement('ul');
+          for (const change of plan.schemaChanges.categories) {
+            const item = document.createElement('li'); item.textContent = `Add category: ${change.definition.label} (${change.id})`; list.appendChild(item);
+          }
+          for (const change of plan.schemaChanges.entityTypes) {
+            const fieldNames = (change.action === 'add type' ? change.fields : change.fields.map(field => field.name)).join(', ');
+            const associationNames = (change.action === 'add type' ? change.associations : change.associations.map(item => item.name)).join(', ');
+            const item = document.createElement('li');
+            item.textContent = `${change.action === 'add type' ? 'Add type' : 'Extend type'}: ${change.id}${fieldNames ? `; fields: ${fieldNames}` : ''}${associationNames ? `; links: ${associationNames}` : ''}`;
+            list.appendChild(item);
+          }
+          schema.appendChild(list); preview.appendChild(schema);
+        }
         for (const kind of ['person', 'computer']) {
           const part = plan[kind]; if (part.status === 'skip') continue;
           const section = document.createElement('section'); section.className = 'restore-defaults-section';
@@ -7321,16 +7346,30 @@ const App = {
         if (!this._deviceIntakePlan) return;
         const beforeData = this.data;
         const beforeStorage = this.captureImportStorageState();
+        let candidate = null;
         try {
-          const identity = await Storage.getImportIdentity();
-          const candidate = ElistlyDeviceIntake.materializePlan(this._deviceIntakePlan, this.data, this._deviceIntakeChoices);
+          const identity = this._deviceIntakePreviewIdentity;
+          if (backendClient) {
+            const activeIdentity = await Storage.getImportIdentity();
+            if (!identity || !activeIdentity || activeIdentity.userId !== identity.userId || activeIdentity.accessToken !== identity.accessToken) {
+              throw new Error('Signed-in session changed. Review this device report again before importing.');
+            }
+          }
+          candidate = ElistlyDeviceIntake.materializePlan(this._deviceIntakePlan, this.data, this._deviceIntakeChoices);
           if (await Storage.setAppDataForImport(candidate, identity) !== true) throw new Error('Device intake persistence was not confirmed.');
           this.data = candidate;
         } catch (error) {
+          if (error.remoteCommitted && candidate) {
+            this.data = candidate;
+            this.closeModal('deviceIntakeModal'); this.loadView('dashboard');
+            this.showNotification(error.message, 'error');
+            this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null;
+            return;
+          }
           this.data = beforeData; this.restoreImportStorageState(beforeStorage);
           return this.showNotification(`Device intake was not saved; original data was restored. ${error.message || ''}`, 'error');
         }
-        this.closeModal('deviceIntakeModal'); this.loadView('dashboard'); this.showNotification('Device intake saved.', 'success'); this._deviceIntakePlan = null;
+        this.closeModal('deviceIntakeModal'); this.loadView('dashboard'); this.showNotification('Device intake saved.', 'success'); this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null;
       },
 
       showImportModal() {
@@ -7777,6 +7816,15 @@ const App = {
           if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
           if (await Storage.setAppDataForImport(dataToSave, importIdentity) !== true) throw new Error('Import persistence was not confirmed.');
         } catch (err) {
+          if (err.remoteCommitted) {
+            this.data = candidate;
+            this._importDataPreview = null;
+            this._importPreviewIdentity = null;
+            this.closeModal('importModal');
+            this.loadView('dashboard');
+            this.showNotification(err.message, 'error');
+            return;
+          }
           this.data = beforeData;
           this.restoreImportStorageState(beforeStorage);
           return this.showImportError(`Import was not saved; original data was restored. ${err.message || ''}`);

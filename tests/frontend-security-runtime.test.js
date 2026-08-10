@@ -571,8 +571,10 @@ async function testImportCollisionChoices() {
     assert.equal(skipped.category, 'New', 'non-conflicting selections must still import');
 
     await importFixtureThroughFileInput(page, {}, rawJson, null, false);
-    for (const conflict of await page.locator('[data-import-conflict]').all()) await conflict.getByRole('radio', { name: 'Overwrite' }).check();
-    await page.locator('#processImportBtn:not([disabled])').waitFor();
+    const overwriteConflicts = page.locator('[data-import-conflict]');
+    for (let i = 0, count = await overwriteConflicts.count(); i < count; i++) {
+      await page.locator('[data-import-conflict]').nth(i).getByRole('radio', { name: 'Overwrite' }).check();
+    }
     await page.locator('#processImportBtn').click();
     const overwritten = await page.evaluate(() => App.data.entityTypes.device.label);
     assert.equal(overwritten, 'Later', 'duplicate Overwrite plus existing-ID Overwrite must apply the later incoming value');
@@ -624,20 +626,20 @@ async function testImportCollisionHardening() {
       backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
       window.fetch = async () => new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 });
       window.__originalWriteUserCache = Storage._writeUserCache;
-      Storage._writeUserCache = () => {};
+      Storage._writeUserCache = () => { throw new Error('simulated cache access failure'); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
     await page.locator('#processImportBtn:not([disabled])').click();
-    await page.getByText('Account cache persistence verification failed.').waitFor();
-    const cacheVerificationRollback = await page.evaluate(() => ({ data: App.data, generic: localStorage.getItem('elistlyData'), user: localStorage.getItem('elistlyData:user:user-1'), updated: localStorage.getItem('elistlyData:userUpdated:user-1'), cached: Storage._cached, cachedUserId: Storage._cachedUserId, success: document.body.textContent.includes('Import complete') }));
-    assert.deepEqual(cacheVerificationRollback.data, original, 'cache verification failure must restore in-memory data');
-    assert.equal(cacheVerificationRollback.generic, JSON.stringify(original), 'cache verification failure must restore generic cache');
-    assert.equal(cacheVerificationRollback.user, JSON.stringify(original), 'cache verification failure must restore account cache');
-    assert.equal(cacheVerificationRollback.updated, 'before', 'cache verification failure must restore account timestamp');
-    assert.deepEqual(cacheVerificationRollback.cached, original, 'cache verification failure must restore Storage cache');
-    assert.equal(cacheVerificationRollback.cachedUserId, 'user-1', 'cache verification failure must restore Storage cache ownership');
-    assert.equal(cacheVerificationRollback.success, false, 'cache verification failure must not report success');
+    await page.getByText(/saved remotely.*local cache.*reload/i).waitFor();
+    const cacheVerificationCommitted = await page.evaluate(() => ({ data: App.data, generic: localStorage.getItem('elistlyData'), user: localStorage.getItem('elistlyData:user:user-1'), updated: localStorage.getItem('elistlyData:userUpdated:user-1'), cached: Storage._cached, cachedUserId: Storage._cachedUserId, falselyRolledBack: document.body.textContent.includes('original data was restored') }));
+    assert.equal(cacheVerificationCommitted.data.entityTypes.device.label, 'incoming', 'successful remote write must remain authoritative in memory');
+    assert.equal(cacheVerificationCommitted.generic, JSON.stringify(original), 'failed cache write may leave the old generic cache until reload');
+    assert.equal(cacheVerificationCommitted.user, JSON.stringify(original), 'failed cache write may leave the old account cache until reload');
+    assert.equal(cacheVerificationCommitted.updated, 'before', 'failed cache write may leave the old timestamp until reload');
+    assert.equal(cacheVerificationCommitted.cached.entityTypes.device.label, 'incoming', 'Storage memory must retain the remotely committed candidate');
+    assert.equal(cacheVerificationCommitted.cachedUserId, 'user-1', 'committed candidate must remain owned by the preview account');
+    assert.equal(cacheVerificationCommitted.falselyRolledBack, false, 'post-commit cache failure must not claim remote rollback');
     await page.evaluate(() => { Storage._writeUserCache = window.__originalWriteUserCache; });
 
     await page.evaluate(original => {

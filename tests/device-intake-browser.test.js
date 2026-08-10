@@ -47,12 +47,33 @@ const initial = { version: '1', settings: {}, categories: {}, entityTypes: {}, e
     await page.locator('#confirmDeviceIntake').click();
     await page.getByText('Device intake saved.').waitFor();
     assert.equal(await page.evaluate(() => App.data.entities.pc1.hostname), 'LAPTOP-01');
+    await page.evaluate(() => App.showEntityForm('computer', 'pc1'));
+    assert.match(await page.locator('#entityModal').textContent(), /Hostname\s+LAPTOP-01/i, 'imported fields must be visible in the normal entity view');
+    assert.match(await page.locator('#entityModal').textContent(), /Serial number\s+ABC123/i, 'serial must be visible in the normal entity view');
+    await page.evaluate(() => App.closeModal('entityModal'));
 
     await page.evaluate(data => { App.data = data; localStorage.setItem('elistlyData', JSON.stringify(data)); App.showDeviceIntake(); Storage.setAppDataForImport = async () => { throw new Error('simulated write failure'); }; }, initial);
     await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...report, computer: { manufacturer: 'Lenovo', serialNumber: 'NEW123' } })) });
     await page.locator('#confirmDeviceIntake:not([disabled])').click();
     await page.getByText(/not saved.*simulated write failure/i).waitFor();
     assert.deepEqual(await page.evaluate(() => App.data), initial, 'failed save must restore existing data');
+
+    await page.evaluate(data => {
+      App.data = data;
+      localStorage.setItem('elistlyData', JSON.stringify(data));
+      App.showDeviceIntake();
+      Storage.setAppDataForImport = async candidate => {
+        Storage._cached = candidate;
+        const error = new Error('The import was saved remotely, but the local cache could not be updated. Reload before continuing.');
+        error.remoteCommitted = true;
+        throw error;
+      };
+    }, initial);
+    await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...report, computer: { manufacturer: 'Lenovo', serialNumber: 'COMMITTED123' } })) });
+    await page.locator('#confirmDeviceIntake:not([disabled])').click();
+    await page.getByText(/saved remotely.*local cache.*reload/i).waitFor();
+    assert.equal(await page.evaluate(() => App.data.entities['computer-2026-08-07'].serialNumber), 'COMMITTED123', 'post-commit cache warning must retain the remotely committed candidate');
+    assert.equal((await page.locator('body').textContent()).includes('original data was restored'), false, 'post-commit warning must not claim rollback');
     console.log('PASS device-intake-browser');
   } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -9,6 +9,34 @@
   const placeholders = new Set(['to be filled by o.e.m.', 'default string', 'system serial number', 'none', 'unknown', 'n/a']);
   const computerFields = ['hostname', 'manufacturer', 'model', 'processorSummary', 'processorDescription', 'memorySummary', 'graphicsAdapters', 'windowsEdition', 'windowsVersion', 'windowsBuild', 'serialNumber', 'accountName', 'windowsDomain'];
   const personFields = ['displayName', 'accountName', 'domain', 'upn', 'email', 'phone', 'jobTitle'];
+  const textField = (name, label, visibleInCard = false) => ({ name, label, type: 'text', required: false, visibleInCard, partOfName: false });
+  const schemaDefinitions = {
+    computer: {
+      category: { id: 'devices', label: 'Devices', icon: 'devices', visibleInDashboard: true },
+      type: {
+        id: 'computer', label: 'Computer', category: 'devices', icon: 'computer', enableNameGen: false,
+        nameGen: { prefix: '', prefixEnabled: false, partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] },
+        fields: [
+          textField('hostname', 'Hostname', true), textField('manufacturer', 'Manufacturer', true), textField('model', 'Model', true),
+          textField('processorSummary', 'Processor summary'), textField('processorDescription', 'Processor description'), textField('memorySummary', 'Memory', true),
+          { ...textField('graphicsAdapters', 'Graphics adapters'), type: 'textarea' }, textField('windowsEdition', 'Windows edition'),
+          textField('windowsVersion', 'Windows version'), textField('windowsBuild', 'Windows build'), textField('serialNumber', 'Serial number', true),
+          textField('accountName', 'Collected account'), textField('windowsDomain', 'Windows domain/workgroup'), textField('collectedAt', 'Collected at'),
+          textField('collectorVersion', 'Collector version')
+        ],
+        associations: [{ name: 'assignedTo', label: 'Assigned To', type: 'association', required: false, visibleInCard: true, partOfName: false, association: { kind: 'belongs_to', targetType: 'person' } }]
+      }
+    },
+    person: {
+      category: { id: 'people', label: 'People', icon: 'group', visibleInDashboard: true },
+      type: {
+        id: 'person', label: 'Person', category: 'people', icon: 'account_circle', enableNameGen: false,
+        nameGen: { prefix: '', prefixEnabled: false, partOfNamePrefix: false, suffixType: 'number', componentsOrder: [] },
+        fields: [textField('displayName', 'Display name', true), textField('accountName', 'Account name', true), textField('domain', 'Domain'), textField('upn', 'UPN'), textField('email', 'Email', true), textField('phone', 'Phone'), textField('jobTitle', 'Job title')],
+        associations: []
+      }
+    }
+  };
 
   function fail(path, message) { throw new Error(`${path}: ${message}`); }
   function clean(value, path) {
@@ -76,7 +104,13 @@
   function unique(items) { return [...new Map(items.map(item => [item.id, item])).values()]; }
   function fieldsFor(kind, report) {
     const source = report[kind];
-    if (kind === 'computer') return { name: source.hostname || `${source.manufacturer || ''} ${source.model || ''}`.trim() || 'Imported computer', ...source };
+    if (kind === 'computer') return {
+      name: source.hostname || `${source.manufacturer || ''} ${source.model || ''}`.trim() || 'Imported computer',
+      ...source,
+      graphicsAdapters: Array.isArray(source.graphicsAdapters) ? source.graphicsAdapters.join('; ') : source.graphicsAdapters,
+      collectedAt: report.collectedAt,
+      collectorVersion: report.collector.version
+    };
     return { name: source.displayName || source.email || `${source.domain || ''}\\${source.accountName || ''}`.replace(/^\\/, '') || 'Imported person', ...source };
   }
   function changes(existing, incoming) {
@@ -93,6 +127,34 @@
     }
     return result;
   }
+  function createSchemaChanges(data) {
+    const changes = { categories: [], entityTypes: [] };
+    const categories = data?.categories || {};
+    const types = data?.entityTypes || {};
+    for (const kind of ['computer', 'person']) {
+      const definition = schemaDefinitions[kind];
+      if (!categories[definition.category.id]) changes.categories.push({ id: definition.category.id, definition: JSON.parse(JSON.stringify(definition.category)) });
+      const existing = types[kind];
+      if (!existing) {
+        changes.entityTypes.push({ id: kind, action: 'add type', definition: JSON.parse(JSON.stringify(definition.type)), fields: definition.type.fields.map(field => field.name), associations: definition.type.associations.map(item => item.name) });
+        continue;
+      }
+      const existingFields = new Map((existing.fields || []).map(field => [field.name, field]));
+      const fields = definition.type.fields.filter(field => {
+        const current = existingFields.get(field.name);
+        if (current && current.type !== field.type) fail(`entityTypes.${kind}.fields.${field.name}`, `has incompatible type ${current.type}`);
+        return !current;
+      });
+      const existingAssociations = new Map((existing.associations || []).map(item => [item.name, item]));
+      const associations = definition.type.associations.filter(item => {
+        const current = existingAssociations.get(item.name);
+        if (current && (current.type !== 'association' || current.association?.targetType !== item.association.targetType)) fail(`entityTypes.${kind}.associations.${item.name}`, 'has an incompatible association');
+        return !current;
+      });
+      if (fields.length || associations.length) changes.entityTypes.push({ id: kind, action: 'add fields', fields: JSON.parse(JSON.stringify(fields)), associations: JSON.parse(JSON.stringify(associations)) });
+    }
+    return freeze(changes);
+  }
   function createPlan(report, data) {
     const entities = Object.values(data?.entities || {});
     const computers = entities.filter(entity => entity?.type === 'computer');
@@ -102,11 +164,11 @@
     const hostMatches = report.normalized.computer.hostname && report.normalized.computer.windowsDomain
       ? computers.filter(entity => same(entity.hostname, report.normalized.computer.hostname) && same(entity.windowsDomain, report.normalized.computer.windowsDomain)) : [];
     const computerCandidates = unique([...serialMatches, ...hostMatches]);
-    const email = report.normalized.person.email || report.normalized.person.upn;
-    const emailMatches = email ? people.filter(entity => same(entity.email, email) || same(entity.upn, email)) : [];
+    const emailMatches = report.normalized.person.email ? people.filter(entity => same(entity.email, report.normalized.person.email)) : [];
+    const upnMatches = report.normalized.person.upn ? people.filter(entity => same(entity.upn, report.normalized.person.upn)) : [];
     const accountMatches = report.normalized.person.accountName && report.normalized.person.domain
       ? people.filter(entity => same(entity.accountName, report.normalized.person.accountName) && same(entity.domain, report.normalized.person.domain)) : [];
-    const personCandidates = unique([...emailMatches, ...accountMatches]);
+    const personCandidates = unique([...emailMatches, ...upnMatches, ...accountMatches]);
     const part = (kind, candidates, incoming, present) => {
       if (!present) return freeze({ status: 'skip', candidates: [], changes: [] });
       const status = candidates.length > 1 ? 'conflict' : candidates.length === 1 ? 'update' : 'create';
@@ -117,6 +179,7 @@
     const personIncoming = fieldsFor('person', report);
     return freeze({
       report,
+      schemaChanges: createSchemaChanges(data),
       computer: part('computer', computerCandidates, computerIncoming, true),
       person: part('person', personCandidates, personIncoming, Object.keys(report.person).length > 0)
     });
@@ -138,7 +201,18 @@
   }
   function materializePlan(plan, data, choices) {
     const candidate = JSON.parse(JSON.stringify(data));
+    candidate.categories = candidate.categories || {};
+    candidate.entityTypes = candidate.entityTypes || {};
     candidate.entities = candidate.entities || {};
+    for (const change of plan.schemaChanges.categories) candidate.categories[change.id] = JSON.parse(JSON.stringify(change.definition));
+    for (const change of plan.schemaChanges.entityTypes) {
+      if (change.action === 'add type') candidate.entityTypes[change.id] = JSON.parse(JSON.stringify(change.definition));
+      else {
+        const type = candidate.entityTypes[change.id];
+        type.fields = [...(type.fields || []), ...JSON.parse(JSON.stringify(change.fields))];
+        type.associations = [...(type.associations || []), ...JSON.parse(JSON.stringify(change.associations))];
+      }
+    }
     const personExisting = chosenId(plan.person, choices?.person, 'Person');
     let personId = personExisting;
     if (plan.person.status !== 'skip') {
@@ -150,6 +224,8 @@
     candidate.entities[computerId] = { ...(candidate.entities[computerId] || {}), id: computerId, type: 'computer', ...plan.computer.fields };
     if (personId) candidate.entities[computerId].assignedTo = personId;
     if (candidate.workspaces && candidate.currentWorkspaceId && candidate.workspaces[candidate.currentWorkspaceId]) {
+      candidate.workspaces[candidate.currentWorkspaceId].categories = JSON.parse(JSON.stringify(candidate.categories));
+      candidate.workspaces[candidate.currentWorkspaceId].entityTypes = JSON.parse(JSON.stringify(candidate.entityTypes));
       candidate.workspaces[candidate.currentWorkspaceId].entities = JSON.parse(JSON.stringify(candidate.entities));
     }
     return candidate;
