@@ -1,6 +1,6 @@
 # Windows Device Intake
 
-**Status:** Required P0 capability; design recovered on 2026-08-07. No Device Intake implementation is currently release-ready or deployed.
+**Status:** Source-complete v1 candidate on 2026-08-11; not deployed. Deterministic and browser acceptance gates pass. Required physical Windows 10/11 validation remains outstanding, so the candidate is not release-ready.
 
 ## Product goal
 

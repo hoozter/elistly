@@ -194,7 +194,7 @@ const Storage = {
     if (!bearerUserId || bearerUserId !== userId || (sessionUserId && sessionUserId !== bearerUserId)) {
       throw new Error('Signed-in account identity could not be confirmed.');
     }
-    return Object.freeze({ userId: bearerUserId, accessToken });
+    return Object.freeze({ userId: bearerUserId, accessToken, expectedUpdatedAt: this._readUserUpdatedAt(bearerUserId) || null });
   },
 
   getAppData(options = {}) {
@@ -304,7 +304,7 @@ const Storage = {
   async setAppDataForImport(data, identity) {
     if (backendClient) {
       if (!identity || !identity.userId || !identity.accessToken || this._cachedUserId !== identity.userId) throw new Error('Signed-in account identity could not be confirmed.');
-      const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data }, authSession: { access_token: identity.accessToken } });
+      const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt: identity.expectedUpdatedAt ?? null }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
@@ -3003,6 +3003,10 @@ const App = {
                         <button class="btn btn-secondary" onclick="App.showImportModal()">
                           <span class="material-icons">download</span>
                           Import
+                        </button>
+                        <button class="btn btn-secondary" onclick="App.showDeviceIntake()">
+                          <span class="material-icons">laptop_windows</span>
+                          Device Intake
                         </button>
                         <button class="btn btn-secondary" onclick="App.showAddPresetModal()">
                           <span class="material-icons">add_circle_outline</span>
@@ -7217,6 +7221,118 @@ const App = {
         URL.revokeObjectURL(url);
         this.closeModal('exportModal');
       },
+      showDeviceIntake() {
+        document.getElementById('deviceIntakeModal')?.remove();
+        this._deviceIntakePlan = null;
+        this._deviceIntakeChoices = {};
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'deviceIntakeModal';
+        const content = document.createElement('div');
+        content.className = 'modal-content device-intake-content';
+        const header = document.createElement('div'); header.className = 'modal-header';
+        const title = document.createElement('h3'); title.textContent = 'Windows Device Intake'; header.appendChild(title);
+        const body = document.createElement('div'); body.className = 'modal-body modal-body-scroll';
+        const guidance = document.createElement('p');
+        guidance.textContent = 'The collector is local-only, needs no administrator access, and does not contact Elistly or any network service. It shows every collected field and asks you where to save the JSON report.';
+        const download = document.createElement('a');
+        download.id = 'deviceCollectorDownload'; download.className = 'btn btn-secondary';
+        download.href = 'downloads/Elistly-Windows-Device-Intake-v1.0.0.zip'; download.download = 'Elistly-Windows-Device-Intake-v1.0.0.zip';
+        download.textContent = 'Download Windows collector';
+        const steps = document.createElement('p');
+        steps.textContent = 'Extract the ZIP, review README.txt, then right-click Collect-ElistlyDevice.ps1 and choose Run with PowerShell. Do not change PowerShell execution policy. Upload the report below; nothing is saved until Confirm import.';
+        const input = document.createElement('input'); input.type = 'file'; input.accept = '.json,application/json'; input.id = 'deviceIntakeFile';
+        input.addEventListener('change', event => this.readDeviceIntakeReport(event));
+        const preview = document.createElement('div'); preview.id = 'deviceIntakePreview'; preview.className = 'import-preview-area u-mt-100';
+        body.append(guidance, download, steps, input, preview);
+        const actions = document.createElement('div'); actions.className = 'modal-actions';
+        const cancel = document.createElement('button'); cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', () => this.closeModal('deviceIntakeModal'));
+        const confirm = document.createElement('button'); confirm.className = 'btn btn-primary'; confirm.id = 'confirmDeviceIntake'; confirm.textContent = 'Confirm import'; confirm.disabled = true; confirm.addEventListener('click', () => this.confirmDeviceIntake());
+        actions.append(cancel, confirm); content.append(header, body, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('deviceIntakeModal');
+      },
+
+      async readDeviceIntakeReport(event) {
+        const preview = document.getElementById('deviceIntakePreview');
+        preview.replaceChildren(); this._deviceIntakePlan = null; this._deviceIntakeChoices = {};
+        document.getElementById('confirmDeviceIntake').disabled = true;
+        try {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          if (file.size > ElistlyDeviceIntake.limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
+          const report = ElistlyDeviceIntake.parseReport(await file.text());
+          this._deviceIntakePlan = ElistlyDeviceIntake.createPlan(report, this.data);
+          this.renderDeviceIntakePlan(this._deviceIntakePlan);
+        } catch (error) {
+          const message = document.createElement('p'); message.className = 'error-message'; message.textContent = error.message || 'The report could not be read.'; preview.appendChild(message);
+        }
+      },
+
+      renderDeviceIntakePlan(plan) {
+        const preview = document.getElementById('deviceIntakePreview'); preview.replaceChildren();
+        const collected = document.createElement('p'); collected.textContent = `Collected ${plan.report.collectedAt} by collector ${plan.report.collector.version}.`;
+        preview.appendChild(collected);
+        for (const kind of ['person', 'computer']) {
+          const part = plan[kind]; if (part.status === 'skip') continue;
+          const section = document.createElement('section'); section.className = 'restore-defaults-section';
+          const heading = document.createElement('h4'); heading.textContent = `${kind === 'person' ? 'Person' : 'Computer'}: ${part.status === 'create' ? 'create new record' : part.status === 'update' ? 'update existing record' : 'match conflict'}`; section.appendChild(heading);
+          if (part.status === 'conflict') {
+            const prompt = document.createElement('p'); prompt.textContent = `Choose the ${kind} record to update, or create a new record.`; section.appendChild(prompt);
+            for (const candidate of [...part.candidates, { id: 'create', name: 'Create new record' }]) {
+              const label = document.createElement('label'); label.className = 'checkbox-label';
+              const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `device-intake-${kind}`; radio.value = candidate.id;
+              radio.addEventListener('change', () => {
+                this._deviceIntakeChoices[kind] = radio.value;
+                const selected = part.candidates.find(item => item.id === radio.value);
+                const createPreview = Object.entries(part.fields).map(([field, after]) => ({ field, after, disposition: 'added' }));
+                this.renderDeviceIntakeFieldPreview(kind, selected ? selected.fieldPreview : createPreview);
+                this.updateDeviceIntakeConfirm();
+              });
+              const text = document.createElement('span'); text.textContent = candidate.name; label.append(radio, text); section.appendChild(label);
+            }
+          }
+          const list = document.createElement('dl'); list.className = 'device-intake-fields'; list.dataset.deviceIntakeFields = kind;
+          section.appendChild(list); preview.appendChild(section);
+          if (part.status !== 'conflict') this.renderDeviceIntakeFieldPreview(kind, part.fieldPreview);
+        }
+        this.updateDeviceIntakeConfirm();
+      },
+
+      renderDeviceIntakeFieldPreview(kind, fields) {
+        const list = document.querySelector(`[data-device-intake-fields="${kind}"]`);
+        if (!list) return;
+        list.replaceChildren();
+        for (const item of fields || []) {
+          const dt = document.createElement('dt'); dt.textContent = item.field;
+          const dd = document.createElement('dd');
+          const before = item.before === undefined ? '—' : Array.isArray(item.before) ? item.before.join(', ') : String(item.before);
+          const after = item.after === undefined ? '—' : Array.isArray(item.after) ? item.after.join(', ') : String(item.after);
+          dd.textContent = `${item.disposition}: ${before} → ${after}`;
+          list.append(dt, dd);
+        }
+      },
+
+      updateDeviceIntakeConfirm() {
+        const button = document.getElementById('confirmDeviceIntake');
+        if (!button || !this._deviceIntakePlan) return;
+        button.disabled = ['person', 'computer'].some(kind => this._deviceIntakePlan[kind].status === 'conflict' && !this._deviceIntakeChoices[kind]);
+      },
+
+      async confirmDeviceIntake() {
+        if (!this._deviceIntakePlan) return;
+        const beforeData = this.data;
+        const beforeStorage = this.captureImportStorageState();
+        try {
+          const identity = await Storage.getImportIdentity();
+          const candidate = ElistlyDeviceIntake.materializePlan(this._deviceIntakePlan, this.data, this._deviceIntakeChoices);
+          if (await Storage.setAppDataForImport(candidate, identity) !== true) throw new Error('Device intake persistence was not confirmed.');
+          this.data = candidate;
+        } catch (error) {
+          this.data = beforeData; this.restoreImportStorageState(beforeStorage);
+          return this.showNotification(`Device intake was not saved; original data was restored. ${error.message || ''}`, 'error');
+        }
+        this.closeModal('deviceIntakeModal'); this.loadView('dashboard'); this.showNotification('Device intake saved.', 'success'); this._deviceIntakePlan = null;
+      },
+
       showImportModal() {
         // Modal HTML for modular import
         const modalHtml = `

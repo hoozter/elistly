@@ -139,6 +139,26 @@ describe("Elistly Worker route seams", () => {
     expect(calls).toEqual([]);
   });
 
+  it("protects revision-aware app-data writes from stale previews", async () => {
+    const calls = [];
+    const sql = async (strings, ...values) => {
+      const query = strings.join(" ");
+      calls.push({ query, values });
+      return [];
+    };
+    const worker = createWorker({ createSql: () => sql, authenticate: async () => user, checkAdmin: async () => false });
+    const response = await fetchFrom(worker, "/app-data", {
+      method: "PUT",
+      body: { payload: { entities: {} }, expectedUpdatedAt: "2026-08-11T08:00:00.000Z" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "App data changed since preview" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].query).toContain("app_data.updated_at =");
+    expect(calls[0].values).toContain("2026-08-11T08:00:00.000Z");
+  });
+
   it("validates profile writes before SQL mutation", async () => {
     const calls = [];
     const worker = createWorker({
