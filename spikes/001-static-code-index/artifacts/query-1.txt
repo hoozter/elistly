@@ -3,21 +3,16 @@ query device intake preview confirmation revision worker sql rollback cache
 coverage tracked=79 indexed=48 skipped=31
 warning navigation hints only; inspect source before semantic claims
 
-FILE app.js:7857 score=110 match=cache:24,confirmation:5,device:26,intake:26,preview:20,worker:9 sha256=1c79b4773b91
-     15 ->worker-cache version-history.js
-    171 binding existingUserCache
-    218 binding cachedPayload
-    219 binding cachedUpdatedAt
-    902 method showEmailConfirmationModal
-   4334 binding iconPreview
-   5197 binding updatePreview
-   5638 method updateNamePreview
-   5640 binding preview
-   5641 binding suffixPreview
-   5821 binding previewText
-   7231 method showDeviceIntake
+FILE tests/frontend-security-runtime.test.js:846 score=613 match=cache:215,device:64,preview:282,rollback:40,worker:12 sha256=c8cd4b39767a
+     16 ->worker-cache app.html
+     65 function testImportPreviewIsInert
+     97 binding preview
+    176 ->worker-cache /home/campbell/node_modules/jsqr/dist/jsQR.js
+    394 binding preview
+    604 binding rollback
+    635 binding cacheVerificationCommitted
 
-FILE worker/test/worker-routes.spec.js:207 score=59 match=cache:3,sql:15,worker:41 sha256=8c9c0cfa2ef4
+FILE worker/test/worker-routes.spec.js:207 score=537 match=cache:15,sql:376,worker:146 sha256=8c9c0cfa2ef4
       3 ->worker-cache ../src/index.js
      10 function mockSql
      40 binding worker
@@ -31,25 +26,35 @@ FILE worker/test/worker-routes.spec.js:207 score=59 match=cache:3,sql:15,worker:
     127 binding worker
     144 binding sql
 
-FILE tests/device-intake-core.test.js:101 score=52 match=cache:3,device:18,intake:23,preview:5,worker:3 sha256=e112b7fbc9ec
+FILE app.js:7857 score=428 match=cache:120,confirmation:40,device:52,intake:78,preview:120,worker:18 sha256=1c79b4773b91
+     15 ->worker-cache version-history.js
+    171 binding existingUserCache
+    218 binding cachedPayload
+    219 binding cachedUpdatedAt
+    902 method showEmailConfirmationModal
+   4334 binding iconPreview
+   5197 binding updatePreview
+   5638 method updateNamePreview
+   5640 binding preview
+   5641 binding suffixPreview
+   5821 binding previewText
+   7231 method showDeviceIntake
+
+FILE worker/src/index.js:537 score=407 match=cache:25,revision:40,sql:256,worker:86 sha256=b508e36b1238
+     18 binding jwksCache
+    351 function createWorker
+    417 binding revisionAware
+
+FILE WINDOWS_DEVICE_INTAKE_PLAN.md:155 score=341 match=device:74,intake:99,preview:168 sha256=3bf99ce3a94f
+      1 heading-1 Windows Device Intake
+
+FILE tests/device-intake-core.test.js:101 score=340 match=cache:15,device:52,intake:165,preview:102,worker:6 sha256=e112b7fbc9ec
       5 ->module ../device-intake.js
       5 ->worker-cache ../device-intake.js
       5 binding Intake
      60 binding serialPreview
 
-FILE tests/device-intake-browser.test.js:79 score=42 match=cache:6,device:15,intake:15,worker:6 sha256=b4b03ad723ca
-     11 ->worker-cache app.html
-     37 ->worker-cache Elistly-Windows-Device-Intake-v1.0.0.zip
-
-FILE worker/package-lock.json:2834 score=42 match=cache:12,worker:30 sha256=fdce1a542839
-   2324 ->worker-cache bin/semver.js
-   2648 ->worker-cache bin/vite.js
-   2723 ->worker-cache cli.js
-   2767 ->worker-cache bin/cf-wrangler.js
-   2768 ->worker-cache bin/wrangler.js
-   2769 ->worker-cache bin/wrangler.js
-
-FILE sw.js:85 score=40 match=cache:22,device:3,intake:3,worker:12 sha256=f51bdb163a26
+FILE sw.js:85 score=309 match=cache:270,device:6,intake:9,worker:24 sha256=f51bdb163a26
       2 binding CACHE_NAME
       6 ->worker-cache ./index.html
       7 ->worker-cache ./app.html
@@ -63,25 +68,5 @@ FILE sw.js:85 score=40 match=cache:22,device:3,intake:3,worker:12 sha256=f51bdb1
      15 ->worker-cache ./setup-library.js
      16 ->worker-cache ./setup-it.js
 
-FILE tests/frontend-security-runtime.test.js:846 score=37 match=cache:11,preview:15,rollback:5,worker:6 sha256=c8cd4b39767a
-     16 ->worker-cache app.html
-     65 function testImportPreviewIsInert
-     97 binding preview
-    176 ->worker-cache /home/campbell/node_modules/jsqr/dist/jsQR.js
-    394 binding preview
-    604 binding rollback
-    635 binding cacheVerificationCommitted
-
-FILE app.html:153 score=36 match=cache:12,device:6,intake:6,worker:12 sha256=154b7a0f7e68
-     38 ->worker-cache styles.css?v=17
-    136 ->worker-cache config.js
-    138 ->worker-cache https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js
-    139 ->worker-cache setup-blank.js
-    140 ->worker-cache setup-library.js
-    141 ->worker-cache setup-it.js
-    142 ->worker-cache setup-staff.js
-    143 ->worker-cache setup-property.js
-    144 ->worker-cache sample-data.js
-    145 ->worker-cache faq.js
-    146 ->worker-cache pwa-register.js
-    147 ->worker-cache lib/db.js
+FILE DOCS.md:214 score=302 match=cache:100,sql:128,worker:74 sha256=ea731fa9eae1
+    192 heading-3 Cloudflare Worker

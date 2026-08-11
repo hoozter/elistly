@@ -26,12 +26,37 @@ def item_line(item: dict[str, object]) -> int:
     return value if isinstance(value, int) else 0
 
 
-def score(record: dict[str, object], needles: list[str]) -> tuple[int, list[str]]:
+def keyword_counts(value: object) -> dict[str, int]:
+    result: dict[str, int] = {}
+    if not isinstance(value, list):
+        return result
+    for item in value:
+        if not isinstance(item, list) or len(item) != 2:
+            continue
+        word, count = item
+        if isinstance(word, str) and isinstance(count, int):
+            result[word.casefold()] = count
+    return result
+
+
+def record_contains(record: dict[str, object], needle: str) -> bool:
+    haystacks = [text(record.get("path", ""))]
+    tag_values = record.get("tags", [])
+    if isinstance(tag_values, list):
+        haystacks.extend(text(item) for item in tag_values)
+    haystacks.extend(keyword_counts(record.get("keywords", [])).keys())
+    haystacks.extend(text(item.get("name", "")) for item in items(record.get("symbols", [])))
+    haystacks.extend(text(item.get("target", "")) for item in items(record.get("refs", [])))
+    return any(needle in value for value in haystacks)
+
+
+def score(record: dict[str, object], needles: list[str], weights: dict[str, int]) -> tuple[int, list[str]]:
     path = text(record.get("path", ""))
     tag_values = record.get("tags", [])
     tags = " ".join(text(item) for item in tag_values) if isinstance(tag_values, list) else ""
     symbols = items(record.get("symbols", []))
     refs = items(record.get("refs", []))
+    keywords = keyword_counts(record.get("keywords", []))
     total = 0
     reasons: list[str] = []
     for needle in needles:
@@ -42,10 +67,12 @@ def score(record: dict[str, object], needles: list[str]) -> tuple[int, list[str]
             points += 6
         symbol_hits = sum(1 for item in symbols if needle in text(item.get("name", "")) or needle in text(item.get("kind", "")))
         ref_hits = sum(1 for item in refs if needle in text(item.get("target", "")) or needle in text(item.get("kind", "")))
-        points += min(symbol_hits, 4) * 5 + min(ref_hits, 4) * 3
+        keyword_hits = sum(count for word, count in keywords.items() if needle == word)
+        points += min(symbol_hits, 4) * 5 + min(ref_hits, 4) * 3 + min(keyword_hits, 8) * 4
         if points:
-            total += points
-            reasons.append(f"{needle}:{points}")
+            weighted = points * weights[needle]
+            total += weighted
+            reasons.append(f"{needle}:{weighted}")
     return total, reasons
 
 
@@ -59,9 +86,13 @@ def main() -> int:
     metadata = json.loads((args.index / "metadata.json").read_text(encoding="utf-8"))
     records = [json.loads(line) for line in (args.index / "files.jsonl").read_text(encoding="utf-8").splitlines() if line]
     needles = terms(args.query)
+    weights = {
+        needle: max(1, min(8, len(records) // max(1, sum(record_contains(record, needle) for record in records))))
+        for needle in needles
+    }
     ranked = []
     for record in records:
-        points, reasons = score(record, needles)
+        points, reasons = score(record, needles, weights)
         if points:
             ranked.append((points, str(record["path"]), reasons, record))
     ranked.sort(key=lambda row: (-row[0], row[1]))

@@ -42,15 +42,37 @@ For each variant/task record:
 
 Adopt only if the indexed cheaper-model variant has equal correctness, lower elapsed time, and no greater **total** token use after including index generation/refresh and index text supplied to the model. Reject if stale-result recovery, generated-map size, maintenance, or unsupported confidence erases the gain.
 
-## Status
+## Verdict: INVALIDATED for adoption
 
-In progress. The deterministic builder currently indexes 48 of 79 tracked files in 0.30–0.56 seconds. Repeated builds produced byte-identical `CODEBASE_INDEX.txt` and `files.jsonl` outputs. The full artifacts total 245 KB; fixed-task query slices total 8.9 KB, so only query slices—not the complete map—are eligible as model navigation context.
+The deterministic builder indexes 48 of 79 tracked files in about 0.30 seconds. Repeated builds produced byte-identical `CODEBASE_INDEX.txt` and `files.jsonl`. The first complete map was 245 KB; adding bounded lexical keywords increased it to about 291 KB. Query slices remain small at 2.3–2.8 KB each and include commit/hash freshness markers.
 
-### Initial benchmark: task 1, Spark
+### Spark A/B measurements
 
-| Variant | Elapsed | Input tokens | Output tokens | Total tokens |
-|---|---:|---:|---:|---:|
-| No index | 48.862 s | 1,004,038 | 9,120 | 1,013,158 |
-| Query slice | 45.528 s | 715,032 | 9,171 | 724,203 |
+| Task | Variant | Elapsed | Total tokens |
+|---|---|---:|---:|
+| Persistence | No index | 48.862 s | 1,013,158 |
+| Persistence | Query slice | 45.528 s | 724,203 |
+| Schema/workspaces | No index | 52.940 s | 1,270,236 |
+| Schema/workspaces | Query slice | 64.925 s | 836,857 |
+| Collector release surface | No index | 33.634 s | 567,972 |
+| Collector release surface | Query slice | 29.793 s | 372,366 |
+| **Aggregate** | **No index** | **135.437 s** | **2,851,366** |
+| **Aggregate** | **Query slices** | **140.246 s** | **1,933,426** |
 
-The query slice reduced measured input tokens by 28.78% and elapsed time by 6.82% on the first task. This is **not yet an adoption verdict**: answer correctness still needs source-backed scoring, and tasks 2–3 plus the advanced-model reference remain to be run. Raw JSONL traces are retained under `benchmarks/`.
+Query slices reduced aggregate measured tokens by **32.19%**, but aggregate elapsed time increased by **3.55%**. Index generation cost was negligible relative to model use.
+
+### Correctness result
+
+| Variant | Source-backed points |
+|---|---:|
+| Spark, no index | 22/25 |
+| Spark, query slices | 20/25 |
+| Advanced no-index reference | 25/25 |
+
+Both Spark variants misread the null-revision SQL edge case: a null `expectedUpdatedAt` permits an insert but cannot overwrite an existing row. The index did not repair that semantic reasoning limit. The indexed responses were also less source-complete for preset-specific schema behavior and collector release coupling. See `CORRECTNESS.md`.
+
+The advanced `gpt-5.6-sol` no-index reference took 144.462 seconds and 685,881 total tokens for a single batched three-task run. Its timing/token shape is not directly comparable to the three separate Spark runs; it is retained as the correctness reference.
+
+### Recommendation
+
+Do **not** integrate this index, add a watcher/daemon, or route complex findings to a cheaper model on its strength. The experiment demonstrated token savings but failed the required faster-development and equal-correctness gates. Preserve the spike evidence, then return project capacity to higher-value roadmap work. A future reconsideration would need a materially different hypothesis, such as a precise source-navigation CLI for advanced models—not another repetition of this cheaper-model benchmark.

@@ -1,10 +1,10 @@
 {
-  "elapsedMs": 557.157,
+  "elapsedMs": 297.52,
   "indexedFiles": 48,
   "maxFileBytes": 524288,
   "outputs": {
     "CODEBASE_INDEX.txt": 82129,
-    "files.jsonl": 162562
+    "files.jsonl": 209222
   },
   "skippedFiles": 31,
   "sourceCommit": "99b7c6e8399a16e9bb8169128ba1c4a33a23cbfe",

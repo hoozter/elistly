@@ -1,0 +1,68 @@
+[
+  {
+    "answerChars": 6254,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 657280,
+    "elapsedMs": 45527.883,
+    "input_tokens": 715032,
+    "output_tokens": 9171,
+    "reasoning_output_tokens": 6055,
+    "run": "spark-index-task1",
+    "total_tokens": 724203
+  },
+  {
+    "answerChars": 4057,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 769408,
+    "elapsedMs": 64924.61,
+    "input_tokens": 826993,
+    "output_tokens": 9864,
+    "reasoning_output_tokens": 7577,
+    "run": "spark-index-task2",
+    "total_tokens": 836857
+  },
+  {
+    "answerChars": 4269,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 322816,
+    "elapsedMs": 29793.263,
+    "input_tokens": 359624,
+    "output_tokens": 12742,
+    "reasoning_output_tokens": 10563,
+    "run": "spark-index-task3",
+    "total_tokens": 372366
+  },
+  {
+    "answerChars": 4270,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 911488,
+    "elapsedMs": 48862.062,
+    "input_tokens": 1004038,
+    "output_tokens": 9120,
+    "reasoning_output_tokens": 6373,
+    "run": "spark-no-index-task1",
+    "total_tokens": 1013158
+  },
+  {
+    "answerChars": 6988,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 1174656,
+    "elapsedMs": 52940.421,
+    "input_tokens": 1258191,
+    "output_tokens": 12045,
+    "reasoning_output_tokens": 8377,
+    "run": "spark-no-index-task2",
+    "total_tokens": 1270236
+  },
+  {
+    "answerChars": 5019,
+    "cache_write_input_tokens": 0,
+    "cached_input_tokens": 491648,
+    "elapsedMs": 33634.189,
+    "input_tokens": 556094,
+    "output_tokens": 11878,
+    "reasoning_output_tokens": 9246,
+    "run": "spark-no-index-task3",
+    "total_tokens": 567972
+  }
+]

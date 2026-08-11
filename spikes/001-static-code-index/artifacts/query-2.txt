@@ -1,23 +1,9 @@
 source_commit 99b7c6e8399a16e9bb8169128ba1c4a33a23cbfe
-query device intake schema computer person visible custom workspace incompatible
+query device intake schema computer person visible custom workspace incompatible blank setup-it
 coverage tracked=79 indexed=48 skipped=31
 warning navigation hints only; inspect source before semantic claims
 
-FILE app.js:7857 score=112 match=custom:5,device:26,intake:26,person:5,schema:15,visible:15,workspace:20 sha256=1c79b4773b91
-    587 binding personType
-    616 binding schemaChanged
-   1512 binding visibleFields
-   2082 method getCurrentWorkspaceName
-   2087 method switchWorkspace
-   2136 method applyPresetToNewWorkspace
-   2162 method addWorkspace
-   2166 method showRenameWorkspaceModal
-   2195 method renameCurrentWorkspace
-   2212 binding workspaceWrap
-   2217 binding workspaces
-   2554 binding visibleCategories
-
-FILE device-intake.js:235 score=74 match=computer:20,device:12,intake:12,person:20,schema:10 sha256=e6f19ab56265
+FILE device-intake.js:235 score=912 match=computer:312,device:24,intake:36,person:312,schema:228 sha256=e6f19ab56265
      10 binding computerFields
      11 binding personFields
      13 binding schemaDefinitions
@@ -31,26 +17,38 @@ FILE device-intake.js:235 score=74 match=computer:20,device:12,intake:12,person:
     179 binding personIncoming
     216 binding personExisting
 
-FILE WINDOWS_DEVICE_INTAKE_PLAN.md:155 score=44 match=computer:5,device:17,intake:17,person:5 sha256=3bf99ce3a94f
-      1 heading-1 Windows Device Intake
-     53 heading-3 Computer
-     63 heading-3 Person
-
-FILE tests/device-intake-core.test.js:101 score=41 match=device:18,intake:23 sha256=e112b7fbc9ec
+FILE tests/device-intake-core.test.js:101 score=829 match=computer:192,device:52,intake:165,person:192,schema:168,visible:60 sha256=e112b7fbc9ec
       5 ->module ../device-intake.js
       5 ->worker-cache ../device-intake.js
       5 binding Intake
 
-FILE tests/device-intake-browser.test.js:79 score=30 match=device:15,intake:15 sha256=b4b03ad723ca
+FILE WINDOWS_DEVICE_INTAKE_PLAN.md:155 score=809 match=computer:222,device:74,intake:99,person:222,schema:192 sha256=3bf99ce3a94f
+      1 heading-1 Windows Device Intake
+     53 heading-3 Computer
+     63 heading-3 Person
+
+FILE app.js:7857 score=525 match=custom:40,device:52,intake:78,person:30,schema:90,visible:75,workspace:160 sha256=1c79b4773b91
+    587 binding personType
+    616 binding schemaChanged
+   1512 binding visibleFields
+   2082 method getCurrentWorkspaceName
+   2087 method switchWorkspace
+   2136 method applyPresetToNewWorkspace
+   2162 method addWorkspace
+   2166 method showRenameWorkspaceModal
+   2195 method renameCurrentWorkspace
+   2212 binding workspaceWrap
+   2217 binding workspaces
+   2554 binding visibleCategories
+
+FILE setup-it.js:113 score=360 match=computer:120,person:144,setup-it:96 sha256=9f7e69b1f918
+
+FILE tests/device-intake-browser.test.js:79 score=283 match=computer:192,device:46,intake:45 sha256=b4b03ad723ca
      37 ->worker-cache Elistly-Windows-Device-Intake-v1.0.0.zip
 
-FILE tests/frontend-security-runtime.test.js:846 score=15 match=custom:15 sha256=c8cd4b39767a
+FILE setup-blank.js:15 score=224 match=blank:224 sha256=f45c34f36127
+
+FILE tests/frontend-security-runtime.test.js:846 score=184 match=custom:120,device:64 sha256=c8cd4b39767a
     485 function testCustomTitleSeparatorParity
     509 binding customInput
     515 binding savedWithCustom
-
-FILE app.html:153 score=12 match=device:6,intake:6 sha256=154b7a0f7e68
-    150 ->script device-intake.js?v=1
-    150 ->worker-cache device-intake.js?v=1
-
-FILE collector/windows/Collect-ElistlyDevice.ps1:69 score=12 match=device:12 sha256=c7912930766c

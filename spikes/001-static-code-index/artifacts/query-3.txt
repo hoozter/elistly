@@ -1,9 +1,16 @@
 source_commit 99b7c6e8399a16e9bb8169128ba1c4a33a23cbfe
-query collector download zip service worker cache candidate
+query collector download zip service worker cache candidate package checksum powershell readme
 coverage tracked=79 indexed=48 skipped=31
 warning navigation hints only; inspect source before semantic claims
 
-FILE app.js:7857 score=73 match=cache:24,candidate:26,download:8,worker:9,zip:6 sha256=1c79b4773b91
+FILE tests/windows-collector.test.js:25 score=416 match=collector:80,powershell:32,readme:304 sha256=9c381cd4e6b0
+      8 binding readmePath
+     10 binding readme
+
+FILE collector/windows/CANDIDATE.md:16 score=384 match=candidate:84,collector:108,powershell:64,readme:32,zip:96 sha256=234df6449e73
+      1 heading-1 Windows collector candidate 1.0.0
+
+FILE app.js:7857 score=354 match=cache:120,candidate:104,download:64,worker:18,zip:48 sha256=1c79b4773b91
      15 ->worker-cache version-history.js
     171 binding existingUserCache
     218 binding cachedPayload
@@ -16,32 +23,18 @@ FILE app.js:7857 score=73 match=cache:24,candidate:26,download:8,worker:9,zip:6 
    7349 binding candidate
    7791 binding candidate
 
-FILE worker/test/worker-routes.spec.js:207 score=44 match=cache:3,worker:41 sha256=8c9c0cfa2ef4
-      3 ->worker-cache ../src/index.js
-     40 binding worker
-     54 binding worker
-     68 binding adminWorker
-     69 binding memberWorker
-     80 binding worker
-     92 binding worker
-    106 binding worker
-    127 binding worker
-    149 binding worker
-    164 binding worker
-    178 binding worker
+FILE device-intake.js:235 score=336 match=candidate:188,collector:148 sha256=e6f19ab56265
+     90 binding collector
+    166 binding computerCandidates
+    171 binding personCandidates
+    203 binding candidate
 
-FILE worker/package-lock.json:2834 score=42 match=cache:12,worker:30 sha256=fdce1a542839
-   2324 ->worker-cache bin/semver.js
-   2648 ->worker-cache bin/vite.js
-   2723 ->worker-cache cli.js
-   2767 ->worker-cache bin/cf-wrangler.js
-   2768 ->worker-cache bin/wrangler.js
-   2769 ->worker-cache bin/wrangler.js
+FILE WINDOWS_DEVICE_INTAKE_PLAN.md:155 score=320 match=candidate:96,collector:128,powershell:96 sha256=3bf99ce3a94f
 
-FILE collector/windows/CANDIDATE.md:16 score=40 match=candidate:17,collector:23 sha256=234df6449e73
-      1 heading-1 Windows collector candidate 1.0.0
+FILE scripts/package-windows-collector.sh:12 score=301 match=cache:15,collector:64,package:96,readme:32,worker:6,zip:88 sha256=fa62bac81aa4
+      7 ->worker-cache $output_dir/Elistly-Windows-Device-Intake-v1.0.0.zip
 
-FILE sw.js:85 score=34 match=cache:22,worker:12 sha256=f51bdb163a26
+FILE sw.js:85 score=294 match=cache:270,worker:24 sha256=f51bdb163a26
       2 binding CACHE_NAME
       6 ->worker-cache ./index.html
       7 ->worker-cache ./app.html
@@ -55,28 +48,4 @@ FILE sw.js:85 score=34 match=cache:22,worker:12 sha256=f51bdb163a26
      15 ->worker-cache ./setup-library.js
      16 ->worker-cache ./setup-it.js
 
-FILE worker/src/index.js:537 score=34 match=cache:5,candidate:6,worker:23 sha256=b508e36b1238
-     18 binding jwksCache
-    351 function createWorker
-
-FILE app.html:153 score=30 match=cache:12,candidate:6,worker:12 sha256=154b7a0f7e68
-     38 ->worker-cache styles.css?v=17
-    136 ->worker-cache config.js
-    138 ->worker-cache https://cdn.jsdelivr.net/npm/sortablejs@1.14.0/Sortable.min.js
-    139 ->worker-cache setup-blank.js
-    140 ->worker-cache setup-library.js
-    141 ->worker-cache setup-it.js
-    142 ->worker-cache setup-staff.js
-    143 ->worker-cache setup-property.js
-    144 ->worker-cache sample-data.js
-    145 ->worker-cache faq.js
-    146 ->worker-cache pwa-register.js
-    147 ->worker-cache lib/db.js
-
-FILE index.html:156 score=30 match=cache:12,candidate:6,worker:12 sha256=718d1ea6a62a
-     23 ->worker-cache config.js
-     24 ->worker-cache landing-auth-redirect.js
-     28 ->worker-cache styles.css?v=17
-     36 ->worker-cache app.html
-     58 ->worker-cache app.html
-    153 ->worker-cache pwa-register.js
+FILE README.md:60 score=264 match=collector:32,download:96,readme:96,worker:40 sha256=b8213a411ab7

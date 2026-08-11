@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import time
+from collections import Counter
 from pathlib import Path, PurePosixPath
 
 VERSION = "0.1.0-spike"
@@ -24,6 +25,12 @@ EXCLUDED_PARTS = {
 EXCLUDED_NAMES = {
     ".env", ".env.local", ".env.production", "auth.json", "credentials.json",
     "secrets.json",
+}
+KEYWORD_STOPWORDS = {
+    "async", "await", "break", "case", "catch", "class", "const", "continue",
+    "default", "else", "export", "false", "finally", "for", "from", "function",
+    "if", "import", "let", "new", "null", "return", "static", "switch", "this",
+    "throw", "true", "try", "typeof", "undefined", "var", "while", "with",
 }
 
 
@@ -123,6 +130,18 @@ def classify(relative: str) -> list[str]:
     return tags
 
 
+def extract_keywords(text: str) -> list[list[object]]:
+    counts = Counter(
+        token.casefold()
+        for token in re.findall(r"[A-Za-z_$][A-Za-z0-9_$-]{2,}", text)
+        if token.casefold() not in KEYWORD_STOPWORDS
+    )
+    return [
+        [token, count]
+        for token, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:80]
+    ]
+
+
 def build(root: Path, output: Path) -> dict[str, object]:
     started = time.perf_counter()
     commit = git_output(root, "rev-parse", "HEAD").decode().strip()
@@ -150,6 +169,7 @@ def build(root: Path, output: Path) -> dict[str, object]:
             "lines": text.count("\n") + (0 if not text or text.endswith("\n") else 1),
             "suffix": path.suffix.lower(),
             "tags": classify(relative),
+            "keywords": extract_keywords(text),
             "symbols": extract_symbols(relative, text),
             "refs": extract_refs(relative, text),
         })
