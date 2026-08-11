@@ -162,7 +162,7 @@
 
       const declared = fields.filter(field => field.collection?.capability === capability && (!field.collection.provider || field.collection.provider === 'windows'));
       const aliases = Array.isArray(definition.aliases) ? definition.aliases : [];
-      const candidates = declared.length ? declared : fields.filter(field => aliases.includes(field.name));
+      const candidates = declared.length ? declared : fields.filter(field => !field.collection && aliases.includes(field.name));
       if (candidates.length === 0) {
         unmapped.push({ fact, value: proposalValue(definition, rawValue), reason: 'No existing field supports this collected fact.' });
         continue;

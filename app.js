@@ -3911,17 +3911,22 @@ const App = {
       },
 
       async readDeviceIntakeDraftReport(event, type, form, result) {
+        const readId = String(Number(result.dataset.deviceIntakeRead || 0) + 1);
+        result.dataset.deviceIntakeRead = readId;
         result.replaceChildren();
         try {
           const file = event.target.files?.[0];
           if (!file) return;
           if (file.size > ElistlyDeviceIntake.limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
-          const report = ElistlyDeviceIntake.parseReport(await file.text());
+          const text = await file.text();
+          if (result.dataset.deviceIntakeRead !== readId) return;
+          const report = ElistlyDeviceIntake.parseReport(text);
           const draft = Object.fromEntries(new FormData(form).entries());
           const proposal = ElistlyDeviceIntake.createDraftProposal(report, type, draft);
           proposal.mapped.forEach(item => this.setDeviceIntakeDraftValue(form, item));
           this.renderDeviceIntakeDraftResult(result, form, report, type, proposal);
         } catch (error) {
+          if (result.dataset.deviceIntakeRead !== readId) return;
           const message = document.createElement('p');
           message.className = 'error-message';
           message.textContent = error.message || 'The report could not be read.';

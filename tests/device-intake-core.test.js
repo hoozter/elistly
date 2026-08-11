@@ -141,6 +141,14 @@ function mapperTests() {
   const dropdownProposal = Intake.createDraftProposal(dropdownReport, dropdownType, {});
   assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5'], 'dropdown comparisons use canonical option values');
 
+  const foreignProviderType = {
+    id: 'computer',
+    fields: [{ name: 'hostname', type: 'text', collection: { provider: 'other', capability: 'computer.hostname' } }]
+  };
+  const foreignProviderProposal = Intake.createDraftProposal(report, foreignProviderType, {});
+  assert.equal(foreignProviderProposal.mapped.some(item => item.field === 'hostname'), false, 'legacy aliases must not override explicit non-Windows metadata');
+  assert.ok(foreignProviderProposal.unmapped.some(item => item.fact === 'hostname'));
+
   assert.equal(Intake.isCompatibleEntityType({ id: 'computer', fields: [] }), true, 'the current Computer type remains eligible');
   assert.equal(Intake.isCompatibleEntityType({ id: 'custom-device', collection: { provider: 'windows', kind: 'computer' }, fields: [] }), true, 'explicit type metadata enables a configured Computer type');
   assert.equal(Intake.isCompatibleEntityType({ id: 'computer', collection: { provider: 'other', kind: 'computer' }, fields: [] }), false, 'explicit incompatible provider metadata wins over the legacy ID');

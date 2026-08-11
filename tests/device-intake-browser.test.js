@@ -82,6 +82,29 @@ const initial = {
     await page.evaluate(() => App.closeModal('entityModal'));
     await page.locator('#entityModal').waitFor({ state: 'detached' });
 
+    const ordering = await page.evaluate(async sourceReport => {
+      App.showEntityForm('computer');
+      const form = document.getElementById('entityForm');
+      const result = form.querySelector('.device-intake-result');
+      const first = structuredClone(sourceReport);
+      first.computer.hostname = 'FIRST-PC';
+      first.computer.serialNumber = 'FIRST123';
+      const second = structuredClone(sourceReport);
+      second.computer.hostname = 'SECOND-PC';
+      second.computer.serialNumber = 'SECOND123';
+      const delayedFile = { size: 100, text: () => new Promise(resolve => setTimeout(() => resolve(JSON.stringify(first)), 50)) };
+      const latestFile = { size: 100, text: async () => JSON.stringify(second) };
+      await Promise.all([
+        App.readDeviceIntakeDraftReport({ target: { files: [delayedFile] } }, App.data.entityTypes.computer, form, result),
+        App.readDeviceIntakeDraftReport({ target: { files: [latestFile] } }, App.data.entityTypes.computer, form, result)
+      ]);
+      return { hostname: form.elements.hostname.value, result: result.textContent };
+    }, report);
+    assert.equal(ordering.hostname, 'SECOND-PC');
+    assert.doesNotMatch(ordering.result, /FIRST-PC/, 'a slower stale file read must not replace the latest proposal');
+    await page.evaluate(() => App.closeModal('entityModal'));
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+
     await page.evaluate(() => App.showEntityForm('computer'));
     const manualForm = page.locator('#entityForm');
     await manualForm.locator('[name="hostname"]').fill('MANUAL-ONLY');
