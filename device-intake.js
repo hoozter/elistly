@@ -57,6 +57,20 @@
     return value;
   }
 
+  const capabilityRegistry = freeze({
+    'computer.hostname': { source: 'hostname', aliases: ['hostname'], fieldTypes: ['text', 'textarea'] },
+    'computer.manufacturer': { source: 'manufacturer', aliases: ['manufacturer'], fieldTypes: ['text', 'textarea'] },
+    'computer.model': { source: 'model', aliases: ['model'], fieldTypes: ['text', 'textarea'] },
+    'processor.summary': { source: 'processorSummary', aliases: ['processorSummary', 'cpu'], fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'processor.description': { source: 'processorDescription', aliases: ['processorDescription'], fieldTypes: ['text', 'textarea'] },
+    'memory.total': { source: 'memorySummary', aliases: ['memorySummary', 'ram'], fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'graphics.adapters': { source: 'graphicsAdapters', aliases: ['graphicsAdapters', 'gpu'], fieldTypes: ['text', 'textarea'], format: 'list' },
+    'windows.edition': { source: 'windowsEdition', aliases: ['windowsEdition'], fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'windows.version': { source: 'windowsVersion', aliases: ['windowsVersion'], fieldTypes: ['text', 'textarea'] },
+    'windows.build': { source: 'windowsBuild', aliases: ['windowsBuild'], fieldTypes: ['text', 'textarea'] },
+    'bios.serial-number': { source: 'serialNumber', aliases: ['serialNumber'], fieldTypes: ['text', 'textarea'] }
+  });
+
   function parseReport(text) {
     if (typeof text !== 'string') throw new Error('Report must be JSON text.');
     if (new TextEncoder().encode(text).length > limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
@@ -106,5 +120,76 @@
     });
   }
 
-  return Object.freeze({ limits, parseReport });
+  function isEmptyDraftValue(value) {
+    return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+  }
+
+  function proposalValue(definition, value) {
+    if (definition.format === 'list') return Array.isArray(value) ? value.join('; ') : value;
+    return value;
+  }
+
+  function compatibleValue(field, definition, value) {
+    if (!definition.fieldTypes.includes(field.type)) return { reason: `Existing field type "${field.type || 'unknown'}" is not compatible.` };
+    const formatted = proposalValue(definition, value);
+    if (field.type !== 'dropdown') return { value: formatted };
+    const wanted = String(formatted).trim().toLowerCase();
+    const option = (field.options || []).find(item => {
+      const optionValue = typeof item === 'object' && item !== null ? item.value : item;
+      return String(optionValue ?? '').trim().toLowerCase() === wanted;
+    });
+    if (option === undefined) return { reason: 'The collected value is not an existing dropdown option.' };
+    return { value: typeof option === 'object' && option !== null ? option.value : option };
+  }
+
+  function createDraftProposal(report, entityType, currentDraftValues = {}, registry = capabilityRegistry) {
+    if (!report || typeof report !== 'object') throw new Error('A parsed report is required.');
+    if (!entityType || typeof entityType !== 'object') throw new Error('An entity type definition is required.');
+    if (!currentDraftValues || typeof currentDraftValues !== 'object' || Array.isArray(currentDraftValues)) throw new Error('Draft values must be an object.');
+    if (!registry || typeof registry !== 'object' || Array.isArray(registry)) throw new Error('Capability registry must be an object.');
+
+    const fields = Array.isArray(entityType.fields) ? entityType.fields : [];
+    const mapped = [];
+    const conflicts = [];
+    const unmapped = [];
+    const warnings = [];
+
+    for (const [capability, definition] of Object.entries(registry)) {
+      if (!definition || typeof definition !== 'object' || typeof definition.source !== 'string') continue;
+      const fact = definition.source;
+      const rawValue = report.computer?.[fact];
+      if (rawValue === undefined || rawValue === null || rawValue === '' || (Array.isArray(rawValue) && rawValue.length === 0)) continue;
+
+      const declared = fields.filter(field => field.collection?.capability === capability && (!field.collection.provider || field.collection.provider === 'windows'));
+      const aliases = Array.isArray(definition.aliases) ? definition.aliases : [];
+      const candidates = declared.length ? declared : fields.filter(field => aliases.includes(field.name));
+      if (candidates.length === 0) {
+        unmapped.push({ fact, value: proposalValue(definition, rawValue), reason: 'No existing field supports this collected fact.' });
+        continue;
+      }
+      if (candidates.length > 1) {
+        unmapped.push({ fact, value: proposalValue(definition, rawValue), reason: 'More than one existing field claims this collected fact.' });
+        warnings.push(`Choose one field for capability ${capability}.`);
+        continue;
+      }
+
+      const field = candidates[0];
+      const compatible = compatibleValue(field, definition, rawValue);
+      if (compatible.reason) {
+        unmapped.push({ fact, field: field.name, value: proposalValue(definition, rawValue), reason: compatible.reason });
+        continue;
+      }
+      const item = { fact, capability, field: field.name, value: compatible.value };
+      if (isEmptyDraftValue(currentDraftValues[field.name])) mapped.push(item);
+      else conflicts.push({ ...item, current: currentDraftValues[field.name] });
+    }
+
+    const accountContext = { ...(report.person || {}) };
+    if (!accountContext.accountName && report.computer?.accountName) accountContext.accountName = report.computer.accountName;
+    if (report.computer?.windowsDomain) accountContext.windowsDomain = report.computer.windowsDomain;
+
+    return freeze({ mapped, conflicts, unmapped, accountContext, warnings });
+  }
+
+  return Object.freeze({ limits, capabilityRegistry, parseReport, createDraftProposal });
 });
