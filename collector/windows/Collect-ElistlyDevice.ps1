@@ -65,5 +65,5 @@ $json = $report | ConvertTo-Json -Depth 4
 if ([System.Text.Encoding]::UTF8.GetByteCount($json) -gt 262144) { throw 'The report exceeds the 256 KiB limit and was not written.' }
 [System.IO.File]::WriteAllText($reportPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Report saved to: $reportPath"
-Write-Host 'Upload it in Elistly under Settings > Data > Device Intake. Delete the report when your retention policy permits.'
+Write-Host 'In Elistly, open a new Computer form and choose Import collected information. Delete the report when your retention policy permits.'
 Read-Host 'Press Enter to close'

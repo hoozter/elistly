@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
@@ -13,6 +15,8 @@ const packageScriptPath = path.join(root, 'scripts/package-windows-collector.sh'
 const appPath = path.join(root, 'app.js');
 const appHtmlPath = path.join(root, 'app.html');
 const serviceWorkerPath = path.join(root, 'sw.js');
+const rootReadmePath = path.join(root, 'README.md');
+const archivePath = path.join(root, 'downloads/Elistly-Windows-Device-Intake-v1.0.2.zip');
 const script = fs.readFileSync(scriptPath, 'utf8');
 const launcher = fs.readFileSync(launcherPath, 'utf8');
 const readme = fs.readFileSync(readmePath, 'utf8');
@@ -21,6 +25,7 @@ const packageScript = fs.readFileSync(packageScriptPath, 'utf8');
 const app = fs.readFileSync(appPath, 'utf8');
 const appHtml = fs.readFileSync(appHtmlPath, 'utf8');
 const serviceWorker = fs.readFileSync(serviceWorkerPath, 'utf8');
+const rootReadme = fs.readFileSync(rootReadmePath, 'utf8');
 
 assert.match(script, /SaveFileDialog/, 'user must choose the report path');
 assert.match(script, /elistly\.device-intake\.v1/);
@@ -35,6 +40,13 @@ assert.match(readme, /does not.*network/i);
 assert.match(readme, /PowerShell execution policy/i);
 assert.match(readme, /delete.*report/i);
 assert.match(readme, /Windows 10.*Windows 11/i);
+assert.match(readme, /new Computer.*Import collected information/is);
+assert.match(script, /new Computer.*Import collected information/is);
+assert.match(candidate, /new Computer.*Import collected information/is);
+assert.match(rootReadme, /new Computer.*Import collected information/is);
+for (const [name, content] of [['collector README', readme], ['collector script', script], ['candidate metadata', candidate], ['root README', rootReadme]]) {
+  assert.doesNotMatch(content, /Settings\s*(?:>|→).*Device Intake|Confirm import/i, `${name} must not describe the removed Settings import`);
+}
 assert.match(launcher, /%~dp0Collect-ElistlyDevice\.ps1/i, 'launcher must resolve the collector beside itself');
 assert.match(launcher, /%SystemRoot%\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe.*-NoProfile.*-ExecutionPolicy Bypass.*-File/i, 'launcher must use trusted Windows PowerShell and bypass policy only for its child process');
 assert.match(launcher, /choice\s+\/C\s+YN/i, 'launcher must ask before using the process-only bypass');
@@ -49,10 +61,19 @@ assert.match(packageScript, /bin\/Elistly\.ico/);
 assert.match(app, /Double-click.*Elistly Device Collector.*shortcut/i, 'in-app instructions must name the branded shortcut');
 assert.doesNotMatch(app, /right-click Collect-ElistlyDevice\.ps1/i, 'in-app instructions must not direct users to the policy-blocked path');
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
-assert.match(appHtml, /app\.js\?v=18/, 'app shell must request the shortcut-aware app bundle');
-assert.match(serviceWorker, /elistly-shell-v8/);
-assert.match(serviceWorker, /app\.js\?v=18/);
+assert.match(appHtml, /styles\.css\?v=18/);
+assert.match(appHtml, /device-intake\.js\?v=2/);
+assert.match(appHtml, /app\.js\?v=19/, 'app shell must request the draft-intake app bundle');
+assert.match(serviceWorker, /elistly-shell-v9/);
+assert.match(serviceWorker, /styles\.css\?v=18/);
+assert.match(serviceWorker, /device-intake\.js\?v=2/);
+assert.match(serviceWorker, /app\.js\?v=19/);
 for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript], ['app download', app]]) {
   assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.2|Collector 1\.0\.2/i, `${name} must reference collector 1.0.2`);
 }
+const archive = fs.readFileSync(archivePath);
+const archiveHash = crypto.createHash('sha256').update(archive).digest('hex');
+assert.ok(candidate.includes('SHA-256: `' + archiveHash + '`'), 'candidate checksum must match the shipped archive');
+assert.equal(childProcess.execFileSync('unzip', ['-p', archivePath, 'README.txt'], { encoding: 'utf8' }), readme, 'archive README must match source');
+assert.equal(childProcess.execFileSync('unzip', ['-p', archivePath, 'bin/Collect-ElistlyDevice.ps1'], { encoding: 'utf8' }), script, 'archive collector must match source');
 console.log('PASS windows-collector');

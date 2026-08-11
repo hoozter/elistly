@@ -49,13 +49,14 @@ A published MVP is the release floor, not the end of the product. Work below is 
 
 This is a recovered high-priority product requirement. See [`WINDOWS_DEVICE_INTAKE_PLAN.md`](WINDOWS_DEVICE_INTAKE_PLAN.md).
 
-- [ ] **Versioned local collector** — Collect a disclosed, bounded set of Windows hardware, OS, and account facts without administrator access or default network calls.
-- [ ] **Strict report contract** — Validate `elistly.device-intake.v1`, enforce size/depth/type limits, and reject unsupported schemas before creating a preview.
-- [ ] **Side-effect-free preview** — Show exact create/update changes without mutating schema, dropdowns, entities, or persisted data.
-- [ ] **Explicit collision resolution** — Never silently merge people or computers when serial/hostname/email/account identifiers disagree.
-- [ ] **Privacy-safe transfer** — No execution-policy bypass, hidden collection, predictable temporary report, or default clipboard copy; optional directory enrichment must be explicit and accurately described as network access.
+- [x] **Versioned local collector source** — Collect a disclosed, bounded set of Windows hardware, OS, and account facts without administrator access or default network calls.
+- [x] **Strict report contract** — Validate `elistly.device-intake.v1`, enforce size/depth/type limits, and reject unsupported schemas before draft population.
+- [x] **Normal-form draft intake source** — Populate only compatible existing fields in a new Computer form, preserve non-empty drafts until an explicit choice, and persist only through ordinary Save.
+- [x] **Schema and Person safety** — Intake never changes schema, creates/updates a Person, selects an association from collected account context, or updates an existing Computer.
+- [x] **Privacy-safe local transfer source** — No hidden collection, predictable temporary report, or default clipboard copy; the packaged fallback uses only a disclosed process-scoped execution-policy option and never changes machine/user policy.
+- [ ] **Private signed-in integration acceptance** — Review the source-complete candidate, integrate the exact commit, and verify the normal form/save lifecycle in the private preview without production data.
 - [ ] **Windows acceptance** — Validate Windows 10/11, standard accounts, domain/workgroup machines, missing CIM properties, multiple GPUs, and no default outbound traffic.
-- [ ] **Checksummed candidate package** — Record exact collector path, checksum, contents, and launch instructions before asking for real-machine testing.
+- [x] **Checksummed candidate package** — Record exact collector path, checksum, contents, and launch instructions before asking for real-machine testing.
 
 ## P0 – Complete account flows
 

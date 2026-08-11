@@ -14,8 +14,9 @@ Launch
 3. Double-click the "Elistly Device Collector" shortcut with the Elistly icon.
 4. Read the disclosed field list and choose OK to continue.
 5. Choose the report destination in the Save dialog.
-6. In Elistly, open Settings > Data > Device Intake and select the JSON report.
-7. Review all create/update/conflict choices, then choose Confirm import.
+6. In Elistly, open a new Computer form and choose "Import collected information".
+7. Select the JSON report, review the editable draft and any conflicts, then use
+   the form's ordinary Save action when the Computer is ready.
 
 Shortcut fallback
 -----------------

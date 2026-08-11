@@ -1,6 +1,6 @@
 # Windows Device Intake
 
-**Status:** The collector and bounded report parser are a validated starting point. The original Settings-based import UI and hard-coded Computer/Person schema are superseded by this plan and must not be treated as the product design. The next candidate is not complete until the normal **Add Computer** workflow accepts a report as editable draft values and passes real Windows/browser acceptance.
+**Status:** A source-complete candidate now routes bounded report values into the normal **Add Computer** draft and removes the original Settings import/schema/person transaction. It still requires independent review, integration/private-preview verification, and real Windows/browser acceptance before release.
 
 ## Product rule
 

@@ -20,7 +20,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. The application shell is installable, while durable offline edits remain roadmap work.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
 - **Profile** — Download an account export, reset data (clear app data, keep account), or delete the account. The current export is not yet a guaranteed round-trip restore format. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
-- **Windows Device Intake** — Settings → Data → Device Intake provides a disclosed local-only collector download, bounded report validation, conflict-aware preview, and confirmed import. The collector needs no administrator access and performs no network or directory lookup.
+- **Windows Device Intake** — Settings provides the disclosed local-only collector download. In a new Computer form, **Import collected information** validates a saved report and fills only compatible existing draft fields; the ordinary Save action creates the Computer. The collector needs no administrator access and performs no network or directory lookup.
 
 ## Quick install
 

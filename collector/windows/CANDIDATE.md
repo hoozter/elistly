@@ -1,7 +1,7 @@
 # Windows collector candidate 1.0.2
 
 - Archive: `downloads/Elistly-Windows-Device-Intake-v1.0.2.zip`
-- SHA-256: `8cb5ffdae2aed753ea8944a409a6856af6323845c21451cefdc9a4ff72bbcba2`
+- SHA-256: `a44940c564887f4edf8641d47a45aee7097b9aa568eef4ccfe114ec0d6364557`
 - Contents:
   - `Elistly Device Collector.lnk`
   - `README.txt`
@@ -16,7 +16,8 @@ Launch on Windows 10 or Windows 11:
 3. Open the extracted folder.
 4. Double-click the `Elistly Device Collector` shortcut with the Elistly icon.
 5. Confirm the disclosed process-only execution policy bypass. It does not change machine or user policy; organization Group Policy still applies.
-6. Review the disclosed field list, choose the JSON report destination, and upload the report through **Settings → Data → Device Intake**.
+6. Review the disclosed field list and choose the JSON report destination.
+7. In Elistly, open a **new Computer** form, choose **Import collected information**, review the editable draft and any conflicts, then use the ordinary **Save** action.
 
 The shortcut stores only the relative target `bin\Start Elistly Device Collector.bat` and relative icon `bin\Elistly.ico`. It contains no absolute build path, command-line arguments, embedded script, URL, or network destination. If Windows or security software blocks the shortcut, the BAT in `bin` is the documented transparent fallback.
 
