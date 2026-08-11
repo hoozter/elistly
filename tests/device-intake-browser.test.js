@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -15,17 +16,45 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html');
   res.end(fs.readFileSync(file));
 });
+
+const hostile = '<img src=x onerror=window.__deviceIntakeXss=1>';
 const report = {
-  schema: 'elistly.device-intake.v1', collectedAt: '2026-08-07T10:00:00.000Z',
-  collector: { name: 'Elistly Windows Device Intake Collector', version: '1.0.0' },
+  schema: 'elistly.device-intake.v1',
+  collectedAt: '2026-08-07T10:00:00.000Z',
+  collector: { name: 'Elistly Windows Device Intake Collector', version: '1.0.2' },
   collection: { mode: 'local-only', networkDirectoryLookup: false, fields: ['computer.hostname'] },
-  person: { displayName: '<img src=x onerror=window.__xss=1>', email: 'alex@example.com' },
-  computer: { hostname: 'LAPTOP-01', windowsDomain: 'ACME', manufacturer: 'Dell', serialNumber: 'ABC123' }
+  person: { displayName: hostile, accountName: 'campbell', email: 'campbell@example.test' },
+  computer: {
+    hostname: 'LAPTOP-01', windowsDomain: 'ACME', accountName: 'campbell', manufacturer: 'Dell',
+    model: 'Latitude 7450', graphicsAdapters: ['Intel Graphics', 'NVIDIA RTX'], windowsEdition: 'Windows 11', serialNumber: 'ABC123'
+  }
 };
-const initial = { version: '1', settings: {}, categories: {}, entityTypes: {}, entities: {
-  pc1: { id: 'pc1', type: 'computer', name: 'Serial PC', manufacturer: 'Dell', serialNumber: 'abc123', hostname: 'OTHER' },
-  pc2: { id: 'pc2', type: 'computer', name: 'Host PC', hostname: 'laptop-01', windowsDomain: 'acme' }
-}, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
+const initial = {
+  version: '1', settings: {},
+  categories: { devices: { id: 'devices', label: 'Devices' }, people: { id: 'people', label: 'People' } },
+  entityTypes: {
+    computer: {
+      id: 'computer', label: 'Computer', category: 'devices', icon: 'computer', enableNameGen: false,
+      fields: [
+        { name: 'hostname', label: 'Hostname', type: 'text' },
+        { name: 'manufacturer', label: 'Manufacturer', type: 'text' },
+        { name: 'model', label: 'Model', type: 'text' },
+        { name: 'gpu', label: 'Graphics', type: 'textarea' },
+        { name: 'serialNumber', label: 'Serial number', type: 'text' },
+        { name: 'notes', label: 'Notes', type: 'textarea' }
+      ],
+      associations: [{ name: 'assignedTo', label: 'Assigned To', type: 'association', association: { kind: 'belongs_to', targetType: 'person' } }]
+    },
+    person: {
+      id: 'person', label: 'Person', category: 'people', icon: 'person', enableNameGen: false,
+      fields: [{ name: 'name', label: 'Name', type: 'text' }], associations: []
+    }
+  },
+  entities: {
+    person1: { id: 'person1', type: 'person', name: 'Existing Person' },
+    existingComputer: { id: 'existingComputer', type: 'computer', hostname: 'EXISTING-PC', model: 'Older model' }
+  }
+};
 
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -33,48 +62,128 @@ const initial = { version: '1', settings: {}, categories: {}, entityTypes: {}, e
   const page = await browser.newPage();
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(data => { App.data = data; localStorage.setItem('elistlyData', JSON.stringify(data)); window.__xss = 0; App.showDeviceIntake(); }, initial);
-    assert.match(await page.locator('#deviceIntakeModal').textContent(), /local-only.*does not contact/i);
-    assert.equal(await page.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.2.zip');
-    await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(report)) });
-    await page.getByText('Choose the computer record').waitFor();
-    assert.equal(await page.locator('#confirmDeviceIntake').isDisabled(), true);
-    assert.equal(await page.locator('#deviceIntakePreview img').count(), 0, 'hostile report text must not create markup');
-    assert.equal(await page.evaluate(() => window.__xss), 0);
-    assert.deepEqual(await page.evaluate(() => App.data), initial, 'preview must be inert');
-    await page.getByRole('radio', { name: /Serial PC/ }).check();
-    assert.match(await page.locator('[data-device-intake-fields="computer"]').textContent(), /hostname.*overwritten.*OTHER.*LAPTOP-01/is);
-    assert.match(await page.locator('[data-device-intake-fields="computer"]').textContent(), /id.*retained/is);
-    await page.locator('#confirmDeviceIntake').click();
-    await page.getByText('Device intake saved.').waitFor();
-    assert.equal(await page.evaluate(() => App.data.entities.pc1.hostname), 'LAPTOP-01');
-    await page.evaluate(() => App.showEntityForm('computer', 'pc1'));
-    assert.match(await page.locator('#entityModal').textContent(), /Hostname\s+LAPTOP-01/i, 'imported fields must be visible in the normal entity view');
-    assert.match(await page.locator('#entityModal').textContent(), /Serial number\s+ABC123/i, 'serial must be visible in the normal entity view');
-    await page.evaluate(() => App.closeModal('entityModal'));
-
-    await page.evaluate(data => { App.data = data; localStorage.setItem('elistlyData', JSON.stringify(data)); App.showDeviceIntake(); Storage.setAppDataForImport = async () => { throw new Error('simulated write failure'); }; }, initial);
-    await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...report, computer: { manufacturer: 'Lenovo', serialNumber: 'NEW123' } })) });
-    await page.locator('#confirmDeviceIntake:not([disabled])').click();
-    await page.getByText(/not saved.*simulated write failure/i).waitFor();
-    assert.deepEqual(await page.evaluate(() => App.data), initial, 'failed save must restore existing data');
-
     await page.evaluate(data => {
-      App.data = data;
+      App.data = structuredClone(data);
       localStorage.setItem('elistlyData', JSON.stringify(data));
-      App.showDeviceIntake();
-      Storage.setAppDataForImport = async candidate => {
-        Storage._cached = candidate;
-        const error = new Error('The import was saved remotely, but the local cache could not be updated. Reload before continuing.');
-        error.remoteCommitted = true;
-        throw error;
-      };
+      window.__deviceIntakeXss = 0;
     }, initial);
-    await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...report, computer: { manufacturer: 'Lenovo', serialNumber: 'COMMITTED123' } })) });
-    await page.locator('#confirmDeviceIntake:not([disabled])').click();
-    await page.getByText(/saved remotely.*local cache.*reload/i).waitFor();
-    assert.equal(await page.evaluate(() => App.data.entities['computer-2026-08-07'].serialNumber), 'COMMITTED123', 'post-commit cache warning must retain the remotely committed candidate');
-    assert.equal((await page.locator('body').textContent()).includes('original data was restored'), false, 'post-commit warning must not claim rollback');
+
+    await page.evaluate(() => App.showSettingsModal());
+    const settings = page.locator('#settingsModal');
+    assert.equal(await settings.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.2.zip');
+    assert.match(await settings.textContent(), /Device Collector.*local-only.*administrator/is);
+    assert.equal(await settings.locator('#deviceIntakeFile').count(), 0, 'Settings must not contain report selection');
+    assert.doesNotMatch(await settings.textContent(), /Confirm import|Upload the report/i);
+    await page.evaluate(() => App.closeModal('settingsModal'));
+    await settings.waitFor({ state: 'detached' });
+
+    await page.evaluate(() => App.showEntityForm('computer', 'existingComputer'));
+    assert.equal(await page.locator('#entityModal #deviceIntakeFile').count(), 0, 'existing Computer editing is out of scope');
+    await page.evaluate(() => App.closeModal('entityModal'));
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+
+    await page.evaluate(() => App.showEntityForm('computer'));
+    const manualForm = page.locator('#entityForm');
+    await manualForm.locator('[name="hostname"]').fill('MANUAL-ONLY');
+    await manualForm.locator('[name="notes"]').fill('Created without a report');
+    await manualForm.getByRole('button', { name: 'Save' }).click();
+    await page.getByText('Entity created successfully').waitFor();
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => Object.values(App.data.entities).some(entity => entity.type === 'computer' && entity.hostname === 'MANUAL-ONLY' && entity.notes === 'Created without a report')), true, 'manual Add Computer remains unchanged');
+
+    const beforeDraftImport = await page.evaluate(() => JSON.stringify(App.data));
+    await page.evaluate(() => App.showEntityForm('computer'));
+    const form = page.locator('#entityForm');
+    assert.equal(await form.locator('#deviceIntakeFile').count(), 1, 'new Computer form exposes report selection');
+    assert.deepEqual(await form.locator('select[name="assignedTo"] option').evaluateAll(options => options.map(option => [option.value, option.textContent])), [
+      ['', '— None —'], ['person1', 'Existing Person']
+    ]);
+    await form.locator('[name="hostname"]').fill('MANUAL-PC');
+    await form.locator('[name="model"]').fill('Manually selected model');
+    await form.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(report)) });
+    await form.locator('.device-intake-result').getByText(/Imported 3 fields/i).waitFor();
+    assert.equal(await form.locator('[name="hostname"]').inputValue(), 'MANUAL-PC', 'existing hostname draft must not be overwritten');
+    assert.equal(await form.locator('[name="model"]').inputValue(), 'Manually selected model', 'existing model draft must not be overwritten');
+    assert.equal(await form.locator('[name="manufacturer"]').inputValue(), 'Dell');
+    assert.equal(await form.locator('[name="gpu"]').inputValue(), 'Intel Graphics; NVIDIA RTX');
+    assert.equal(await form.locator('[name="serialNumber"]').inputValue(), 'ABC123');
+    assert.equal(await form.locator('[name="windowsEdition"]').count(), 0, 'missing schema fields must not be synthesized');
+    assert.equal(await form.locator('select[name="assignedTo"]').inputValue(), '', 'collected account must not select a Person');
+    assert.match(await form.locator('.device-intake-account-context').textContent(), /campbell.*campbell@example\.test.*ACME/is);
+    assert.equal(await form.locator('.device-intake-result img, .device-intake-result script, .device-intake-result svg').count(), 0, 'report text must not create active markup');
+    assert.equal(await page.evaluate(() => window.__deviceIntakeXss), 0);
+    assert.match(await form.locator('details.device-intake-unmapped').textContent(), /Not imported.*windowsEdition.*No existing field/is);
+    assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeDraftImport, 'draft import must not mutate application data');
+
+    await form.locator('.device-intake-conflict[data-field="hostname"]').getByRole('button', { name: 'Keep current' }).click();
+    await form.locator('.device-intake-conflict[data-field="model"]').getByRole('button', { name: 'Use collected' }).click();
+    assert.equal(await form.locator('[name="hostname"]').inputValue(), 'MANUAL-PC');
+    assert.equal(await form.locator('[name="model"]').inputValue(), 'Latitude 7450');
+
+    await form.getByRole('button', { name: 'Cancel' }).click();
+    await page.locator('#confirmModal').getByRole('button', { name: 'Discard' }).click();
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeDraftImport, 'Cancel must persist nothing');
+
+    await page.evaluate(() => App.showEntityForm('computer'));
+    const invalidForm = page.locator('#entityForm');
+    await invalidForm.locator('#deviceIntakeFile').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{"schema":"wrong"}') });
+    assert.match(await invalidForm.locator('.device-intake-result').textContent(), /unsupported schema/i);
+    assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeDraftImport, 'invalid report must persist nothing');
+    await page.evaluate(() => App.closeModal('entityModal'));
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+
+    const countsBeforeSave = await page.evaluate(() => ({
+      computers: Object.values(App.data.entities).filter(entity => entity.type === 'computer').length,
+      people: Object.values(App.data.entities).filter(entity => entity.type === 'person').length
+    }));
+    await page.evaluate(() => {
+      window.__deviceIntakeSaveCalls = 0;
+      const ordinarySave = App.saveEntity.bind(App);
+      App.saveEntity = (...args) => {
+        window.__deviceIntakeSaveCalls += 1;
+        return ordinarySave(...args);
+      };
+      App.showEntityForm('computer');
+    });
+    const saveForm = page.locator('#entityForm');
+    await saveForm.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(report)) });
+    await saveForm.locator('.device-intake-result').getByText(/Imported 5 fields/i).waitFor();
+    await saveForm.getByRole('button', { name: 'Save' }).click();
+    await page.getByText('Entity created successfully').waitFor();
+    const saved = await page.evaluate(() => {
+      const entity = Object.values(App.data.entities).find(item => item.type === 'computer' && item.serialNumber === 'ABC123');
+      return {
+        entity,
+        saveCalls: window.__deviceIntakeSaveCalls,
+        computers: Object.values(App.data.entities).filter(item => item.type === 'computer').length,
+        people: Object.values(App.data.entities).filter(item => item.type === 'person').length
+      };
+    });
+    assert.equal(saved.saveCalls, 1, 'normal entity Save path must be invoked exactly once');
+    assert.equal(saved.computers, countsBeforeSave.computers + 1);
+    assert.equal(saved.people, countsBeforeSave.people, 'import must not create a Person');
+    assert.equal(saved.entity.assignedTo, undefined, 'Person association remains None');
+    assert.equal(saved.entity.model, 'Latitude 7450');
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const persisted = await page.evaluate(() => {
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      const entity = Object.values(App.data.entities).find(item => item.type === 'computer' && item.serialNumber === 'ABC123');
+      if (entity) App.showEntityForm('computer', entity.id);
+      return entity;
+    });
+    assert.equal(persisted.model, 'Latitude 7450', 'saved Computer survives refresh');
+    assert.equal(await page.locator('#entityModal #deviceIntakeFile').count(), 0);
+    await page.locator('#entityViewActions').getByRole('button', { name: 'Edit' }).click();
+    assert.equal(await page.locator('#entityForm [name="model"]').inputValue(), 'Latitude 7450', 'saved Computer remains editable in the normal form');
+
     console.log('PASS device-intake-browser');
-  } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+  } finally {
+    await browser.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

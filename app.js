@@ -3011,10 +3011,18 @@ const App = {
                           <span class="material-icons">download</span>
                           Import
                         </button>
-                        <button class="btn btn-secondary" onclick="App.showDeviceIntake()">
-                          <span class="material-icons">laptop_windows</span>
-                          Device Intake
-                        </button>
+                        <div class="device-collector-card">
+                          <strong>Windows Device Collector</strong>
+                          <p class="help-text">Collects a disclosed, local-only device report without administrator access or network lookup.</p>
+                          <a class="btn btn-secondary" id="deviceCollectorDownload" href="downloads/Elistly-Windows-Device-Intake-v1.0.2.zip" download="Elistly-Windows-Device-Intake-v1.0.2.zip">
+                            <span class="material-icons">laptop_windows</span>
+                            Download collector 1.0.2
+                          </a>
+                          <details class="device-collector-details">
+                            <summary>Collection and launch details</summary>
+                            <p class="help-text">Extract the ZIP, review README.txt, then double-click the Elistly Device Collector shortcut. The documented fallback applies an execution-policy option only to that collector process and never changes machine or user policy. Import the saved JSON from a new Computer form.</p>
+                          </details>
+                        </div>
                         <button class="btn btn-secondary" onclick="App.showAddPresetModal()">
                           <span class="material-icons">add_circle_outline</span>
                           Add preset
@@ -3828,6 +3836,9 @@ const App = {
           basic.appendChild(group);
         }
         (type.fields || []).forEach(field => basic.appendChild(this.createEntityFormField(field, entity ? entity[field.name] : '')));
+        if (!isEdit && ElistlyDeviceIntake.isCompatibleEntityType(type)) {
+          sections.appendChild(this.createDeviceIntakeDraftSection(type, form));
+        }
         sections.appendChild(basic);
         if (type.associations && type.associations.length) {
           const associations = makeElement('div', 'modal-group carded-section');
@@ -3865,6 +3876,121 @@ const App = {
         form.addEventListener('change', () => {
           form.dataset.dirty = this.serializeFormData(form) !== form.dataset.initialSnapshot ? 'true' : 'false';
         });
+      },
+
+      createDeviceIntakeDraftSection(type, form) {
+        const make = (tag, className, text) => {
+          const element = document.createElement(tag);
+          if (className) element.className = className;
+          if (text !== undefined) element.textContent = text;
+          return element;
+        };
+        const section = make('section', 'modal-group carded-section device-intake-draft');
+        section.appendChild(make('h4', '', 'Import collected information'));
+        section.appendChild(make('p', 'help-text', 'Select a local Elistly Windows collector report to fill compatible empty fields. Review and edit the ordinary form before saving.'));
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.id = 'deviceIntakeFile';
+        input.className = 'device-intake-file';
+        const result = make('div', 'device-intake-result');
+        result.setAttribute('aria-live', 'polite');
+        input.addEventListener('change', event => this.readDeviceIntakeDraftReport(event, type, form, result));
+        section.append(input, result);
+        return section;
+      },
+
+      setDeviceIntakeDraftValue(form, item) {
+        const control = form.elements.namedItem(item.field);
+        if (!control || typeof control.value === 'undefined') return false;
+        control.value = item.value;
+        control.closest('.form-group')?.classList.add('device-intake-imported');
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      },
+
+      async readDeviceIntakeDraftReport(event, type, form, result) {
+        result.replaceChildren();
+        try {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          if (file.size > ElistlyDeviceIntake.limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
+          const report = ElistlyDeviceIntake.parseReport(await file.text());
+          const draft = Object.fromEntries(new FormData(form).entries());
+          const proposal = ElistlyDeviceIntake.createDraftProposal(report, type, draft);
+          proposal.mapped.forEach(item => this.setDeviceIntakeDraftValue(form, item));
+          this.renderDeviceIntakeDraftResult(result, form, report, type, proposal);
+        } catch (error) {
+          const message = document.createElement('p');
+          message.className = 'error-message';
+          message.textContent = error.message || 'The report could not be read.';
+          result.appendChild(message);
+        }
+      },
+
+      renderDeviceIntakeDraftResult(result, form, report, type, proposal) {
+        const make = (tag, className, text) => {
+          const element = document.createElement(tag);
+          if (className) element.className = className;
+          if (text !== undefined) element.textContent = text;
+          return element;
+        };
+        result.replaceChildren();
+        result.appendChild(make('p', 'device-intake-summary', `Imported ${proposal.mapped.length} field${proposal.mapped.length === 1 ? '' : 's'} from collector ${report.collector.version}.`));
+
+        if (proposal.conflicts.length) {
+          const conflicts = make('section', 'device-intake-conflicts');
+          conflicts.appendChild(make('h5', '', 'Choose values for existing draft fields'));
+          for (const item of proposal.conflicts) {
+            const row = make('div', 'device-intake-conflict');
+            row.dataset.field = item.field;
+            const field = (type.fields || []).find(candidate => candidate.name === item.field);
+            row.appendChild(make('p', '', `${field?.label || item.field}: current “${item.current}”; collected “${item.value}”.`));
+            const actions = make('div', 'device-intake-conflict-actions');
+            const keep = make('button', 'btn btn-secondary btn-sm', 'Keep current');
+            keep.type = 'button';
+            const use = make('button', 'btn btn-secondary btn-sm', 'Use collected');
+            use.type = 'button';
+            const resolution = make('span', 'help-text');
+            const resolve = text => {
+              keep.disabled = true;
+              use.disabled = true;
+              resolution.textContent = text;
+            };
+            keep.addEventListener('click', () => resolve('Kept current value.'));
+            use.addEventListener('click', () => {
+              this.setDeviceIntakeDraftValue(form, item);
+              resolve('Using collected value.');
+            });
+            actions.append(keep, use, resolution);
+            row.appendChild(actions);
+            conflicts.appendChild(row);
+          }
+          result.appendChild(conflicts);
+        }
+
+        if (Object.keys(proposal.accountContext).length) {
+          const context = make('section', 'device-intake-account-context');
+          context.appendChild(make('h5', '', 'Collected account context (not assigned)'));
+          const list = document.createElement('dl');
+          for (const [key, value] of Object.entries(proposal.accountContext)) {
+            const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, character => character.toUpperCase());
+            list.append(make('dt', '', label), make('dd', '', String(value)));
+          }
+          context.appendChild(list);
+          result.appendChild(context);
+        }
+
+        if (proposal.unmapped.length) {
+          const details = make('details', 'device-intake-unmapped');
+          details.appendChild(make('summary', '', `Not imported (${proposal.unmapped.length})`));
+          const list = document.createElement('ul');
+          proposal.unmapped.forEach(item => list.appendChild(make('li', '', `${item.fact}: ${item.reason}`)));
+          details.appendChild(list);
+          result.appendChild(details);
+        }
+        proposal.warnings.forEach(warning => result.appendChild(make('p', 'help-text', warning)));
       },
 
       createEntityFormField(field, value) {
@@ -7228,150 +7354,6 @@ const App = {
         URL.revokeObjectURL(url);
         this.closeModal('exportModal');
       },
-      showDeviceIntake() {
-        document.getElementById('deviceIntakeModal')?.remove();
-        this._deviceIntakePlan = null;
-        this._deviceIntakePreviewIdentity = null;
-        this._deviceIntakeChoices = {};
-        const modal = document.createElement('div');
-        modal.className = 'modal';
-        modal.id = 'deviceIntakeModal';
-        const content = document.createElement('div');
-        content.className = 'modal-content device-intake-content';
-        const header = document.createElement('div'); header.className = 'modal-header';
-        const title = document.createElement('h3'); title.textContent = 'Windows Device Intake'; header.appendChild(title);
-        const body = document.createElement('div'); body.className = 'modal-body modal-body-scroll';
-        const guidance = document.createElement('p');
-        guidance.textContent = 'The collector is local-only, needs no administrator access, and does not contact Elistly or any network service. It shows every collected field and asks you where to save the JSON report.';
-        const download = document.createElement('a');
-        download.id = 'deviceCollectorDownload'; download.className = 'btn btn-secondary';
-        download.href = 'downloads/Elistly-Windows-Device-Intake-v1.0.2.zip'; download.download = 'Elistly-Windows-Device-Intake-v1.0.2.zip';
-        download.textContent = 'Download Windows collector';
-        const steps = document.createElement('p');
-        steps.textContent = 'Extract the ZIP, review README.txt, then double-click the Elistly Device Collector shortcut with the Elistly icon. If the shortcut is blocked, use the documented BAT fallback in the bin folder. Its execution policy bypass applies only to the collector process and does not change machine or user policy. Organization Group Policy still applies. Upload the report below; nothing is saved until Confirm import.';
-        const input = document.createElement('input'); input.type = 'file'; input.accept = '.json,application/json'; input.id = 'deviceIntakeFile';
-        input.addEventListener('change', event => this.readDeviceIntakeReport(event));
-        const preview = document.createElement('div'); preview.id = 'deviceIntakePreview'; preview.className = 'import-preview-area u-mt-100';
-        body.append(guidance, download, steps, input, preview);
-        const actions = document.createElement('div'); actions.className = 'modal-actions';
-        const cancel = document.createElement('button'); cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', () => this.closeModal('deviceIntakeModal'));
-        const confirm = document.createElement('button'); confirm.className = 'btn btn-primary'; confirm.id = 'confirmDeviceIntake'; confirm.textContent = 'Confirm import'; confirm.disabled = true; confirm.addEventListener('click', () => this.confirmDeviceIntake());
-        actions.append(cancel, confirm); content.append(header, body, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('deviceIntakeModal');
-      },
-
-      async readDeviceIntakeReport(event) {
-        const preview = document.getElementById('deviceIntakePreview');
-        preview.replaceChildren(); this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null; this._deviceIntakeChoices = {};
-        document.getElementById('confirmDeviceIntake').disabled = true;
-        try {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          if (file.size > ElistlyDeviceIntake.limits.maxBytes) throw new Error('Report exceeds the 256 KiB limit.');
-          const report = ElistlyDeviceIntake.parseReport(await file.text());
-          this._deviceIntakePlan = ElistlyDeviceIntake.createPlan(report, this.data);
-          this._deviceIntakePreviewIdentity = await Storage.getImportIdentity();
-          this.renderDeviceIntakePlan(this._deviceIntakePlan);
-        } catch (error) {
-          const message = document.createElement('p'); message.className = 'error-message'; message.textContent = error.message || 'The report could not be read.'; preview.appendChild(message);
-        }
-      },
-
-      renderDeviceIntakePlan(plan) {
-        const preview = document.getElementById('deviceIntakePreview'); preview.replaceChildren();
-        const collected = document.createElement('p'); collected.textContent = `Collected ${plan.report.collectedAt} by collector ${plan.report.collector.version}.`;
-        preview.appendChild(collected);
-        if (plan.schemaChanges.categories.length || plan.schemaChanges.entityTypes.length) {
-          const schema = document.createElement('section'); schema.className = 'restore-defaults-section';
-          const heading = document.createElement('h4'); heading.textContent = 'Schema additions included in this confirmed import'; schema.appendChild(heading);
-          const list = document.createElement('ul');
-          for (const change of plan.schemaChanges.categories) {
-            const item = document.createElement('li'); item.textContent = `Add category: ${change.definition.label} (${change.id})`; list.appendChild(item);
-          }
-          for (const change of plan.schemaChanges.entityTypes) {
-            const fieldNames = (change.action === 'add type' ? change.fields : change.fields.map(field => field.name)).join(', ');
-            const associationNames = (change.action === 'add type' ? change.associations : change.associations.map(item => item.name)).join(', ');
-            const item = document.createElement('li');
-            item.textContent = `${change.action === 'add type' ? 'Add type' : 'Extend type'}: ${change.id}${fieldNames ? `; fields: ${fieldNames}` : ''}${associationNames ? `; links: ${associationNames}` : ''}`;
-            list.appendChild(item);
-          }
-          schema.appendChild(list); preview.appendChild(schema);
-        }
-        for (const kind of ['person', 'computer']) {
-          const part = plan[kind]; if (part.status === 'skip') continue;
-          const section = document.createElement('section'); section.className = 'restore-defaults-section';
-          const heading = document.createElement('h4'); heading.textContent = `${kind === 'person' ? 'Person' : 'Computer'}: ${part.status === 'create' ? 'create new record' : part.status === 'update' ? 'update existing record' : 'match conflict'}`; section.appendChild(heading);
-          if (part.status === 'conflict') {
-            const prompt = document.createElement('p'); prompt.textContent = `Choose the ${kind} record to update, or create a new record.`; section.appendChild(prompt);
-            for (const candidate of [...part.candidates, { id: 'create', name: 'Create new record' }]) {
-              const label = document.createElement('label'); label.className = 'checkbox-label';
-              const radio = document.createElement('input'); radio.type = 'radio'; radio.name = `device-intake-${kind}`; radio.value = candidate.id;
-              radio.addEventListener('change', () => {
-                this._deviceIntakeChoices[kind] = radio.value;
-                const selected = part.candidates.find(item => item.id === radio.value);
-                const createPreview = Object.entries(part.fields).map(([field, after]) => ({ field, after, disposition: 'added' }));
-                this.renderDeviceIntakeFieldPreview(kind, selected ? selected.fieldPreview : createPreview);
-                this.updateDeviceIntakeConfirm();
-              });
-              const text = document.createElement('span'); text.textContent = candidate.name; label.append(radio, text); section.appendChild(label);
-            }
-          }
-          const list = document.createElement('dl'); list.className = 'device-intake-fields'; list.dataset.deviceIntakeFields = kind;
-          section.appendChild(list); preview.appendChild(section);
-          if (part.status !== 'conflict') this.renderDeviceIntakeFieldPreview(kind, part.fieldPreview);
-        }
-        this.updateDeviceIntakeConfirm();
-      },
-
-      renderDeviceIntakeFieldPreview(kind, fields) {
-        const list = document.querySelector(`[data-device-intake-fields="${kind}"]`);
-        if (!list) return;
-        list.replaceChildren();
-        for (const item of fields || []) {
-          const dt = document.createElement('dt'); dt.textContent = item.field;
-          const dd = document.createElement('dd');
-          const before = item.before === undefined ? '—' : Array.isArray(item.before) ? item.before.join(', ') : String(item.before);
-          const after = item.after === undefined ? '—' : Array.isArray(item.after) ? item.after.join(', ') : String(item.after);
-          dd.textContent = `${item.disposition}: ${before} → ${after}`;
-          list.append(dt, dd);
-        }
-      },
-
-      updateDeviceIntakeConfirm() {
-        const button = document.getElementById('confirmDeviceIntake');
-        if (!button || !this._deviceIntakePlan) return;
-        button.disabled = ['person', 'computer'].some(kind => this._deviceIntakePlan[kind].status === 'conflict' && !this._deviceIntakeChoices[kind]);
-      },
-
-      async confirmDeviceIntake() {
-        if (!this._deviceIntakePlan) return;
-        const beforeData = this.data;
-        const beforeStorage = this.captureImportStorageState();
-        let candidate = null;
-        try {
-          const identity = this._deviceIntakePreviewIdentity;
-          if (backendClient) {
-            const activeIdentity = await Storage.getImportIdentity();
-            if (!identity || !activeIdentity || activeIdentity.userId !== identity.userId || activeIdentity.accessToken !== identity.accessToken) {
-              throw new Error('Signed-in session changed. Review this device report again before importing.');
-            }
-          }
-          candidate = ElistlyDeviceIntake.materializePlan(this._deviceIntakePlan, this.data, this._deviceIntakeChoices);
-          if (await Storage.setAppDataForImport(candidate, identity) !== true) throw new Error('Device intake persistence was not confirmed.');
-          this.data = candidate;
-        } catch (error) {
-          if (error.remoteCommitted && candidate) {
-            this.data = candidate;
-            this.closeModal('deviceIntakeModal'); this.loadView('dashboard');
-            this.showNotification(error.message, 'error');
-            this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null;
-            return;
-          }
-          this.data = beforeData; this.restoreImportStorageState(beforeStorage);
-          return this.showNotification(`Device intake was not saved; original data was restored. ${error.message || ''}`, 'error');
-        }
-        this.closeModal('deviceIntakeModal'); this.loadView('dashboard'); this.showNotification('Device intake saved.', 'success'); this._deviceIntakePlan = null; this._deviceIntakePreviewIdentity = null;
-      },
-
       showImportModal() {
         // Modal HTML for modular import
         const modalHtml = `

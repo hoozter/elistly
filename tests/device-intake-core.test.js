@@ -140,6 +140,11 @@ function mapperTests() {
   const dropdownType = { id: 'computer', fields: [{ name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5' }] }] };
   const dropdownProposal = Intake.createDraftProposal(dropdownReport, dropdownType, {});
   assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5'], 'dropdown comparisons use canonical option values');
+
+  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', fields: [] }), true, 'the current Computer type remains eligible');
+  assert.equal(Intake.isCompatibleEntityType({ id: 'custom-device', collection: { provider: 'windows', kind: 'computer' }, fields: [] }), true, 'explicit type metadata enables a configured Computer type');
+  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', collection: { provider: 'other', kind: 'computer' }, fields: [] }), false, 'explicit incompatible provider metadata wins over the legacy ID');
+  assert.equal(Intake.isCompatibleEntityType({ id: 'phone', fields: [] }), false);
 }
 
 parserTests();

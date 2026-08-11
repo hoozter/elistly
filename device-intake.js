@@ -191,5 +191,13 @@
     return freeze({ mapped, conflicts, unmapped, accountContext, warnings });
   }
 
-  return Object.freeze({ limits, capabilityRegistry, parseReport, createDraftProposal });
+  function isCompatibleEntityType(entityType) {
+    if (!entityType || typeof entityType !== 'object') return false;
+    if (entityType.collection) {
+      return entityType.collection.provider === 'windows' && entityType.collection.kind === 'computer';
+    }
+    return entityType.id === 'computer';
+  }
+
+  return Object.freeze({ limits, capabilityRegistry, parseReport, createDraftProposal, isCompatibleEntityType });
 });
