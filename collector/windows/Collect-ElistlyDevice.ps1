@@ -1,4 +1,4 @@
-# Elistly Windows Device Intake Collector 1.0.0
+# Elistly Windows Device Intake Collector 1.0.2
 # Local-only inventory collection. No administrator access or network lookup is used.
 [CmdletBinding()]
 param()
@@ -41,7 +41,7 @@ $graphicsNames = @($graphics | ForEach-Object { if ($_.Name) { ([string]$_.Name)
 $report = [ordered]@{
   schema = 'elistly.device-intake.v1'
   collectedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-  collector = [ordered]@{ name = 'Elistly Windows Device Intake Collector'; version = '1.0.0' }
+  collector = [ordered]@{ name = 'Elistly Windows Device Intake Collector'; version = '1.0.2' }
   collection = [ordered]@{ mode = 'local-only'; networkDirectoryLookup = $false; fields = $fieldList }
   person = [ordered]@{ accountName = [Environment]::UserName; domain = [Environment]::UserDomainName }
   computer = [ordered]@{

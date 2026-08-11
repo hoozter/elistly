@@ -14,6 +14,10 @@ function startStaticServer() {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'app.html';
+    if (relativePath === 'config.js') {
+      response.writeHead(404).end('Not found');
+      return;
+    }
     const filePath = path.resolve(root, relativePath);
     if (!filePath.startsWith(`${root}${path.sep}`) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
       response.writeHead(404).end('Not found');

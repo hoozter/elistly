@@ -1,4 +1,4 @@
-Elistly Windows Device Intake Collector 1.0.0
+Elistly Windows Device Intake Collector 1.0.2
 ================================================
 
 Purpose
@@ -11,16 +11,22 @@ Launch
 ------
 1. Extract the entire ZIP archive.
 2. Open the extracted folder.
-3. Right-click Collect-ElistlyDevice.ps1 and choose "Run with PowerShell".
+3. Double-click the "Elistly Device Collector" shortcut with the Elistly icon.
 4. Read the disclosed field list and choose OK to continue.
 5. Choose the report destination in the Save dialog.
 6. In Elistly, open Settings > Data > Device Intake and select the JSON report.
 7. Review all create/update/conflict choices, then choose Confirm import.
 
-Do not weaken or bypass your PowerShell execution policy. If your organization
-does not permit this signed/unsigned local script under its existing policy,
-ask your administrator to review and approve the script. The collector never
-changes the policy itself.
+Shortcut fallback
+-----------------
+If Windows or your security software does not open the shortcut, open the bin
+folder and double-click "Start Elistly Device Collector.bat". The shortcut only
+opens that same visible launcher; it does not hide or embed another program.
+
+The launcher uses a PowerShell execution policy bypass only for the collector process it starts.
+It does not change the machine or user PowerShell execution policy.
+Organization policy enforced through Group Policy still applies. If that policy
+blocks the collector, stop and ask your administrator to review it.
 
 Privacy
 -------

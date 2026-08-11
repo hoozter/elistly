@@ -7245,10 +7245,10 @@ const App = {
         guidance.textContent = 'The collector is local-only, needs no administrator access, and does not contact Elistly or any network service. It shows every collected field and asks you where to save the JSON report.';
         const download = document.createElement('a');
         download.id = 'deviceCollectorDownload'; download.className = 'btn btn-secondary';
-        download.href = 'downloads/Elistly-Windows-Device-Intake-v1.0.0.zip'; download.download = 'Elistly-Windows-Device-Intake-v1.0.0.zip';
+        download.href = 'downloads/Elistly-Windows-Device-Intake-v1.0.2.zip'; download.download = 'Elistly-Windows-Device-Intake-v1.0.2.zip';
         download.textContent = 'Download Windows collector';
         const steps = document.createElement('p');
-        steps.textContent = 'Extract the ZIP, review README.txt, then right-click Collect-ElistlyDevice.ps1 and choose Run with PowerShell. Do not change PowerShell execution policy. Upload the report below; nothing is saved until Confirm import.';
+        steps.textContent = 'Extract the ZIP, review README.txt, then double-click the Elistly Device Collector shortcut with the Elistly icon. If the shortcut is blocked, use the documented BAT fallback in the bin folder. Its execution policy bypass applies only to the collector process and does not change machine or user policy. Organization Group Policy still applies. Upload the report below; nothing is saved until Confirm import.';
         const input = document.createElement('input'); input.type = 'file'; input.accept = '.json,application/json'; input.id = 'deviceIntakeFile';
         input.addEventListener('change', event => this.readDeviceIntakeReport(event));
         const preview = document.createElement('div'); preview.id = 'deviceIntakePreview'; preview.className = 'import-preview-area u-mt-100';

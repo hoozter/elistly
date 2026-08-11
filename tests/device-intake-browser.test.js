@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '..');
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://x').pathname.replace(/^\/+/, '') || 'app.html';
+  if (name === 'config.js') return res.writeHead(404).end();
   const file = path.resolve(root, name);
   if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) return res.writeHead(404).end();
   res.setHeader('Content-Type', file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html');
@@ -34,7 +35,7 @@ const initial = { version: '1', settings: {}, categories: {}, entityTypes: {}, e
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
     await page.evaluate(data => { App.data = data; localStorage.setItem('elistlyData', JSON.stringify(data)); window.__xss = 0; App.showDeviceIntake(); }, initial);
     assert.match(await page.locator('#deviceIntakeModal').textContent(), /local-only.*does not contact/i);
-    assert.equal(await page.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.0.zip');
+    assert.equal(await page.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.2.zip');
     await page.locator('#deviceIntakeFile').setInputFiles({ name: 'report.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(report)) });
     await page.getByText('Choose the computer record').waitFor();
     assert.equal(await page.locator('#confirmDeviceIntake').isDisabled(), true);
