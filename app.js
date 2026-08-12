@@ -131,6 +131,7 @@ const Storage = {
   USER_UPDATED_PREFIX: 'elistlyData:userUpdated:',
   _cached: null,
   _cachedUserId: null,
+  _isDirty: false,
 
   _getUserCacheKey(userId) {
     return `${this.USER_CACHE_PREFIX}${userId}`;
@@ -258,6 +259,7 @@ const Storage = {
       if (cachedUpdatedAt && remoteUpdatedAt && cachedUpdatedAt === remoteUpdatedAt) return;
 
       const remotePayload = data && data.payload ? data.payload : null;
+      if (this._isDirty) return;
       const changed = JSON.stringify(remotePayload || {}) !== JSON.stringify(this._cached || {});
       this._cached = remotePayload;
       this._cachedUserId = userId;
@@ -279,18 +281,22 @@ const Storage = {
 
   async setAppDataAsync(data) {
     if (backendClient) {
+      const user = await getAuthUser();
+      if (!user) return;
+      this._cached = data;
+      this._cachedUserId = user.id;
+      this._isDirty = true;
+      const expectedUpdatedAt = this._readUserUpdatedAt(user.id) || null;
       try {
-        const user = await getAuthUser();
-        if (!user) return;
-        this._cached = data;
-        this._cachedUserId = user.id;
-        const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data } });
+        const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt } });
         if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
         const row = res.data || {};
         const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
         this._writeUserCache(user.id, data, updatedAt);
-      } catch (e) {
-        console.error('Storage.setAppData failed', e);
+        this._isDirty = false;
+      } catch (error) {
+        this._isDirty = true;
+        throw error;
       }
       return;
     }
@@ -1239,7 +1245,12 @@ const App = {
         this.data.settings = this.normalizeSettings(this.data.settings);
         const dataToSave = { ...this.data, version: this.data.version };
         if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
-        Storage.setAppData(dataToSave);
+        Storage.setAppData(dataToSave).catch(error => {
+          const message = error && error.message === 'App data changed since preview'
+            ? 'Your changes were not saved because newer app data is available. Your local changes are still open.'
+            : 'Your changes could not be saved. Your local changes are still open.';
+          this.showNotification(message, 'error');
+        });
       },
 
       applyRemoteSyncData(remoteData) {

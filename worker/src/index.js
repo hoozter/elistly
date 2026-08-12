@@ -420,23 +420,12 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
             throw new RequestBodyError(400, "Payload object required");
           }
           const payload = body.payload;
-          const revisionAware = Object.hasOwn(body, "expectedUpdatedAt");
-          const expectedUpdatedAt = body.expectedUpdatedAt;
-          if (revisionAware && expectedUpdatedAt !== null && (typeof expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(expectedUpdatedAt)))) {
-            throw new RequestBodyError(400, "expectedUpdatedAt must be a timestamp or null");
+          if (!Object.hasOwn(body, "expectedUpdatedAt")) {
+            throw new RequestBodyError(400, "App data revision required");
           }
-          if (revisionAware) {
-            const rows = await sql`
-              INSERT INTO app_data (user_id, payload, updated_at)
-              VALUES (${user.id}, ${JSON.stringify(payload)}::jsonb, NOW())
-              ON CONFLICT (user_id) DO UPDATE
-                SET payload = EXCLUDED.payload,
-                    updated_at = EXCLUDED.updated_at
-                WHERE (${expectedUpdatedAt}::timestamptz IS NOT NULL AND app_data.updated_at = ${expectedUpdatedAt}::timestamptz)
-              RETURNING payload, updated_at
-            `;
-            if (!rows[0]) return jsonResponse({ error: "App data changed since preview" }, 409, origin);
-            return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
+          const expectedUpdatedAt = body.expectedUpdatedAt;
+          if (expectedUpdatedAt !== null && (typeof expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(expectedUpdatedAt)))) {
+            throw new RequestBodyError(400, "expectedUpdatedAt must be a timestamp or null");
           }
           const rows = await sql`
             INSERT INTO app_data (user_id, payload, updated_at)
@@ -444,8 +433,10 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
             ON CONFLICT (user_id) DO UPDATE
               SET payload = EXCLUDED.payload,
                   updated_at = EXCLUDED.updated_at
+              WHERE (${expectedUpdatedAt}::timestamptz IS NOT NULL AND app_data.updated_at = ${expectedUpdatedAt}::timestamptz)
             RETURNING payload, updated_at
           `;
+          if (!rows[0]) return jsonResponse({ error: "App data changed since preview" }, 409, origin);
           return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
         }
       }

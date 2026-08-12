@@ -153,24 +153,61 @@ describe("Elistly Worker route seams", () => {
     expect(calls).toEqual([]);
   });
 
-  it("protects revision-aware app-data writes from stale previews", async () => {
+  it("requires a revision precondition for every app-data write", async () => {
+    const calls = [];
+    const worker = createWorker({
+      createSql: () => mockSql(calls),
+      authenticate: async () => user,
+      checkAdmin: async () => false,
+    });
+
+    const response = await fetchFrom(worker, "/app-data", {
+      method: "PUT",
+      body: { payload: { entities: {} } },
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "App data revision required" });
+    expect(calls).toEqual([]);
+  });
+
+  it("accepts a matching revision and returns the advanced revision", async () => {
     const calls = [];
     const sql = async (strings, ...values) => {
-      const query = strings.join(" ");
-      calls.push({ query, values });
+      calls.push({ query: strings.join(" "), values });
+      return [{ payload: { entities: { updated: true } }, updated_at: "2026-08-12T00:01:00.000Z" }];
+    };
+    const worker = createWorker({ createSql: () => sql, authenticate: async () => user, checkAdmin: async () => false });
+
+    const response = await fetchFrom(worker, "/app-data", {
+      method: "PUT",
+      body: { payload: { entities: { updated: true } }, expectedUpdatedAt: "2026-08-12T00:00:00.000Z" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ payload: { entities: { updated: true } }, updated_at: "2026-08-12T00:01:00.000Z" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].query).toContain("app_data.updated_at =");
+    expect(calls[0].values).toContain("2026-08-12T00:00:00.000Z");
+  });
+
+  it("rejects a stale revision without returning a replacement row", async () => {
+    const calls = [];
+    const sql = async (strings, ...values) => {
+      calls.push({ query: strings.join(" "), values });
       return [];
     };
     const worker = createWorker({ createSql: () => sql, authenticate: async () => user, checkAdmin: async () => false });
+
     const response = await fetchFrom(worker, "/app-data", {
       method: "PUT",
-      body: { payload: { entities: {} }, expectedUpdatedAt: "2026-08-11T08:00:00.000Z" },
+      body: { payload: { entities: { stale: true } }, expectedUpdatedAt: "2026-08-12T00:00:00.000Z" },
     });
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "App data changed since preview" });
     expect(calls).toHaveLength(1);
     expect(calls[0].query).toContain("app_data.updated_at =");
-    expect(calls[0].values).toContain("2026-08-11T08:00:00.000Z");
   });
 
   it("validates profile writes before SQL mutation", async () => {
