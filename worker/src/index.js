@@ -158,8 +158,14 @@ async function verifyNeonJwt(token, env) {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
 
-  const header = decodeJwtPart(parts[0]);
-  const payload = decodeJwtPart(parts[1]);
+  let header;
+  let payload;
+  try {
+    header = decodeJwtPart(parts[0]);
+    payload = decodeJwtPart(parts[1]);
+  } catch {
+    return null;
+  }
   if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
   if (!payload.sub) return null;
 

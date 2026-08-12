@@ -63,6 +63,20 @@ describe("Elistly Worker route seams", () => {
     expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
+  it("rejects malformed bearer tokens as unauthenticated", async () => {
+    const worker = createWorker({ createSql: () => mockSql(), checkAdmin: async () => false });
+    const context = createExecutionContext();
+    const response = await worker.fetch(
+      new Request("https://api.example.test/app-data", { headers: { Authorization: "Bearer malformed.token.value" } }),
+      env,
+      context,
+    );
+    await waitOnExecutionContext(context);
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+  });
+
   it("allows admin listing but forbids non-admin listing", async () => {
     const sql = mockSql();
     const adminWorker = createWorker({ createSql: () => sql, authenticate: async () => user, checkAdmin: async () => true });
