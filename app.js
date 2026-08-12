@@ -3018,6 +3018,10 @@ const App = {
                             <span class="material-icons">laptop_windows</span>
                             Download collector 1.0.2
                           </a>
+                          <button type="button" class="btn btn-secondary" onclick="App.showRecommendedWindowsFieldsConfirm()">
+                            <span class="material-icons">playlist_add</span>
+                            Add recommended Windows fields
+                          </button>
                           <details class="device-collector-details">
                             <summary>Collection and launch details</summary>
                             <p class="help-text">Extract the ZIP, review README.txt, then double-click the Elistly Device Collector shortcut. The documented fallback applies an execution-policy option only to that collector process and never changes machine or user policy. Import the saved JSON from a new Computer form.</p>
@@ -3075,6 +3079,32 @@ const App = {
       
       closeSettingsModal() {
         this.closeModal('settingsModal');
+      },
+
+      showRecommendedWindowsFieldsConfirm() {
+        const intake = window.ElistlyDeviceIntake;
+        const computer = this.data.entityTypes?.computer;
+        if (!intake || !computer || !intake.isCompatibleEntityType(computer)) {
+          this.showNotification('No compatible Computer type is configured.', 'error');
+          return;
+        }
+        const proposal = intake.addRecommendedWindowsFields(computer);
+        if (proposal.added.length === 0) {
+          this.showNotification('All recommended Windows fields are already configured.', 'info');
+          return;
+        }
+        const labels = proposal.added.map(field => field.label).join(', ');
+        this.showConfirmModal({
+          title: 'Add recommended Windows fields?',
+          message: `This adds optional fields to Computer without changing existing fields, records, or Persons: ${labels}.`,
+          confirmLabel: 'Add fields',
+          confirmVariant: 'primary',
+          onConfirm: () => {
+            this.data.entityTypes.computer = proposal.entityType;
+            this.saveData();
+            this.showNotification(`Added ${proposal.added.length} Windows collection fields`, 'success');
+          }
+        });
       },
 
       async showProfileModal() {

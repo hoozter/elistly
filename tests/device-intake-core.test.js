@@ -136,10 +136,13 @@ function mapperTests() {
   assert.deepEqual(customProposal.mapped.map(item => item.field), ['machineName']);
   assert.ok(customProposal.unmapped.every(item => item.fact !== 'model'), 'facts outside the supplied registry are not claimed as mapped or unmapped');
 
-  const dropdownReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME', processorSummary: 'intel core i5' } })));
-  const dropdownType = { id: 'computer', fields: [{ name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5' }] }] };
+  const dropdownReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME', processorSummary: '13th Gen Intel(R) Core(TM) i5-1335U', memorySummary: '16 GB' } })));
+  const dropdownType = { id: 'computer', fields: [
+    { name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5' }, { value: 'Intel Core i7' }] },
+    { name: 'ram', type: 'dropdown', options: [{ value: '16GB' }] }
+  ] };
   const dropdownProposal = Intake.createDraftProposal(dropdownReport, dropdownType, {});
-  assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5'], 'dropdown comparisons use canonical option values');
+  assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5', '16GB'], 'dropdown comparisons normalize harmless formatting and uniquely match a configured processor family while preserving canonical options');
 
   const foreignProviderType = {
     id: 'computer',
@@ -155,6 +158,33 @@ function mapperTests() {
   assert.equal(Intake.isCompatibleEntityType({ id: 'phone', fields: [] }), false);
 }
 
+function recommendedFieldTests() {
+  const original = {
+    id: 'computer',
+    fields: [
+      { name: 'cpu', label: 'CPU', type: 'dropdown', options: [{ value: 'Intel Core i5' }] },
+      { name: 'ram', label: 'RAM', type: 'dropdown', options: [{ value: '16GB' }] },
+      { name: 'assetSerial', label: 'Asset serial', type: 'text', collection: { provider: 'windows', capability: 'bios.serial-number' } }
+    ]
+  };
+  const before = JSON.stringify(original);
+  const proposal = Intake.addRecommendedWindowsFields(original);
+
+  assert.equal(JSON.stringify(original), before, 'recommended-field planning must not mutate the current Computer type');
+  assert.equal(Object.isFrozen(proposal), true);
+  assert.equal(Object.isFrozen(proposal.entityType.fields), true);
+  assert.ok(proposal.added.some(field => field.name === 'hostname' && field.collection.capability === 'computer.hostname'));
+  assert.ok(proposal.added.some(field => field.name === 'manufacturer'));
+  assert.ok(proposal.added.some(field => field.name === 'model'));
+  assert.ok(proposal.added.some(field => field.name === 'graphicsAdapters' && field.type === 'textarea'));
+  assert.equal(proposal.added.some(field => field.name === 'cpu'), false, 'existing legacy CPU alias remains authoritative');
+  assert.equal(proposal.added.some(field => field.name === 'ram'), false, 'existing legacy RAM alias remains authoritative');
+  assert.equal(proposal.added.some(field => field.name === 'serialNumber'), false, 'an existing explicit capability must not be duplicated under a recommended name');
+  assert.deepEqual(proposal.entityType.fields.slice(0, original.fields.length), original.fields, 'existing field definitions and order must be preserved');
+  assert.equal(proposal.entityType.fields.every(field => field.required !== true || original.fields.includes(field)), true, 'recommended fields must be optional');
+}
+
 parserTests();
 mapperTests();
+recommendedFieldTests();
 console.log('PASS device-intake parser and mapper');

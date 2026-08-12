@@ -129,16 +129,33 @@
     return value;
   }
 
+  function dropdownKey(value) {
+    return String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\((?:r|tm)\)/g, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
   function compatibleValue(field, definition, value) {
     if (!definition.fieldTypes.includes(field.type)) return { reason: `Existing field type "${field.type || 'unknown'}" is not compatible.` };
     const formatted = proposalValue(definition, value);
     if (field.type !== 'dropdown') return { value: formatted };
-    const wanted = String(formatted).trim().toLowerCase();
-    const option = (field.options || []).find(item => {
+    const wanted = dropdownKey(formatted);
+    const available = field.options || [];
+    let options = available.filter(item => {
       const optionValue = typeof item === 'object' && item !== null ? item.value : item;
-      return String(optionValue ?? '').trim().toLowerCase() === wanted;
+      return dropdownKey(optionValue) === wanted;
     });
-    if (option === undefined) return { reason: 'The collected value is not an existing dropdown option.' };
+    if (options.length === 0 && definition.source === 'processorSummary') {
+      options = available.filter(item => {
+        const optionValue = typeof item === 'object' && item !== null ? item.value : item;
+        const family = dropdownKey(optionValue);
+        return family.length >= 6 && wanted.includes(family);
+      });
+    }
+    if (options.length !== 1) return { reason: options.length ? 'More than one existing dropdown option matches the collected value.' : 'The collected value is not an existing dropdown option.' };
+    const option = options[0];
     return { value: typeof option === 'object' && option !== null ? option.value : option };
   }
 
@@ -191,6 +208,45 @@
     return freeze({ mapped, conflicts, unmapped, accountContext, warnings });
   }
 
+  const recommendedWindowsFields = freeze([
+    { name: 'hostname', label: 'Hostname', type: 'text', capability: 'computer.hostname', visibleInCard: true },
+    { name: 'manufacturer', label: 'Manufacturer', type: 'text', capability: 'computer.manufacturer' },
+    { name: 'model', label: 'Model', type: 'text', capability: 'computer.model', visibleInCard: true },
+    { name: 'processorSummary', label: 'Processor', type: 'text', capability: 'processor.summary' },
+    { name: 'processorDescription', label: 'Processor details', type: 'textarea', capability: 'processor.description' },
+    { name: 'memorySummary', label: 'Memory', type: 'text', capability: 'memory.total' },
+    { name: 'graphicsAdapters', label: 'Graphics adapters', type: 'textarea', capability: 'graphics.adapters' },
+    { name: 'windowsEdition', label: 'Windows edition', type: 'text', capability: 'windows.edition' },
+    { name: 'windowsVersion', label: 'Windows version', type: 'text', capability: 'windows.version' },
+    { name: 'windowsBuild', label: 'Windows build', type: 'text', capability: 'windows.build' },
+    { name: 'serialNumber', label: 'Serial number', type: 'text', capability: 'bios.serial-number', visibleInCard: true }
+  ]);
+
+  function addRecommendedWindowsFields(entityType, registry = capabilityRegistry) {
+    if (!entityType || typeof entityType !== 'object') throw new Error('A Computer type definition is required.');
+    const existing = Array.isArray(entityType.fields) ? entityType.fields : [];
+    const claimedCapabilities = new Set(existing.map(field => field.collection?.provider === 'windows' ? field.collection.capability : null).filter(Boolean));
+    const claimedNames = new Set(existing.map(field => field.name));
+    const added = [];
+
+    for (const recommendation of recommendedWindowsFields) {
+      const aliases = registry[recommendation.capability]?.aliases || [];
+      if (claimedCapabilities.has(recommendation.capability) || aliases.some(name => claimedNames.has(name))) continue;
+      added.push({
+        name: recommendation.name,
+        label: recommendation.label,
+        type: recommendation.type,
+        required: false,
+        visibleInCard: !!recommendation.visibleInCard,
+        partOfName: false,
+        collection: { provider: 'windows', capability: recommendation.capability }
+      });
+    }
+
+    const entityTypeCopy = { ...entityType, fields: [...existing.map(field => ({ ...field })), ...added.map(field => ({ ...field, collection: { ...field.collection } }))] };
+    return freeze({ entityType: entityTypeCopy, added });
+  }
+
   function isCompatibleEntityType(entityType) {
     if (!entityType || typeof entityType !== 'object') return false;
     if (entityType.collection) {
@@ -199,5 +255,5 @@
     return entityType.id === 'computer';
   }
 
-  return Object.freeze({ limits, capabilityRegistry, parseReport, createDraftProposal, isCompatibleEntityType });
+  return Object.freeze({ limits, capabilityRegistry, recommendedWindowsFields, parseReport, createDraftProposal, addRecommendedWindowsFields, isCompatibleEntityType });
 });

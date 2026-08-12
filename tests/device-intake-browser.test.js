@@ -74,6 +74,23 @@ const initial = {
     assert.match(await settings.textContent(), /Device Collector.*local-only.*administrator/is);
     assert.equal(await settings.locator('#deviceIntakeFile').count(), 0, 'Settings must not contain report selection');
     assert.doesNotMatch(await settings.textContent(), /Confirm import|Upload the report/i);
+    const beforeFieldUpgrade = await page.evaluate(() => JSON.stringify(App.data));
+    await settings.getByRole('button', { name: 'Add recommended Windows fields' }).click();
+    const confirmFields = page.locator('#confirmModal');
+    assert.match(await confirmFields.textContent(), /Processor.*Memory.*Windows build/is);
+    assert.doesNotMatch(await confirmFields.textContent(), /Hostname.*Manufacturer.*Serial number/is, 'already configured collection fields must not be proposed again');
+    assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeFieldUpgrade, 'opening the recommendation must not mutate application data');
+    await confirmFields.getByRole('button', { name: 'Add fields' }).click();
+    const upgraded = await page.evaluate(() => ({
+      people: Object.values(App.data.entities).filter(entity => entity.type === 'person'),
+      fields: App.data.entityTypes.computer.fields
+    }));
+    assert.deepEqual(upgraded.people, [initial.entities.person1], 'field setup must not create or alter Persons');
+    assert.deepEqual(upgraded.fields.find(field => field.name === 'hostname'), initial.entityTypes.computer.fields.find(field => field.name === 'hostname'), 'existing legacy aliases must remain unchanged');
+    assert.ok(upgraded.fields.some(field => field.name === 'processorSummary' && field.collection?.capability === 'processor.summary'));
+    assert.deepEqual(upgraded.fields.find(field => field.name === 'serialNumber'), initial.entityTypes.computer.fields.find(field => field.name === 'serialNumber'), 'existing serial field must remain unchanged');
+    assert.ok(upgraded.fields.filter(field => !initial.entityTypes.computer.fields.some(existing => existing.name === field.name)).every(field => field.required === false), 'new recommended fields must all be optional');
+    await page.evaluate(data => { App.data = structuredClone(data); localStorage.setItem('elistlyData', JSON.stringify(data)); }, initial);
     await page.evaluate(() => App.closeModal('settingsModal'));
     await settings.waitFor({ state: 'detached' });
 
