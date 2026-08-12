@@ -129,9 +129,12 @@ const Storage = {
   KEY: 'elistlyData',
   USER_CACHE_PREFIX: 'elistlyData:user:',
   USER_UPDATED_PREFIX: 'elistlyData:userUpdated:',
+  USER_OUTBOX_PREFIX: 'elistlyData:outbox:',
   _cached: null,
   _cachedUserId: null,
   _isDirty: false,
+  _saveChains: {},
+  _syncStatus: { state: 'synced', message: 'Changes are synced.' },
 
   _getUserCacheKey(userId) {
     return `${this.USER_CACHE_PREFIX}${userId}`;
@@ -139,6 +142,53 @@ const Storage = {
 
   _getUserUpdatedKey(userId) {
     return `${this.USER_UPDATED_PREFIX}${userId}`;
+  },
+
+  _getUserOutboxKey(userId) {
+    return `${this.USER_OUTBOX_PREFIX}${userId}`;
+  },
+
+  _readOutbox(userId) {
+    try {
+      const raw = localStorage.getItem(this._getUserOutboxKey(userId));
+      if (!raw) return [];
+      const outbox = JSON.parse(raw);
+      if (!Array.isArray(outbox) || outbox.some(entry => !entry || typeof entry !== 'object' || !entry.id || !entry.payload || typeof entry.payload !== 'object' || Array.isArray(entry.payload))) throw new Error('Invalid outbox');
+      return outbox;
+    } catch (_) {
+      localStorage.removeItem(this._getUserOutboxKey(userId));
+      this._setSyncStatus('failed', 'Saved changes could not be read locally. They were not sent.');
+      return [];
+    }
+  },
+
+  _writeOutbox(userId, outbox) {
+    localStorage.setItem(this._getUserOutboxKey(userId), JSON.stringify(outbox));
+  },
+
+  async _saveNextOutboxEntry(userId) {
+    const pending = this._readOutbox(userId);
+    const next = pending[0];
+    if (!next) return;
+    const expectedUpdatedAt = this._readUserUpdatedAt(userId) || null;
+    const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: next.payload, expectedUpdatedAt } });
+    if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
+    const row = res.data || {};
+    const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
+    this._writeUserCache(userId, next.payload, updatedAt);
+    pending.shift();
+    this._writeOutbox(userId, pending);
+    this._isDirty = pending.length > 0;
+    this._setSyncStatus(pending.length ? 'pending' : 'synced', pending.length ? 'Changes are waiting to sync.' : 'Changes are synced.');
+  },
+
+  _setSyncStatus(state, message) {
+    this._syncStatus = { state, message };
+    if (typeof window !== 'undefined' && window.App && typeof window.App.renderSyncStatus === 'function') window.App.renderSyncStatus();
+  },
+
+  getSyncStatus() {
+    return { ...this._syncStatus };
   },
 
   _readUserCache(userId) {
@@ -216,6 +266,15 @@ const Storage = {
         if (!user) return null;
 
         this._migrateLegacyCache(user.id);
+        const outbox = this._readOutbox(user.id);
+        if (outbox.length) {
+          const pending = outbox[outbox.length - 1].payload;
+          this._cached = pending;
+          this._cachedUserId = user.id;
+          this._isDirty = true;
+          this._setSyncStatus('pending', 'Changes are waiting to sync.');
+          return pending;
+        }
         const cachedPayload = this._readUserCache(user.id);
         const cachedUpdatedAt = this._readUserUpdatedAt(user.id);
 
@@ -259,7 +318,7 @@ const Storage = {
       if (cachedUpdatedAt && remoteUpdatedAt && cachedUpdatedAt === remoteUpdatedAt) return;
 
       const remotePayload = data && data.payload ? data.payload : null;
-      if (this._isDirty) return;
+      if (this._isDirty || this._readOutbox(userId).length) return;
       const changed = JSON.stringify(remotePayload || {}) !== JSON.stringify(this._cached || {});
       this._cached = remotePayload;
       this._cachedUserId = userId;
@@ -286,24 +345,43 @@ const Storage = {
       this._cached = data;
       this._cachedUserId = user.id;
       this._isDirty = true;
-      const expectedUpdatedAt = this._readUserUpdatedAt(user.id) || null;
-      try {
-        const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt } });
-        if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
-        const row = res.data || {};
-        const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
-        this._writeUserCache(user.id, data, updatedAt);
-        this._isDirty = false;
-      } catch (error) {
+      const entry = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, payload: data, expectedUpdatedAt: this._readUserUpdatedAt(user.id) || null };
+      const outbox = this._readOutbox(user.id);
+      outbox.push(entry);
+      this._writeOutbox(user.id, outbox);
+      this._setSyncStatus('pending', 'Changes are syncing.');
+      const previous = this._saveChains[user.id] || Promise.resolve();
+      const save = previous.catch(() => {}).then(async () => {
+        await this._saveNextOutboxEntry(user.id);
+      }).catch(error => {
         this._isDirty = true;
+        this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
         throw error;
-      }
-      return;
+      });
+      this._saveChains[user.id] = save;
+      return save;
     }
     try {
       localStorage.setItem(this.KEY, JSON.stringify(data));
     } catch (e) {
       console.error('Storage.setAppData failed', e);
+    }
+  },
+
+  async retryPendingSaves() {
+    if (!backendClient) return;
+    const user = await getAuthUser();
+    if (!user) return;
+    const pending = this._readOutbox(user.id);
+    if (!pending.length) return;
+    this._isDirty = true;
+    this._setSyncStatus('pending', 'Changes are syncing.');
+    try {
+      await this._saveNextOutboxEntry(user.id);
+    } catch (error) {
+      this._isDirty = true;
+      this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+      throw error;
     }
   },
 
@@ -353,6 +431,10 @@ const Storage = {
     return this.setAppData(data);
   }
 };
+
+window.addEventListener('online', () => {
+  Storage.retryPendingSaves().catch(() => {});
+});
 
 // Setups: add preset IDs here; each setup-<id>.js registers into window.ELISTLY_PRESETS (loaded before app.js)
 const SETUP_IDS = ['blank', 'library', 'it', 'staff', 'property'];
@@ -1251,6 +1333,14 @@ const App = {
             : 'Your changes could not be saved. Your local changes are still open.';
           this.showNotification(message, 'error');
         });
+      },
+
+      renderSyncStatus() {
+        const status = document.getElementById('syncStatus');
+        if (!status) return;
+        const sync = Storage.getSyncStatus();
+        status.dataset.state = sync.state;
+        status.textContent = sync.message;
       },
 
       applyRemoteSyncData(remoteData) {

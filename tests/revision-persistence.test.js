@@ -125,7 +125,179 @@ async function testBackgroundSyncDoesNotReplaceDirtyData() {
   });
 }
 
-Promise.all([testConflictPreservesDirtyLocalState(), testConflictNotificationKeepsTheEditorOpen(), testBackgroundSyncDoesNotReplaceDirtyData()])
+async function testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const first = { version: 'test', entities: { first: true } };
+      const second = { version: 'test', entities: { second: true } };
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      const requests = [];
+      let finishFirst;
+      window.fetch = (_url, options) => {
+        requests.push(JSON.parse(options.body));
+        if (requests.length === 1) return new Promise(resolve => { finishFirst = resolve; });
+        return Promise.resolve(new Response(JSON.stringify({ payload: second, updated_at: '2026-08-12T00:02:00.000Z' }), { status: 200 }));
+      };
+      const firstSave = Storage.setAppData(first);
+      const secondSave = Storage.setAppData(second);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const beforeFirstCompletes = requests.length;
+      finishFirst(new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
+      await Promise.all([firstSave, secondSave]);
+      return { beforeFirstCompletes, requests };
+    });
+
+    assert.equal(observed.beforeFirstCompletes, 1, 'overlapping saves must have one in-flight conditional write');
+    assert.equal(observed.requests[1].expectedUpdatedAt, '2026-08-12T00:01:00.000Z', 'the next save must use the revision acknowledged by the previous save');
+  });
+}
+
+async function testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const localEdit = { version: 'test', entities: { local: true } };
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      let requests = 0;
+      window.fetch = async () => {
+        requests += 1;
+        throw new Error('offline');
+      };
+      try { await Storage.setAppData(localEdit); } catch (_) {}
+      Storage._cached = null;
+      Storage._cachedUserId = null;
+      Storage._isDirty = false;
+      const reloaded = await Storage.getAppData();
+      return {
+        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
+        reloaded,
+        requests,
+        status: Storage.getSyncStatus()
+      };
+    });
+
+    assert.equal(observed.outbox.length, 1, 'a failed write must remain in the durable outbox');
+    assert.deepEqual(observed.reloaded, { version: 'test', entities: { local: true } }, 'reload must restore queued local data');
+    assert.equal(observed.requests, 1, 'reload must not hydrate over queued local data');
+    assert.deepEqual(observed.status, { state: 'pending', message: 'Changes are waiting to sync.' }, 'queued local data must report pending sync status');
+  });
+}
+
+async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const first = { version: 'test', entities: { first: true } };
+      const second = { version: 'test', entities: { second: true } };
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([
+        { id: 'first', payload: first },
+        { id: 'second', payload: second }
+      ]));
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      window.fetch = async () => new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
+      await Storage.retryPendingSaves();
+      return {
+        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
+        revision: localStorage.getItem('elistlyData:userUpdated:user-1'),
+        status: Storage.getSyncStatus()
+      };
+    });
+
+    assert.deepEqual(observed.outbox, [{ id: 'second', payload: { version: 'test', entities: { second: true } } }], 'retry must clear only the acknowledged entry');
+    assert.equal(observed.revision, '2026-08-12T00:01:00.000Z', 'successful retry must advance the cached revision');
+    assert.equal(observed.status.state, 'pending', 'remaining queued changes must remain visible as pending');
+  });
+}
+
+async function testOnlineReconnectRetriesPendingSave() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const localEdit = { version: 'test', entities: { local: true } };
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit }]));
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      let requests = 0;
+      window.fetch = async () => {
+        requests += 1;
+        return new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
+      };
+      window.dispatchEvent(new Event('online'));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { requests, outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')), revision: localStorage.getItem('elistlyData:userUpdated:user-1') };
+    });
+
+    assert.equal(observed.requests, 1, 'reconnect must retry a pending durable save');
+    assert.deepEqual(observed.outbox, [], 'a reconnect acknowledgement must clear the durable outbox entry');
+    assert.equal(observed.revision, '2026-08-12T00:01:00.000Z', 'a reconnect acknowledgement must advance the cached revision');
+  });
+}
+
+async function testMalformedOutboxFailsSafely() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      localStorage.setItem('elistlyData:outbox:user-1', '{not-json');
+      return { outbox: Storage._readOutbox('user-1'), persisted: localStorage.getItem('elistlyData:outbox:user-1'), status: Storage.getSyncStatus() };
+    });
+
+    assert.deepEqual(observed.outbox, [], 'malformed outbox data must not be used as a save request');
+    assert.equal(observed.persisted, null, 'malformed outbox data must be removed rather than retried');
+    assert.equal(observed.status.state, 'failed', 'malformed outbox data must be visible as a failure');
+  });
+}
+
+async function testSyncStatusIsAccessibleInTheApplication() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      Storage._setSyncStatus('failed', 'Changes could not be synced. Local changes are retained.');
+      const status = document.getElementById('syncStatus');
+      return status && { text: status.textContent, state: status.dataset.state, live: status.getAttribute('aria-live') };
+    });
+
+    assert.deepEqual(observed, {
+      text: 'Changes could not be synced. Local changes are retained.',
+      state: 'failed',
+      live: 'polite'
+    }, 'sync failure must have an accessible, truthful status');
+  });
+}
+
+async function run() {
+  await testConflictPreservesDirtyLocalState();
+  await testConflictNotificationKeepsTheEditorOpen();
+  await testBackgroundSyncDoesNotReplaceDirtyData();
+  await testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave();
+  await testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration();
+  await testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision();
+  await testOnlineReconnectRetriesPendingSave();
+  await testMalformedOutboxFailsSafely();
+  await testSyncStatusIsAccessibleInTheApplication();
+}
+
+run()
   .then(() => console.log('PASS revision persistence'))
   .catch(error => {
     console.error(`FAIL revision persistence: ${error.stack || error.message}`);
