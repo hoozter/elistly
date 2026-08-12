@@ -144,6 +144,12 @@ function mapperTests() {
   const dropdownProposal = Intake.createDraftProposal(dropdownReport, dropdownType, {});
   assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5', '16GB'], 'dropdown comparisons normalize harmless formatting and uniquely match a configured processor family while preserving canonical options');
 
+  const ambiguousCpuReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME', processorSummary: '13th Gen Intel(R) Core(TM) i5-1335U' } })));
+  const modelLikeCpuType = { id: 'computer', fields: [{ name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5 1335' }] }] };
+  const unsafePartial = Intake.createDraftProposal(ambiguousCpuReport, modelLikeCpuType, {});
+  assert.equal(unsafePartial.mapped.length, 0, 'model-like partial CPU options must not be guessed as processor families');
+  assert.ok(unsafePartial.unmapped.some(item => item.fact === 'processorSummary' && /dropdown option/i.test(item.reason)));
+
   const foreignProviderType = {
     id: 'computer',
     fields: [{ name: 'hostname', type: 'text', collection: { provider: 'other', capability: 'computer.hostname' } }]
@@ -182,6 +188,13 @@ function recommendedFieldTests() {
   assert.equal(proposal.added.some(field => field.name === 'serialNumber'), false, 'an existing explicit capability must not be duplicated under a recommended name');
   assert.deepEqual(proposal.entityType.fields.slice(0, original.fields.length), original.fields, 'existing field definitions and order must be preserved');
   assert.equal(proposal.entityType.fields.every(field => field.required !== true || original.fields.includes(field)), true, 'recommended fields must be optional');
+  assert.equal(Object.isFrozen(original.fields[0].options), false, 'planning must not freeze nested data owned by the live Computer type');
+
+  const unscoped = { id: 'computer', fields: [{ name: 'machineName', type: 'text', collection: { capability: 'computer.hostname' } }] };
+  const unscopedProposal = Intake.addRecommendedWindowsFields(unscoped);
+  assert.equal(unscopedProposal.added.some(field => field.collection.capability === 'computer.hostname'), false, 'an unscoped existing Windows capability must not be duplicated');
+  const hostnameReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME' } })));
+  assert.deepEqual(Intake.createDraftProposal(hostnameReport, unscopedProposal.entityType, {}).mapped.map(item => item.field), ['machineName']);
 }
 
 parserTests();

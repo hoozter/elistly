@@ -137,6 +137,21 @@
       .replace(/[^a-z0-9]+/g, '');
   }
 
+  function processorFamilyKey(value, exact = false) {
+    const key = dropdownKey(value);
+    const patterns = [
+      ['intelcoreultra', /intelcoreultra([579])/],
+      ['intelcoreultra', /intelcore([579])ultra/],
+      ['intelcore', /intelcore(i[3579])/],
+      ['amdryzen', /amdryzen([3579])/]
+    ];
+    for (const [prefix, pattern] of patterns) {
+      const match = key.match(exact ? new RegExp(`^${pattern.source}$`) : pattern);
+      if (match) return `${prefix}${match[1]}`;
+    }
+    return null;
+  }
+
   function compatibleValue(field, definition, value) {
     if (!definition.fieldTypes.includes(field.type)) return { reason: `Existing field type "${field.type || 'unknown'}" is not compatible.` };
     const formatted = proposalValue(definition, value);
@@ -148,10 +163,11 @@
       return dropdownKey(optionValue) === wanted;
     });
     if (options.length === 0 && definition.source === 'processorSummary') {
+      const collectedFamily = processorFamilyKey(formatted);
       options = available.filter(item => {
         const optionValue = typeof item === 'object' && item !== null ? item.value : item;
-        const family = dropdownKey(optionValue);
-        return family.length >= 6 && wanted.includes(family);
+        const configuredFamily = processorFamilyKey(optionValue, true);
+        return collectedFamily && configuredFamily === collectedFamily;
       });
     }
     if (options.length !== 1) return { reason: options.length ? 'More than one existing dropdown option matches the collected value.' : 'The collected value is not an existing dropdown option.' };
@@ -225,7 +241,7 @@
   function addRecommendedWindowsFields(entityType, registry = capabilityRegistry) {
     if (!entityType || typeof entityType !== 'object') throw new Error('A Computer type definition is required.');
     const existing = Array.isArray(entityType.fields) ? entityType.fields : [];
-    const claimedCapabilities = new Set(existing.map(field => field.collection?.provider === 'windows' ? field.collection.capability : null).filter(Boolean));
+    const claimedCapabilities = new Set(existing.map(field => !field.collection?.provider || field.collection.provider === 'windows' ? field.collection?.capability : null).filter(Boolean));
     const claimedNames = new Set(existing.map(field => field.name));
     const added = [];
 
@@ -243,7 +259,8 @@
       });
     }
 
-    const entityTypeCopy = { ...entityType, fields: [...existing.map(field => ({ ...field })), ...added.map(field => ({ ...field, collection: { ...field.collection } }))] };
+    const copiedExisting = existing.map(field => JSON.parse(JSON.stringify(field)));
+    const entityTypeCopy = { ...entityType, fields: [...copiedExisting, ...added.map(field => ({ ...field, collection: { ...field.collection } }))] };
     return freeze({ entityType: entityTypeCopy, added });
   }
 
