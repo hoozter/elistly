@@ -159,6 +159,45 @@ async function testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave()
   });
 }
 
+async function testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const cached = { version: 'test', entities: { cached: true } };
+      const localEdit = { version: 'test', entities: { local: true } };
+      const staleRemote = { version: 'test', entities: { staleRemote: true } };
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(cached));
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      let finishBackgroundRead;
+      let requests = 0;
+      window.fetch = (_url, options = {}) => {
+        requests += 1;
+        if ((options.method || 'GET') === 'GET') return new Promise(resolve => { finishBackgroundRead = resolve; });
+        return Promise.resolve(new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:02:00.000Z' }), { status: 200 }));
+      };
+      await Storage.getAppData();
+      await Storage.setAppData(localEdit);
+      finishBackgroundRead(new Response(JSON.stringify({ payload: staleRemote, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return {
+        requests,
+        cached: Storage._cached,
+        revision: localStorage.getItem('elistlyData:userUpdated:user-1')
+      };
+    });
+
+    assert.equal(observed.requests, 2, 'the delayed read and local save must both reach the persistence boundary');
+    assert.deepEqual(observed.cached, { version: 'test', entities: { local: true } }, 'a delayed remote read must not roll back an acknowledged local save');
+    assert.equal(observed.revision, '2026-08-12T00:02:00.000Z', 'a delayed remote read must not roll back the acknowledged revision');
+  });
+}
+
 async function testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration() {
   await withPage(async page => {
     const observed = await page.evaluate(async () => {
@@ -227,6 +266,40 @@ async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
   });
 }
 
+async function testConcurrentReconnectsSerializeOnePendingReplay() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const localEdit = { version: 'test', entities: { local: true } };
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit }]));
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token' } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      const requests = [];
+      let finishSave;
+      window.fetch = (_url, options) => {
+        requests.push(JSON.parse(options.body));
+        return new Promise(resolve => { finishSave = resolve; });
+      };
+      const firstReplay = Storage.retryPendingSaves();
+      const secondReplay = Storage.retryPendingSaves();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const beforeAcknowledgement = requests.length;
+      finishSave(new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
+      await Promise.all([firstReplay, secondReplay]);
+      return { beforeAcknowledgement, requests, outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')) };
+    });
+
+    assert.equal(observed.beforeAcknowledgement, 1, 'concurrent reconnect signals must send one conditional replay at a time');
+    assert.equal(observed.requests.length, 1, 'the acknowledged pending entry must not be replayed twice');
+    assert.deepEqual(observed.outbox, [], 'the one acknowledged replay must clear the durable entry');
+  });
+}
+
 async function testOnlineReconnectRetriesPendingSave() {
   await withPage(async page => {
     const observed = await page.evaluate(async () => {
@@ -290,8 +363,10 @@ async function run() {
   await testConflictNotificationKeepsTheEditorOpen();
   await testBackgroundSyncDoesNotReplaceDirtyData();
   await testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave();
+  await testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave();
   await testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration();
   await testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision();
+  await testConcurrentReconnectsSerializeOnePendingReplay();
   await testOnlineReconnectRetriesPendingSave();
   await testMalformedOutboxFailsSafely();
   await testSyncStatusIsAccessibleInTheApplication();

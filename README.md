@@ -6,7 +6,7 @@
 
 **Modular inventory. Endlessly flexible.**
 
-Elistly is a modular inventory app for tracking things: devices, books, people, locations, and the like. You define categories and entity types with custom fields, then add and edit items. It started as an IT inventory tool and grew into a flexible system that can model different kinds of “things.” **It requires an account:** you sign in and your data is stored in the database. The installable web app caches its application shell, but durable offline editing and later synchronization are not release-proven yet.
+Elistly is a modular inventory app for tracking things: devices, books, people, locations, and the like. You define categories and entity types with custom fields, then add and edit items. It started as an IT inventory tool and grew into a flexible system that can model different kinds of “things.” **It requires an account:** you sign in and your data is stored in the database. The installable web app caches its application shell and preserves pending account edits locally for reconnect replay. Concurrent account edits use whole-document revisions: one stale write is retained locally and reported as a conflict rather than merged automatically.
 
 ## What it’s for
 
@@ -17,7 +17,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Your structure** — Categories (e.g. Books, People) and entity types (e.g. Book, Person) with custom fields: text, number, date, dropdown, checkbox, QR, links between items.
 - **Flexible views** — Dashboard as category cards, list (A–Z), or gallery; “due & overdue” when you add due dates.
 - **Search** — Find items by name from the header.
-- **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. The application shell is installable, while durable offline edits remain roadmap work.
+- **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. Pending account edits survive reload in a local outbox and replay after reconnect. Concurrent edits use whole-document revisions, so a stale write remains local and is reported as a conflict rather than automatically merged.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
 - **Profile** — Download an account export, reset data (clear app data, keep account), or delete the account. The current export is not yet a guaranteed round-trip restore format. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
 - **Windows Device Intake** — Settings provides the disclosed local-only collector download. In a new Computer form, **Import collected information** validates a saved report and fills only compatible existing draft fields; the ordinary Save action creates the Computer. The collector needs no administrator access and performs no network or directory lookup.

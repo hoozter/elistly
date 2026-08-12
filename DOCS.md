@@ -61,7 +61,7 @@ Sample data is optional and helps you test views, fields, and dashboard behavior
 
 ### Clearing Local Data
 
-The app keeps a local startup cache for the signed-in account. This cache is not yet a durable offline write queue: edits made while a remote save fails are not release-proven to survive restart and reconnect. Resetting data from Profile clears remote app data and local cache for the signed-in account.
+The app keeps a local startup cache and durable pending-write outbox for the signed-in account. An edit whose remote save fails is restored before remote hydration after restart and retried on reconnect. The current conflict contract is whole-document revision checking: a stale write remains local and is reported as a conflict; it is never merged automatically. Resetting data from Profile clears remote app data and local cache for the signed-in account.
 
 ## 3. Dashboard And Views
 
@@ -138,7 +138,8 @@ Elistly always runs with an account.
 - **Authentication** uses Neon Auth through `NEON_AUTH_URL`.
 - **App data** is read and written through the Cloudflare Worker at `ELISTLY_API_URL`.
 - **Storage** uses Neon Postgres tables from `neon/schema.sql`.
-- **Local cache** makes startup responsive, but durable offline edits, reconnect replay, and multi-device conflict handling are not release-proven.
+- **Local cache and outbox** make startup responsive, restore pending edits before remote hydration, and replay one queued conditional write at a time after reconnect.
+- **Conflict handling** uses whole-document revisions. Concurrent edits—including different records—can conflict; the stale local candidate is retained and surfaced, never automatically merged.
 
 Opening the app without a session shows the sign-in screen. Signing out clears the local auth token and returns to sign-in.
 

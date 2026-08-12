@@ -318,7 +318,8 @@ const Storage = {
       if (cachedUpdatedAt && remoteUpdatedAt && cachedUpdatedAt === remoteUpdatedAt) return;
 
       const remotePayload = data && data.payload ? data.payload : null;
-      if (this._isDirty || this._readOutbox(userId).length) return;
+      const currentUpdatedAt = this._readUserUpdatedAt(userId);
+      if (this._isDirty || this._readOutbox(userId).length || (cachedUpdatedAt && currentUpdatedAt && currentUpdatedAt !== cachedUpdatedAt)) return;
       const changed = JSON.stringify(remotePayload || {}) !== JSON.stringify(this._cached || {});
       this._cached = remotePayload;
       this._cachedUserId = userId;
@@ -376,13 +377,16 @@ const Storage = {
     if (!pending.length) return;
     this._isDirty = true;
     this._setSyncStatus('pending', 'Changes are syncing.');
-    try {
-      await this._saveNextOutboxEntry(user.id);
-    } catch (error) {
+    const previous = this._saveChains[user.id] || Promise.resolve();
+    const save = previous.catch(() => {}).then(async () => {
+      if (this._readOutbox(user.id).length) await this._saveNextOutboxEntry(user.id);
+    }).catch(error => {
       this._isDirty = true;
       this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
       throw error;
-    }
+    });
+    this._saveChains[user.id] = save;
+    return save;
   },
 
   async setAppDataForImport(data, identity) {
