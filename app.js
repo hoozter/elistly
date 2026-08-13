@@ -1607,6 +1607,11 @@ const App = {
         return `data-elistly-click-action="${actionId}"`;
       },
 
+      categoryCsvExportActionAttribute(categoryId, typeId) {
+        const actionId = this.registerClickAction(() => this.downloadCategoryCsvExport(categoryId, typeId));
+        return `data-elistly-click-action="${actionId}"`;
+      },
+
       viewActionAttribute(view) {
         const actionId = this.registerClickAction(() => this.loadView(view));
         return `data-elistly-click-action="${actionId}"`;
@@ -2893,6 +2898,21 @@ const App = {
                     </div>
                   `
                   ) : ''}
+                  ${categoryEntityTypes.length > 0 ? `
+                    <div class="dropdown">
+                      <button type="button" class="btn btn-secondary" onclick="App.toggleDropdown(event, this)">
+                        <span class="material-icons">download</span>
+                        Export CSV
+                      </button>
+                      <div class="dropdown-menu hidden">
+                        ${categoryEntityTypes.map(type => `
+                          <a href="#" ${this.categoryCsvExportActionAttribute(category.id, type.id)}>
+                            ${this.escapeHtmlText(type.label)} inventory CSV
+                          </a>
+                        `).join('')}
+                      </div>
+                    </div>
+                  ` : ''}
                 </div>
               </div>
               <div class="entity-list">
@@ -6877,6 +6897,77 @@ const App = {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         this.showSnackbar('Full backup downloaded.');
+        return true;
+      },
+
+      csvExportLimits: { maxRows: 10000, maxColumns: 200, maxCellLength: 100000, maxBytes: 10 * 1024 * 1024 },
+
+      csvExportSlug(value) {
+        const slug = String(value || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return slug || 'inventory';
+      },
+
+      csvExportCell(value) {
+        if (value === null || value === undefined || value === '') return '';
+        if (Array.isArray(value)) return value.map(item => this.csvExportCell(item)).join('; ');
+        if (typeof value === 'object') return this.csvExportStableJson(value);
+        const text = String(value);
+        return /^[=+\-@]/.test(text) ? `'${text}` : text;
+      },
+
+      csvExportStableJson(value) {
+        if (value === null || typeof value !== 'object') return JSON.stringify(value);
+        if (Array.isArray(value)) return `[${value.map(item => this.csvExportStableJson(item)).join(',')}]`;
+        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${this.csvExportStableJson(value[key])}`).join(',')}}`;
+      },
+
+      csvExportQuote(value) {
+        const text = String(value);
+        return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      },
+
+      createCategoryCsvExport(categoryId, typeId) {
+        const category = this.data?.categories?.[categoryId];
+        const type = this.data?.entityTypes?.[typeId];
+        if (!category || !type || !this.getEntityTypeCategoryIds(type).includes(categoryId)) throw new Error('Choose a category and entity type to export.');
+        const limits = this.csvExportLimits;
+        const fields = Array.isArray(type.fields) ? type.fields.filter(field => field && field.name) : [];
+        const associations = Array.isArray(type.associations) ? type.associations.filter(association => association && association.name) : [];
+        const columns = [
+          { name: 'id', label: 'ID' }, { name: 'type', label: 'Type' }, { name: 'name', label: 'Name' },
+          ...fields.map(field => ({ name: field.name, label: field.label || field.name })),
+          ...associations.map(association => ({ name: association.name, label: association.label || association.name, association: true }))
+        ];
+        if (columns.length > limits.maxColumns) throw new Error(`CSV export exceeds the ${limits.maxColumns}-column limit.`);
+        const entities = Object.values(this.data.entities || {}).filter(entity => entity && entity.type === typeId);
+        if (entities.length > limits.maxRows) throw new Error(`CSV export exceeds the ${limits.maxRows}-row limit.`);
+        const associationCell = (entity, association) => {
+          const ids = Array.isArray(entity[association.name]) ? entity[association.name] : [entity[association.name]];
+          return ids.filter(id => id !== null && id !== undefined && id !== '').map(id => {
+            const target = this.data.entities?.[id];
+            return target ? `${this.getEntityDisplayName(target)} (${id})` : `[missing: ${id}]`;
+          });
+        };
+        const rows = [columns.map(column => column.label)];
+        for (const entity of entities) rows.push(columns.map(column => this.csvExportCell(column.association ? associationCell(entity, column) : entity[column.name])));
+        for (const row of rows) for (const cell of row) if (cell.length > limits.maxCellLength) throw new Error(`CSV export exceeds the ${limits.maxCellLength}-character cell limit.`);
+        const content = `\uFEFF${rows.map(row => row.map(cell => this.csvExportQuote(cell)).join(',')).join('\r\n')}\r\n`;
+        if (new TextEncoder().encode(content).length > limits.maxBytes) throw new Error(`CSV export exceeds the ${limits.maxBytes}-byte limit.`);
+        return { filename: `elistly-${this.csvExportSlug(category.label || category.id)}-${this.csvExportSlug(type.label || type.id)}-inventory.csv`, mimeType: 'text/csv;charset=utf-8', content };
+      },
+
+      downloadCategoryCsvExport(categoryId, typeId) {
+        let exportFile;
+        try { exportFile = this.createCategoryCsvExport(categoryId, typeId); } catch (error) { this.showNotification(error.message, 'error'); return false; }
+        const url = URL.createObjectURL(new Blob([exportFile.content], { type: exportFile.mimeType }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = exportFile.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        this.showSnackbar('Inventory CSV downloaded.');
         return true;
       },
 

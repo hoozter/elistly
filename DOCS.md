@@ -119,6 +119,8 @@ Categories organize records and control where entity types can be used. Category
 
 Inventory export downloads selected categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** includes account metadata, theme, and app data. The two export envelopes are not yet one guaranteed round-trip backup format.
 
+Each category view also has an **Export CSV** menu. It downloads one selected entity type with `ID`, `Type`, `Name`, then configured fields and links in their configured order. The CSV is UTF-8 with a BOM and CRLF rows for spreadsheet compatibility; arrays and multi-value links use `; `, links use `Label (id)`, and structured values use stable JSON. Cells beginning with `=`, `+`, `-`, or `@` are prefixed with an apostrophe to prevent spreadsheet formula execution while retaining the visible value.
+
 ### Import
 
 Import previews and merges the current top-level selective inventory format. It does not yet restore the full-account export envelope. Validate important restores on disposable data until the versioned round-trip format in the roadmap is complete.
