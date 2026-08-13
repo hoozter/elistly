@@ -91,6 +91,86 @@ async function testAssociationFiltersMatchStableIdsDespiteDuplicateLabels() {
   });
 }
 
+async function testSortByCompatibleFieldUsesTypedOrderingAndKeepsMissingValuesLast() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        categories: { devices: { id: 'devices', label: 'Devices', icon: 'devices' } },
+        entityTypes: { computer: { id: 'computer', label: 'Computer', categories: ['devices'], fields: [
+          { name: 'rank', label: 'Rank', type: 'number' },
+          { name: 'installed', label: 'Installed', type: 'date' },
+          { name: 'managed', label: 'Managed', type: 'checkbox' },
+          { name: 'notes', label: 'Notes', type: 'textarea' }
+        ] } },
+        entities: {
+          zeta: { id: 'zeta', type: 'computer', name: 'Device 10', rank: 2, installed: '2024-02-01', managed: true },
+          alpha: { id: 'alpha', type: 'computer', name: 'Device 2', rank: 0, installed: '2024-01-01', managed: false },
+          beta: { id: 'beta', type: 'computer', name: 'Device 2', rank: 2, installed: 'invalid', managed: false },
+          missing: { id: 'missing', type: 'computer', name: 'Device 1' }
+        }, settings: {}
+      };
+      const entities = Object.values(App.data.entities);
+      return {
+        descriptors: App.getSortDescriptors('computer').map(field => field.name),
+        names: App.sortEntities(entities, 'computer', { field: 'name', direction: 'asc' }).map(entity => entity.id),
+        ranksAscending: App.sortEntities(entities, 'computer', { field: 'rank', direction: 'asc' }).map(entity => entity.id),
+        ranksDescending: App.sortEntities(entities, 'computer', { field: 'rank', direction: 'desc' }).map(entity => entity.id),
+        booleans: App.sortEntities(entities, 'computer', { field: 'managed', direction: 'asc' }).map(entity => entity.id),
+        dates: App.sortEntities(entities, 'computer', { field: 'installed', direction: 'desc' }).map(entity => entity.id)
+      };
+    });
+    assert.deepEqual(result, {
+      descriptors: ['name', 'rank', 'installed', 'managed'],
+      names: ['missing', 'alpha', 'beta', 'zeta'],
+      ranksAscending: ['alpha', 'beta', 'zeta', 'missing'],
+      ranksDescending: ['beta', 'zeta', 'alpha', 'missing'],
+      booleans: ['alpha', 'beta', 'zeta', 'missing'],
+      dates: ['zeta', 'alpha', 'beta', 'missing']
+    });
+  });
+}
+
+async function testCategorySortControlsComposeWithFiltersSearchAndStayReadOnly() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        categories: { devices: { id: 'devices', label: 'Devices', icon: 'devices' } },
+        entityTypes: { computer: { id: 'computer', label: 'Computer', categories: ['devices'], fields: [
+          { name: 'rank', label: 'Rank', type: 'number' },
+          { name: 'notes', label: '<img src=x onerror=alert(1)>', type: 'textarea' }
+        ] } },
+        entities: {
+          alpha: { id: 'alpha', type: 'computer', name: 'Alpha laptop', rank: 2 },
+          beta: { id: 'beta', type: 'computer', name: 'Beta laptop', rank: 1 }
+        }, settings: {}
+      };
+      window.__saveCalls = 0;
+      App.saveData = () => { window.__saveCalls += 1; };
+      App.renderCategoryView('devices');
+      return {
+        sortControls: Boolean(document.querySelector('[data-sort-field]')) && Boolean(document.querySelector('[data-sort-direction]')),
+        options: [...document.querySelectorAll('[data-sort-field] option')].map(option => option.textContent),
+        saves: window.__saveCalls
+      };
+    });
+    assert.deepEqual(result, { sortControls: true, options: ['Generated name'], saves: 0 });
+    await page.locator('[data-filter-type]').selectOption('computer');
+    await page.locator('[data-sort-field]').selectOption('rank');
+    await page.locator('[data-sort-direction]').selectOption('desc');
+    await page.evaluate(() => { document.getElementById('searchInput').value = 'laptop'; App.updateAdvancedFilterResults(); });
+    const sorted = await page.evaluate(() => ({
+      cards: [...document.querySelectorAll('.gallery-cards .mini-card')].map(card => card.textContent),
+      saves: window.__saveCalls,
+      hostileMarkup: document.querySelector('[data-sort-field]')?.innerHTML.includes('<img')
+    }));
+    assert.match(sorted.cards[0], /Alpha laptop/);
+    assert.match(sorted.cards[1], /Beta laptop/);
+    assert.equal(sorted.saves, 0);
+    assert.equal(sorted.hostileMarkup, false);
+    if (process.env.ELISTLY_SORT_SCREENSHOT) await page.screenshot({ path: process.env.ELISTLY_SORT_SCREENSHOT, fullPage: true });
+  });
+}
+
 async function testCategoryAdvancedFiltersCombineWithHeaderSearchAndClearWithoutSaving() {
   await withPage(async page => {
     const result = await page.evaluate(() => {
@@ -137,6 +217,8 @@ async function testCategoryAdvancedFiltersCombineWithHeaderSearchAndClearWithout
 Promise.resolve()
   .then(testConfiguredFieldFiltersUseTypedExactAndContainmentMatching)
   .then(testAssociationFiltersMatchStableIdsDespiteDuplicateLabels)
+  .then(testSortByCompatibleFieldUsesTypedOrderingAndKeepsMissingValuesLast)
+  .then(testCategorySortControlsComposeWithFiltersSearchAndStayReadOnly)
   .then(testCategoryAdvancedFiltersCombineWithHeaderSearchAndClearWithoutSaving)
   .then(() => console.log('PASS advanced search'))
   .catch(error => { console.error(error); process.exitCode = 1; });

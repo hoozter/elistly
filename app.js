@@ -1606,6 +1606,49 @@ const App = {
         });
       },
 
+      getSortDescriptors(typeId) {
+        const type = this.data.entityTypes?.[typeId];
+        if (!type) return [{ name: 'name', label: 'Generated name', type: 'text', generatedName: true }];
+        return [
+          { name: 'name', label: 'Generated name', type: 'text', generatedName: true },
+          ...(type.fields || []).filter(field => field && field.name && ['text', 'dropdown', 'number', 'date', 'checkbox'].includes(field.type))
+        ];
+      },
+
+      sortEntities(entities, typeId, sort = {}) {
+        const descriptors = this.getSortDescriptors(typeId);
+        const descriptor = descriptors.find(field => field.name === sort.field) || descriptors[0];
+        if (!descriptor) return [...entities];
+        const direction = sort.direction === 'desc' ? -1 : 1;
+        const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        const valueFor = entity => descriptor.generatedName ? this.getEntityCardTitle(entity) : entity[descriptor.name];
+        const normalize = value => {
+          if (value === undefined || value === null || value === '' || Array.isArray(value) || typeof value === 'object') return null;
+          if (descriptor.type === 'number') return Number.isFinite(Number(value)) ? Number(value) : null;
+          if (descriptor.type === 'date') {
+            const text = String(value);
+            const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(text) ? Date.parse(`${text}T00:00:00Z`) : NaN;
+            return Number.isFinite(timestamp) ? timestamp : null;
+          }
+          if (descriptor.type === 'checkbox') return value === true || value === 'true' || value === 'on' || value === 1 || value === '1' ? 1 : value === false || value === 'false' || value === 'off' || value === 0 || value === '0' ? 0 : null;
+          return String(value);
+        };
+        return [...entities].sort((left, right) => {
+          const a = normalize(valueFor(left));
+          const b = normalize(valueFor(right));
+          if (a === null || b === null) {
+            if (a !== null) return -1;
+            if (b !== null) return 1;
+          } else {
+            const result = typeof a === 'string' ? collator.compare(a, b) : a - b;
+            if (result) return result * direction;
+            const raw = String(valueFor(left)).localeCompare(String(valueFor(right)), 'en', { sensitivity: 'variant' });
+            if (raw) return raw * direction;
+          }
+          return collator.compare(String(left.id), String(right.id));
+        });
+      },
+
       escapeHtmlText(value) {
         return String(value ?? '').replace(/[&<>"']/g, character => ({
           '&': '&amp;',
@@ -2910,6 +2953,8 @@ const App = {
         const types = Object.values(this.data.entityTypes || {}).filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
         return `<div class="advanced-filters" data-advanced-filters>
           <label>Filter type <select data-filter-type><option value="">All types</option>${types.map(type => `<option value="${this.escapeHtmlText(type.id)}">${this.escapeHtmlText(type.label)}</option>`).join('')}</select></label>
+          <label>Sort by <select data-sort-field><option value="name">Generated name</option></select></label>
+          <label>Direction <select data-sort-direction><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
           <div data-filter-controls></div>
           <button type="button" class="btn btn-secondary" data-clear-advanced-filters>Clear filters</button>
           <p class="help-text" data-filter-result-count></p>
@@ -2919,7 +2964,11 @@ const App = {
       updateAdvancedFilterControls() {
         const typeId = document.querySelector('[data-filter-type]')?.value || '';
         const host = document.querySelector('[data-filter-controls]');
-        if (!host) return;
+        const sortField = document.querySelector('[data-sort-field]');
+        if (!host || !sortField) return;
+        const previousSort = sortField.value;
+        sortField.replaceChildren(...(typeId ? this.getSortDescriptors(typeId) : [{ name: 'name', label: 'Generated name' }]).map(field => new Option(field.label, field.name)));
+        if ([...sortField.options].some(option => option.value === previousSort)) sortField.value = previousSort;
         host.replaceChildren();
         this._advancedFilters = {};
         if (!typeId) return this.updateAdvancedFilterResults();
@@ -2968,7 +3017,8 @@ const App = {
           if (control.value) filters[control.dataset.filterName] = { value: control.value, operator: document.querySelector(`[data-filter-operator="${CSS.escape(control.dataset.filterName)}"]`)?.value || 'equals' };
         });
         const query = document.getElementById('searchInput')?.value || '';
-        const entities = this.renderEntityList(categoryId, typeId, filters, query);
+        const sort = { field: document.querySelector('[data-sort-field]')?.value || 'name', direction: document.querySelector('[data-sort-direction]')?.value || 'asc' };
+        const entities = this.sortEntities(this.renderEntityList(categoryId, typeId, filters, query), typeId, sort);
         const results = document.querySelector('[data-filter-results]');
         const count = document.querySelector('[data-filter-result-count]');
         if (results) results.innerHTML = entities.length ? `<div class="gallery-cards">${entities.map(entity => this.renderEntityMiniCard(entity)).join('')}</div>` : '<p class="empty-state">No matching items found</p>';
@@ -3048,8 +3098,12 @@ const App = {
         mainContent.innerHTML = html;
         this._advancedFilterCategoryId = categoryId;
         const typeControl = mainContent.querySelector('[data-filter-type]');
+        const sortField = mainContent.querySelector('[data-sort-field]');
+        const sortDirection = mainContent.querySelector('[data-sort-direction]');
         const clearButton = mainContent.querySelector('[data-clear-advanced-filters]');
         if (typeControl) typeControl.addEventListener('change', () => this.updateAdvancedFilterControls());
+        if (sortField) sortField.addEventListener('change', () => this.updateAdvancedFilterResults());
+        if (sortDirection) sortDirection.addEventListener('change', () => this.updateAdvancedFilterResults());
         if (clearButton) clearButton.addEventListener('click', () => {
           if (typeControl) typeControl.value = '';
           this.updateAdvancedFilterControls();
