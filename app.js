@@ -184,7 +184,10 @@ const Storage = {
 
   _setSyncStatus(state, message) {
     this._syncStatus = { state, message };
-    if (typeof window !== 'undefined' && window.App && typeof window.App.renderSyncStatus === 'function') window.App.renderSyncStatus();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('elistly:sync-status', { detail: this.getSyncStatus() }));
+      if (window.App && typeof window.App.renderSyncStatus === 'function') window.App.renderSyncStatus();
+    }
   },
 
   getSyncStatus() {
@@ -7973,6 +7976,7 @@ const App = {
       }
     };
 
+  window.ElistlyStorage = Storage;
   window.App = App;
 
   // Kick off the app once scripts and DOM are ready

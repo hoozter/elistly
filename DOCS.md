@@ -166,7 +166,7 @@ Elistly supports light/dark themes, accent color, header color, logo style, and 
 
 ## 11. Mobile
 
-Elistly is designed as an installable browser app. The service worker and manifest support PWA-style use where browser support allows it.
+Elistly is designed as an installable browser app. The manifest and service worker cache a versioned application shell where browser support allows it. Online navigations use the fresh document; offline navigations fall back to the installed shell. Runtime `config.js` is always fetched from the network and is never cached. A new shell waits for pending local writes to reach a synced state before activation and reload, so an update does not discard the durable outbox.
 
 ## 12. Deployment
 

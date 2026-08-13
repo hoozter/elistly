@@ -64,7 +64,7 @@ assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
 assert.match(appHtml, /styles\.css\?v=18/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
 assert.match(appHtml, /app\.js\?v=20/, 'app shell must request the draft-intake app bundle');
-assert.match(serviceWorker, /elistly-shell-v10/);
+assert.match(serviceWorker, /elistly-shell-v11/);
 assert.match(serviceWorker, /styles\.css\?v=18/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
 assert.match(serviceWorker, /app\.js\?v=20/);
