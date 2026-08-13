@@ -123,7 +123,7 @@ Each category view also has an **Export CSV** menu. It downloads one selected en
 
 ### Import
 
-Import previews and merges the current top-level selective inventory format. It does not yet restore the full-account export envelope. Validate important restores on disposable data until the versioned round-trip format in the roadmap is complete.
+Import previews and merges the current top-level selective inventory format. **Import CSV** requires selecting one existing entity type and explicitly mapping CSV columns to its existing fields or links. It previews every proposed row, including ignored columns and validation errors, and creates rows only after a valid review. It never creates or modifies schemas, options, People, or link targets. CSV input is size- and parser-bounded; an export-added formula-safety apostrophe is decoded only when it precedes a spreadsheet formula prefix. It does not yet restore the full-account export envelope. Validate important restores on disposable data until the versioned round-trip format in the roadmap is complete.
 
 ### Add Preset
 

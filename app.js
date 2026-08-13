@@ -3144,6 +3144,10 @@ const App = {
                           <span class="material-icons">download</span>
                           Import
                         </button>
+                        <button class="btn btn-secondary" onclick="App.showCsvImportModal()">
+                          <span class="material-icons">table_view</span>
+                          Import CSV
+                        </button>
                         <div class="device-collector-card">
                           <strong>Windows Device Collector</strong>
                           <p class="help-text">Collects a disclosed, local-only device report without administrator access or network lookup.</p>
@@ -6969,6 +6973,208 @@ const App = {
         URL.revokeObjectURL(url);
         this.showSnackbar('Inventory CSV downloaded.');
         return true;
+      },
+
+      csvImportLimits: { maxBytes: 10 * 1024 * 1024, maxCharacters: 10 * 1024 * 1024, maxRows: 10000, maxColumns: 200, maxCellLength: 100000, maxCells: 2000000 },
+
+      parseCsvImport(source) {
+        const limits = this.csvImportLimits;
+        if (typeof source !== 'string' || source.length > limits.maxCharacters) throw new Error(`CSV import exceeds the ${limits.maxCharacters}-character limit.`);
+        if (new TextEncoder().encode(source).length > limits.maxBytes) throw new Error(`CSV import exceeds the ${limits.maxBytes}-byte limit.`);
+        let index = source.charCodeAt(0) === 0xFEFF ? 1 : 0;
+        const rows = [];
+        let row = [];
+        let cell = '';
+        let quoted = false;
+        let atCellStart = true;
+        const appendCell = () => {
+          if (cell.length > limits.maxCellLength) throw new Error(`CSV import exceeds the ${limits.maxCellLength}-character cell limit.`);
+          row.push(cell);
+          if (row.length > limits.maxColumns) throw new Error(`CSV import exceeds the ${limits.maxColumns}-column limit.`);
+          if (rows.length * limits.maxColumns + row.length > limits.maxCells) throw new Error(`CSV import exceeds the ${limits.maxCells}-cell limit.`);
+          cell = '';
+          atCellStart = true;
+        };
+        const appendRow = () => {
+          appendCell();
+          if (rows.length >= limits.maxRows + 1) throw new Error(`CSV import exceeds the ${limits.maxRows}-row limit.`);
+          rows.push(row);
+          row = [];
+        };
+        while (index < source.length) {
+          const char = source[index++];
+          if (quoted) {
+            if (char === '"') {
+              if (source[index] === '"') { cell += '"'; index++; }
+              else quoted = false;
+            } else cell += char;
+            continue;
+          }
+          if (char === '"' && atCellStart) { quoted = true; atCellStart = false; continue; }
+          if (char === ',') { appendCell(); continue; }
+          if (char === '\r' || char === '\n') {
+            if (char === '\r' && source[index] === '\n') index++;
+            appendRow();
+            continue;
+          }
+          if (char === '"') throw new Error('CSV import contains an unexpected quote.');
+          cell += char;
+          atCellStart = false;
+        }
+        if (quoted) throw new Error('CSV import contains an unterminated quoted cell.');
+        if (cell !== '' || row.length) appendRow();
+        if (!rows.length) throw new Error('CSV import must contain a header row.');
+        const headers = rows.shift();
+        if (!headers.some(header => header !== '')) throw new Error('CSV import must contain a header row.');
+        return { headers, rows };
+      },
+
+      csvImportValue(value) {
+        return typeof value === 'string' && /^'[=+\-@]/.test(value) ? value.slice(1) : value;
+      },
+
+      createCsvImportPreview(typeId, source, mappings) {
+        const type = this.data?.entityTypes?.[typeId];
+        if (!type) throw new Error('Choose an existing entity type before mapping CSV columns.');
+        const parsed = this.parseCsvImport(source);
+        const fields = Array.isArray(type.fields) ? type.fields.filter(field => field && field.name) : [];
+        const associations = Array.isArray(type.associations) ? type.associations.filter(association => association && association.name && association.association?.targetType) : [];
+        const available = new Map([...fields.map(field => [field.name, { ...field, kind: 'field' }]), ...associations.map(association => [association.name, { ...association, kind: 'association' }])]);
+        const mapped = new Map();
+        Object.entries(mappings || {}).forEach(([column, name]) => {
+          if (name === '' || name === null || name === undefined) return;
+          const index = Number(column);
+          if (!Number.isInteger(index) || index < 0 || index >= parsed.headers.length) throw new Error('CSV import contains an invalid column mapping.');
+          if (!available.has(name)) throw new Error(`CSV column ${parsed.headers[index]} is mapped to an incompatible field.`);
+          if (mapped.has(name)) throw new Error(`CSV field ${name} is mapped more than once.`);
+          mapped.set(name, index);
+        });
+        if (!mapped.size) throw new Error('Map at least one CSV column before previewing the import.');
+        const ignored = parsed.headers.filter((_, index) => ![...mapped.values()].includes(index));
+        const decode = (descriptor, raw, errors) => {
+          const value = this.csvImportValue(raw);
+          if (value === '') return undefined;
+          if (descriptor.kind === 'association') {
+            const targetType = descriptor.association.targetType;
+            const display = /^(.+) \(([^()]+)\)$/.exec(value);
+            const candidates = Object.values(this.data.entities || {}).filter(entity => entity && entity.type === targetType && (entity.id === value || (display && entity.id === display[2] && this.getEntityDisplayName(entity) === display[1]) || this.getEntityDisplayName(entity) === value));
+            if (candidates.length !== 1) errors.push(`${descriptor.label || descriptor.name} does not identify an existing ${this.data.entityTypes[targetType]?.label || targetType}.`);
+            return candidates.length === 1 ? candidates[0].id : undefined;
+          }
+          if (descriptor.type === 'number' && !Number.isFinite(Number(value))) errors.push(`${descriptor.label || descriptor.name} must be a number.`);
+          if (descriptor.type === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(value)) errors.push(`${descriptor.label || descriptor.name} must be an ISO date.`);
+          if (descriptor.type === 'dropdown') {
+            const option = (descriptor.options || []).find(item => item && (item.value === value || item.label === value));
+            if (!option) errors.push(`${descriptor.label || descriptor.name} must match a configured option.`);
+            return option ? option.value : undefined;
+          }
+          if (descriptor.type === 'checkbox') return /^(true|yes|1|on)$/i.test(value);
+          return descriptor.type === 'text' && value.includes('; ') ? value.split('; ').map(item => this.csvImportValue(item)) : value;
+        };
+        const rows = parsed.rows.map((cells, index) => {
+          const errors = [];
+          if (cells.length !== parsed.headers.length) errors.push(`Row has ${cells.length} columns; expected ${parsed.headers.length}.`);
+          const values = {};
+          mapped.forEach((column, name) => { values[name] = decode(available.get(name), cells[column] ?? '', errors); });
+          fields.filter(field => field.required && (values[field.name] === undefined || values[field.name] === '')).forEach(field => errors.push(`${field.label || field.name} is required.`));
+          return { number: index + 2, values, errors };
+        });
+        return Object.freeze({ typeId, headers: parsed.headers, ignored, mappings: Object.fromEntries(mapped), rows, revision: JSON.stringify(this.data) });
+      },
+
+      async confirmCsvImport(preview, identity) {
+        if (!preview || !this.data?.entityTypes?.[preview.typeId] || preview.revision !== JSON.stringify(this.data)) throw new Error('CSV import preview is stale. Review the file again.');
+        if (preview.rows.some(row => row.errors.length)) throw new Error('CSV import has validation errors. Correct the mapping or file before creating rows.');
+        const validRows = preview.rows.filter(row => !row.errors.length);
+        if (!validRows.length) throw new Error('CSV import has no valid rows to create.');
+        const candidate = JSON.parse(JSON.stringify(this.data));
+        validRows.forEach(row => {
+          const id = this.generateId();
+          candidate.entities[id] = { id, type: preview.typeId, ...row.values };
+        });
+        await Storage.setAppDataForImport(candidate, identity);
+        this.data = candidate;
+        return { created: validRows.length, rejected: preview.rows.length - validRows.length };
+      },
+
+      showCsvImportModal() {
+        const existing = document.getElementById('csvImportModal');
+        if (existing) existing.remove();
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.id = 'csvImportModal';
+        const content = document.createElement('div');
+        content.className = 'modal-content';
+        const close = document.createElement('button'); close.type = 'button'; close.className = 'modal-close'; close.textContent = '×'; close.addEventListener('click', () => this.closeModal('csvImportModal'));
+        const heading = document.createElement('h3'); heading.textContent = 'Import CSV';
+        const type = document.createElement('select'); type.id = 'csvImportType';
+        type.appendChild(new Option('Select an entity type', ''));
+        Object.values(this.data.entityTypes || {}).forEach(item => type.appendChild(new Option(item.label || item.id, item.id)));
+        const file = document.createElement('input'); file.type = 'file'; file.accept = '.csv,text/csv';
+        const preview = document.createElement('div'); preview.id = 'csvImportPreview'; preview.className = 'import-preview-area';
+        const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'btn btn-primary'; confirm.textContent = 'Create valid rows'; confirm.disabled = true;
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel'; cancel.addEventListener('click', () => this.closeModal('csvImportModal'));
+        const render = () => {
+          preview.replaceChildren(); confirm.disabled = true;
+          const selectedType = type.value;
+          const source = file._csvImportSource;
+          if (!selectedType || typeof source !== 'string') return;
+          try {
+            const parsed = this.parseCsvImport(source);
+            const schema = this.data.entityTypes[selectedType];
+            const choices = [...(schema.fields || []), ...(schema.associations || [])].filter(item => item?.name);
+            const mapping = document.createElement('section'); mapping.appendChild(Object.assign(document.createElement('h4'), { textContent: 'Map columns' }));
+            parsed.headers.forEach((header, index) => {
+              const label = document.createElement('label'); label.textContent = header || `Column ${index + 1}`;
+              const select = document.createElement('select'); select.dataset.csvColumn = String(index); select.appendChild(new Option('Ignore this column', ''));
+              choices.forEach(item => select.appendChild(new Option(item.label || item.name, item.name)));
+              label.appendChild(select); mapping.appendChild(label);
+            });
+            const review = () => {
+              try {
+                const mappings = Object.fromEntries([...mapping.querySelectorAll('select')].map(select => [select.dataset.csvColumn, select.value]));
+                const candidate = this.createCsvImportPreview(selectedType, source, mappings);
+                this._csvImportPreview = candidate;
+                const rows = document.createElement('p'); rows.textContent = `${candidate.rows.length} row(s): ${candidate.rows.filter(row => !row.errors.length).length} valid, ${candidate.rows.filter(row => row.errors.length).length} rejected. Ignored columns: ${candidate.ignored.join(', ') || 'none'}.`;
+                const errors = document.createElement('ul'); candidate.rows.filter(row => row.errors.length).forEach(row => errors.appendChild(Object.assign(document.createElement('li'), { textContent: `Row ${row.number}: ${row.errors.join(' ')}` })));
+                preview.querySelector('[data-csv-review]')?.remove();
+                const output = document.createElement('div'); output.dataset.csvReview = 'true'; output.append(rows, errors); preview.appendChild(output);
+                confirm.disabled = !candidate.rows.length || candidate.rows.some(row => row.errors.length);
+              } catch (error) {
+                preview.querySelector('[data-csv-review]')?.remove();
+                const output = document.createElement('div'); output.dataset.csvReview = 'true'; output.textContent = error.message; preview.appendChild(output);
+                confirm.disabled = true;
+              }
+            };
+            mapping.querySelectorAll('select').forEach(select => select.addEventListener('change', review));
+            preview.appendChild(mapping); review();
+          } catch (error) { preview.textContent = error.message; }
+        };
+        file.addEventListener('change', async () => {
+          const selected = file.files?.[0];
+          if (!selected) return;
+          if (selected.size > this.csvImportLimits.maxBytes) { preview.textContent = `CSV import exceeds the ${this.csvImportLimits.maxBytes}-byte limit.`; return; }
+          try {
+            file._csvImportSource = await selected.text();
+            this._csvImportPreviewIdentity = await Storage.getImportIdentity();
+            render();
+          } catch (error) { preview.textContent = error.message || 'CSV import could not be read.'; }
+        });
+        type.addEventListener('change', render);
+        confirm.addEventListener('click', async () => {
+          if (!this._csvImportPreview) return;
+          confirm.disabled = true;
+          try {
+            const activeIdentity = await Storage.getImportIdentity();
+            const identity = this._csvImportPreviewIdentity;
+            if (backendClient && (!identity || activeIdentity.userId !== identity.userId || activeIdentity.accessToken !== identity.accessToken || Storage._readOutbox(identity.userId).length)) throw new Error('CSV import is stale or pending changes need resolution. Review the file again.');
+            const result = await this.confirmCsvImport(this._csvImportPreview, identity);
+            this.closeModal('csvImportModal'); this.loadView('dashboard'); this.showNotification(`CSV import complete: created ${result.created}; rejected ${result.rejected}.`, 'success');
+          } catch (error) { preview.textContent = error.message || 'CSV import was not saved.'; }
+        });
+        const actions = document.createElement('div'); actions.className = 'modal-actions'; actions.append(cancel, confirm);
+        content.append(close, heading, Object.assign(document.createElement('p'), { textContent: 'Choose one existing entity type, map CSV columns, and review every proposed row before creating valid rows. The import never changes schema, options, People, or association targets.' }), type, file, preview, actions);
+        modal.appendChild(content); document.body.appendChild(modal); this.showModal('csvImportModal');
       },
 
       showFullBackupRestoreModal() {
