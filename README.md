@@ -16,7 +16,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 
 - **Your structure** — Categories (e.g. Books, People) and entity types (e.g. Book, Person) with custom fields: text, number, date, dropdown, checkbox, QR, links between items.
 - **Flexible views** — Dashboard as category cards, list (A–Z), or gallery; “due & overdue” when you add due dates.
-- **Search** — Find items by name from the header.
+- **Search** — Find items by name from the header. In a category view, select an entity type to filter its configured fields and associations without changing stored inventory data.
 - **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. Pending account edits survive reload in a local outbox and replay after reconnect. Concurrent edits use whole-document revisions, so a stale write remains local and is reported as a conflict rather than automatically merged.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
 - **Profile** — Download a versioned full-account backup envelope, reset data (clear app data, keep account), or delete the account. Restore from this backup is not implemented yet. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.

@@ -44,7 +44,7 @@
       items: [
         {
           q: 'How does search work?',
-          a: 'Type in the header search box. Search matches the display name of items (the title shown on cards). Results list matching entities; clear the search box to return to the dashboard. On mobile, tap the search icon to open the search bar.'
+          a: 'Type in the header search box to match item display names (the titles shown on cards). In a category view, choose an entity type and then filter its configured fields or links: text fields contain text without case sensitivity; number and date filters compare with the selected operator; dropdowns, checkboxes, and links match exact stored values; array values contain the selected value. Filters combine with the header search and with each other. Clear filters removes only the view filters and never changes inventory data. On mobile, tap the search icon to open the search bar.'
         },
         {
           q: 'Can I share a link to a specific view or item?',

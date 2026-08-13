@@ -726,8 +726,13 @@ const App = {
         const searchInput = document.getElementById('searchInput');
         if (searchInput) {
           searchInput.addEventListener('input', (e) => {
-            if (e.target.value) this.handleSearch(e.target.value);
-            else this.loadView('dashboard');
+            if (this._advancedFilterCategoryId) {
+              this.updateAdvancedFilterResults();
+            } else if (e.target.value) {
+              this.handleSearch(e.target.value);
+            } else {
+              this.loadView('dashboard');
+            }
           });
         }
         this.setupEventListeners();
@@ -1560,6 +1565,45 @@ const App = {
 
       getEntityCardTitle(entity) {
         return this.getEntityTitleInfo(entity).title;
+      },
+
+      filterEntitiesForType(typeId, filters = {}, query = '') {
+        const type = this.data.entityTypes[typeId];
+        if (!type) return [];
+        const normalizedQuery = String(query).toLocaleLowerCase();
+        const matchesFilter = (entity, descriptor, filter) => {
+          const value = entity[descriptor.name];
+          if (filter.value === '__missing__') return value === undefined || value === null || value === '';
+          if (value === undefined || value === null || value === '') return false;
+          if (descriptor.type === 'number') {
+            const actual = Number(value);
+            const expected = Number(filter.value);
+            if (!Number.isFinite(actual) || !Number.isFinite(expected)) return false;
+            return filter.operator === 'greater-than' ? actual > expected
+              : filter.operator === 'less-than' ? actual < expected
+              : actual === expected;
+          }
+          if (descriptor.type === 'date') {
+            const actual = String(value);
+            const expected = String(filter.value);
+            return filter.operator === 'after' ? actual > expected
+              : filter.operator === 'before' ? actual < expected
+              : actual === expected;
+          }
+          if (descriptor.type === 'checkbox') return String(value === true || value === 'on' || value === '1' || value === 'yes') === String(filter.value);
+          if (descriptor.advancedAssociation) return String(value) === String(filter.value);
+          if (Array.isArray(value)) return value.some(item => String(item) === String(filter.value));
+          if (descriptor.type === 'dropdown') return String(value) === String(filter.value);
+          return String(value).toLocaleLowerCase().includes(String(filter.value).toLocaleLowerCase());
+        };
+        const descriptors = [
+          ...(type.fields || []).filter(field => field && field.name && field.type !== 'qr'),
+          ...(type.associations || []).filter(association => association && association.name && association.association).map(association => ({ ...association, advancedAssociation: true }))
+        ];
+        return Object.values(this.data.entities || {}).filter(entity => {
+          if (!entity || entity.type !== typeId || !this.getEntityCardTitle(entity).toLocaleLowerCase().includes(normalizedQuery)) return false;
+          return descriptors.every(descriptor => !filters[descriptor.name] || matchesFilter(entity, descriptor, filters[descriptor.name]));
+        });
       },
 
       escapeHtmlText(value) {
@@ -2430,8 +2474,10 @@ const App = {
         const mainContent = document.getElementById('mainContent');
         if (!mainContent) return;
         if (view === 'dashboard') {
+          this._advancedFilterCategoryId = null;
           this.renderDashboard();
         } else if (view === 'overdue') {
+          this._advancedFilterCategoryId = null;
           this.renderOverdueView();
         } else {
           this.renderCategoryView(view);
@@ -2841,16 +2887,92 @@ const App = {
         mainContent.innerHTML = `<div class="${containerClass}">${cardsHtml}</div>`;
       },
       
-      renderEntityList(categoryId) {
+      renderEntityList(categoryId, typeId = '', filters = {}, query = '') {
         const entities = Object.values(this.data.entities)
           .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId))
+          .filter(entity => !typeId || entity.type === typeId)
+          .filter(entity => typeId ? this.filterEntitiesForType(typeId, filters, query).includes(entity) : this.getEntityCardTitle(entity).toLocaleLowerCase().includes(String(query).toLocaleLowerCase()))
           .sort((a, b) => this.getEntityCardTitle(a).localeCompare(this.getEntityCardTitle(b)));
 
-        if (entities.length === 0) {
-          return '<p class="empty-state">No items yet</p>';
-        }
+        return entities;
+      },
 
-        return `<div class="gallery-cards">${entities.map(entity => this.renderEntityMiniCard(entity)).join('')}</div>`;
+      getAdvancedFilterDescriptors(typeId) {
+        const type = this.data.entityTypes[typeId];
+        if (!type) return [];
+        return [
+          ...(type.fields || []).filter(field => field && field.name && field.type !== 'qr'),
+          ...(type.associations || []).filter(association => association && association.name && association.association).map(association => ({ ...association, advancedAssociation: true }))
+        ];
+      },
+
+      renderAdvancedFilterControls(categoryId) {
+        const types = Object.values(this.data.entityTypes || {}).filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
+        return `<div class="advanced-filters" data-advanced-filters>
+          <label>Filter type <select data-filter-type><option value="">All types</option>${types.map(type => `<option value="${this.escapeHtmlText(type.id)}">${this.escapeHtmlText(type.label)}</option>`).join('')}</select></label>
+          <div data-filter-controls></div>
+          <button type="button" class="btn btn-secondary" data-clear-advanced-filters>Clear filters</button>
+          <p class="help-text" data-filter-result-count></p>
+        </div>`;
+      },
+
+      updateAdvancedFilterControls() {
+        const typeId = document.querySelector('[data-filter-type]')?.value || '';
+        const host = document.querySelector('[data-filter-controls]');
+        if (!host) return;
+        host.replaceChildren();
+        this._advancedFilters = {};
+        if (!typeId) return this.updateAdvancedFilterResults();
+        this.getAdvancedFilterDescriptors(typeId).forEach(descriptor => {
+          const label = document.createElement('label');
+          label.textContent = descriptor.label || descriptor.name;
+          const control = document.createElement('select');
+          control.dataset.filterName = descriptor.name;
+          control.append(new Option('Any value', ''), new Option('Missing', '__missing__'));
+          if (descriptor.type === 'checkbox') {
+            control.append(new Option('Yes', 'true'), new Option('No', 'false'));
+          } else if (descriptor.advancedAssociation) {
+            Object.values(this.data.entities || {}).filter(entity => entity.type === descriptor.association.targetType).forEach(entity => control.appendChild(new Option(this.getEntityDisplayName(entity), entity.id)));
+          } else if (descriptor.type === 'dropdown') {
+            (descriptor.options || []).forEach(option => control.appendChild(new Option(option.label || option.value, option.value)));
+          } else {
+            control.remove();
+            const input = document.createElement('input');
+            input.dataset.filterName = descriptor.name;
+            input.type = descriptor.type === 'number' ? 'number' : descriptor.type === 'date' ? 'date' : 'text';
+            input.placeholder = descriptor.type === 'number' || descriptor.type === 'date' ? 'Value' : 'Contains';
+            if (descriptor.type === 'number' || descriptor.type === 'date') {
+              const operator = document.createElement('select');
+              operator.dataset.filterOperator = descriptor.name;
+              operator.append(new Option('Equals', 'equals'), new Option(descriptor.type === 'number' ? 'Greater than' : 'After', descriptor.type === 'number' ? 'greater-than' : 'after'), new Option(descriptor.type === 'number' ? 'Less than' : 'Before', descriptor.type === 'number' ? 'less-than' : 'before'));
+              operator.addEventListener('change', () => this.updateAdvancedFilterResults());
+              label.appendChild(operator);
+            }
+            label.appendChild(input);
+            input.addEventListener('input', () => this.updateAdvancedFilterResults());
+            host.appendChild(label);
+            return;
+          }
+          label.appendChild(control);
+          control.addEventListener('change', () => this.updateAdvancedFilterResults());
+          host.appendChild(label);
+        });
+        this.updateAdvancedFilterResults();
+      },
+
+      updateAdvancedFilterResults() {
+        const categoryId = this._advancedFilterCategoryId;
+        const typeId = document.querySelector('[data-filter-type]')?.value || '';
+        const filters = {};
+        document.querySelectorAll('[data-filter-name]').forEach(control => {
+          if (control.value) filters[control.dataset.filterName] = { value: control.value, operator: document.querySelector(`[data-filter-operator="${CSS.escape(control.dataset.filterName)}"]`)?.value || 'equals' };
+        });
+        const query = document.getElementById('searchInput')?.value || '';
+        const entities = this.renderEntityList(categoryId, typeId, filters, query);
+        const results = document.querySelector('[data-filter-results]');
+        const count = document.querySelector('[data-filter-result-count]');
+        if (results) results.innerHTML = entities.length ? `<div class="gallery-cards">${entities.map(entity => this.renderEntityMiniCard(entity)).join('')}</div>` : '<p class="empty-state">No matching items found</p>';
+        if (count) count.textContent = `${entities.length} item${entities.length === 1 ? '' : 's'}`;
       },
       
       renderCategoryView(categoryId) {
@@ -2916,13 +3038,23 @@ const App = {
                 </div>
               </div>
               <div class="entity-list">
-                ${this.renderEntityList(categoryId)}
+                ${this.renderAdvancedFilterControls(categoryId)}
+                <div data-filter-results></div>
               </div>
             </div>
           </div>
         `;
         
         mainContent.innerHTML = html;
+        this._advancedFilterCategoryId = categoryId;
+        const typeControl = mainContent.querySelector('[data-filter-type]');
+        const clearButton = mainContent.querySelector('[data-clear-advanced-filters]');
+        if (typeControl) typeControl.addEventListener('change', () => this.updateAdvancedFilterControls());
+        if (clearButton) clearButton.addEventListener('click', () => {
+          if (typeControl) typeControl.value = '';
+          this.updateAdvancedFilterControls();
+        });
+        this.updateAdvancedFilterResults();
         this.ensureMainContentScrollable();
       },
       
