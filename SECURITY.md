@@ -13,15 +13,15 @@ The repository `.gitignore` contains only generic development categories and the
 - Browser `config.js` may contain only public frontend endpoints such as the Elistly Worker URL and Neon Auth URL.
 - Database URLs, API tokens, signing keys, and administrative credentials must never be written into browser assets.
 - Cloudflare Worker secrets belong in Cloudflare encrypted secrets or an equivalent secret store, not `wrangler.toml` or local notes inside this repository.
-- Local `.env*`, key files, and `secrets/` are ignored as a final guard, not as permission to keep long-lived credentials beside source code.
+- Local `.env*`, Wrangler `.dev.vars*`, key files, and `secrets/` are ignored as a final guard, not as permission to keep long-lived credentials beside source code.
 - Git remote URLs must not embed personal access tokens. Use a credential helper, SSH agent, or short-lived authenticated tooling.
 
 ## Before committing
 
 1. Review the exact staged boundary with `git diff --cached` and `git status`.
 2. Confirm no generated configuration, local exports, test databases, account identifiers, or dependency directories are staged.
-3. Run the repository checks documented in `README.md` and the Worker tests once the P0 test harness lands.
-4. Scan the staged diff and reachable history for strong credential signatures before publishing a security-sensitive change.
+3. Run `node scripts/scan-repository-secrets.js`. It scans tracked files and every reachable commit for strong credential signatures, prints only commit/path/line/pattern-class locations, and never prints matched values.
+4. Run the repository checks documented in `README.md` and the Worker tests once the P0 test harness lands.
 5. If a credential may have been visible to a tool, agent, terminal log, or remote service, rotate it; deleting it locally is not sufficient.
 
 ## Current known hardening work
