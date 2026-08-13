@@ -150,10 +150,79 @@ async function testMalformedDataDoesNotDownloadABackup() {
   });
 }
 
+async function testFullBackupRestorePreviewsThenReplacesThroughTheAuthoritativePath() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const original = { version: 'before', settings: { view: 'list' }, workspaces: { old: { name: 'Old', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'old' };
+      const restored = { version: 'after', settings: { view: 'grid', retained: { yes: true } }, workspaces: { restored: { name: 'Restored', categories: { hardware: { label: 'Hardware' } }, entityTypes: { computer: { label: 'Computer', categoryId: 'hardware', fields: [] } }, entities: { laptop: { id: 'laptop', type: 'computer', name: 'Laptop' } } } }, currentWorkspaceId: 'restored', unknown: { retained: true } };
+      App.data = structuredClone(original);
+      const envelope = { schema: 'elistly.full-backup', schemaVersion: 1, appVersion: 'after', exportedAt: '2026-08-13T00:00:00.000Z', metadata: { theme: null }, data: restored };
+      const candidate = App.parseFullBackupRestore(JSON.stringify(envelope));
+      const preview = App.fullBackupRestoreSummary(candidate);
+      let writes = 0;
+      const originalSave = Storage.setAppDataForImport;
+      Storage.setAppDataForImport = async data => { writes += 1; return structuredClone(data); };
+      await App.applyFullBackupRestore(candidate, {});
+      Storage.setAppDataForImport = originalSave;
+      return { candidate, preview, writes, data: App.data };
+    });
+    assert.deepEqual(observed.candidate, observed.data, 'the validated candidate must become the restored authoritative data');
+    assert.equal(observed.writes, 1, 'replace must invoke the authoritative persistence path once');
+    assert.match(observed.preview, /1 workspace, 1 category, 1 entity type, and 1 entity/, 'preview must truthfully summarize the replacement payload');
+    assert.deepEqual(observed.data.unknown, { retained: true }, 'unknown authoritative fields must survive restore');
+  });
+}
+
+async function testFullBackupRestoreRejectsUnsafePayloadBeforeMutation() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      const original = { version: 'before', settings: {}, workspaces: { old: { name: 'Old', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'old' };
+      App.data = structuredClone(original);
+      const unsafe = {
+        schema: 'elistly.full-backup',
+        schemaVersion: 1,
+        data: {
+          settings: {},
+          workspaces: {
+            restored: {
+              categories: {},
+              entityTypes: { computer: { fields: [] } },
+              entities: { laptop: { id: 'other', type: 'missing' } }
+            }
+          },
+          currentWorkspaceId: 'restored'
+        }
+      };
+      let message = null;
+      try { App.parseFullBackupRestore(JSON.stringify(unsafe)); } catch (error) { message = error.message; }
+      return { message, data: App.data };
+    });
+    assert.match(observed.message, /invalid/i);
+    assert.deepEqual(observed.data, { version: 'before', settings: {}, workspaces: { old: { name: 'Old', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'old' }, 'rejected previews must not mutate live data');
+  });
+}
+
+async function testFullBackupRestoreModalCancelsWithoutMutation() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      const original = { version: 'before', settings: {}, workspaces: { old: { name: 'Old', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'old' };
+      App.data = structuredClone(original);
+      App.showFullBackupRestoreModal();
+      document.querySelector('#fullBackupRestoreModal .btn-secondary').click();
+      return { data: App.data, visible: document.getElementById('fullBackupRestoreModal').classList.contains('show') };
+    });
+    assert.deepEqual(observed.data, { version: 'before', settings: {}, workspaces: { old: { name: 'Old', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'old' });
+    assert.equal(observed.visible, false, 'cancel must close without applying any candidate');
+  });
+}
+
 async function run() {
   await testFullBackupEnvelopeIsVersionedAndLossless();
   await testFullBackupSerializationAndDownloadContract();
   await testMalformedDataDoesNotDownloadABackup();
+  await testFullBackupRestorePreviewsThenReplacesThroughTheAuthoritativePath();
+  await testFullBackupRestoreRejectsUnsafePayloadBeforeMutation();
+  await testFullBackupRestoreModalCancelsWithoutMutation();
 }
 
 run()

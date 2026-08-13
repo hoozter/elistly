@@ -398,6 +398,7 @@ const Storage = {
       const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt: identity.expectedUpdatedAt ?? null }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
+      if (!row.payload || JSON.stringify(row.payload) !== JSON.stringify(data)) throw new Error('Imported data acknowledgement did not match the reviewed data.');
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
       try {
         this._cached = data;
@@ -3327,6 +3328,9 @@ const App = {
                     <button type="button" class="btn btn-secondary" id="profileExportAllBtn">
                       <span class="material-icons">download</span> Export all data
                     </button>
+                    <button type="button" class="btn btn-secondary" id="profileRestoreAllBtn">
+                      <span class="material-icons">upload</span> Restore full backup
+                    </button>
                     <button type="button" class="btn btn-secondary" id="profileResetDataBtn">
                       <span class="material-icons">refresh</span> Reset data
                     </button>
@@ -3442,9 +3446,11 @@ const App = {
 
         if (saveBtn) saveBtn.addEventListener('click', () => this.saveProfile());
         const exportAllBtn = document.getElementById('profileExportAllBtn');
+        const restoreAllBtn = document.getElementById('profileRestoreAllBtn');
         const resetDataBtn = document.getElementById('profileResetDataBtn');
         const deleteAccountBtn = document.getElementById('profileDeleteAccountBtn');
         if (exportAllBtn) exportAllBtn.addEventListener('click', () => this.exportAllData());
+        if (restoreAllBtn) restoreAllBtn.addEventListener('click', () => this.showFullBackupRestoreModal());
         if (resetDataBtn) resetDataBtn.addEventListener('click', () => this.showResetDataModal());
         if (deleteAccountBtn) deleteAccountBtn.addEventListener('click', () => this.showDeleteAccountModal());
         if (disableTOTPBtn && totpFactorId) {
@@ -6788,6 +6794,69 @@ const App = {
         };
       },
 
+      parseFullBackupRestore(source) {
+        const parsed = this.parseImportJson(source);
+        if (parsed.duplicates.length) throw new Error('Invalid full backup: duplicate JSON members are not allowed.');
+        const envelope = parsed.value;
+        const invalid = message => { throw new Error(`Invalid full backup: ${message}`); };
+        const isObject = value => value && typeof value === 'object' && !Array.isArray(value);
+        const assertSafeValue = (value, path = '$') => {
+          if (Array.isArray(value)) return value.forEach((item, index) => assertSafeValue(item, `${path}[${index}]`));
+          if (!isObject(value)) return;
+          for (const [key, item] of Object.entries(value)) {
+            if (key === '__proto__' || key === 'prototype' || key === 'constructor') invalid(`reserved key at ${path}.`);
+            assertSafeValue(item, `${path}.${key}`);
+          }
+        };
+        if (!isObject(envelope) || envelope.schema !== 'elistly.full-backup' || envelope.schemaVersion !== 1) invalid('unsupported schema or version.');
+        assertSafeValue(envelope);
+        if (!isObject(envelope.data)) invalid('data must be an object.');
+        const data = envelope.data;
+        if (!isObject(data.settings) || !isObject(data.workspaces) || typeof data.currentWorkspaceId !== 'string' || !data.currentWorkspaceId) invalid('required top-level domains are missing.');
+        if (!Object.prototype.hasOwnProperty.call(data.workspaces, data.currentWorkspaceId)) invalid('current workspace does not exist.');
+        for (const [workspaceId, workspace] of Object.entries(data.workspaces)) {
+          if (!workspaceId || !isObject(workspace)) invalid('workspace is invalid.');
+          for (const domain of ['categories', 'entityTypes', 'entities']) if (!isObject(workspace[domain])) invalid(`workspace ${workspaceId} is missing ${domain}.`);
+          const types = workspace.entityTypes;
+          for (const [typeId, type] of Object.entries(types)) {
+            if (!typeId || !isObject(type) || !Array.isArray(type.fields)) invalid(`entity type ${typeId} is invalid.`);
+            for (const field of type.fields) if (!isObject(field)) invalid(`entity type ${typeId} has an invalid field.`);
+            if (typeof type.categoryId === 'string' && !Object.prototype.hasOwnProperty.call(workspace.categories, type.categoryId)) invalid(`entity type ${typeId} references a missing category.`);
+          }
+          for (const [entityId, entity] of Object.entries(workspace.entities)) {
+            if (!entityId || !isObject(entity) || entity.id !== entityId || typeof entity.type !== 'string' || !Object.prototype.hasOwnProperty.call(types, entity.type)) invalid(`entity ${entityId} is invalid or references a missing type.`);
+            const associations = types[entity.type].associations;
+            if (Array.isArray(associations)) for (const association of associations) {
+              const name = association && association.name;
+              const targetType = association && association.association && association.association.targetType;
+              if (typeof name === 'string' && typeof targetType === 'string' && entity[name] != null) {
+                const target = workspace.entities[entity[name]];
+                if (!target || target.type !== targetType) invalid(`entity ${entityId} has a dangling association.`);
+              }
+            }
+          }
+        }
+        return JSON.parse(JSON.stringify(data));
+      },
+
+      fullBackupRestoreSummary(data) {
+        let categories = 0, types = 0, entities = 0;
+        for (const workspace of Object.values(data.workspaces)) {
+          categories += Object.keys(workspace.categories).length;
+          types += Object.keys(workspace.entityTypes).length;
+          entities += Object.keys(workspace.entities).length;
+        }
+        const count = (value, singular) => `${value} ${singular}${value === 1 ? '' : 's'}`;
+        return `${count(Object.keys(data.workspaces).length, 'workspace')}, ${count(categories, 'category')}, ${count(types, 'entity type')}, and ${count(entities, 'entity')}`;
+      },
+
+      async applyFullBackupRestore(candidate, identity) {
+        if (!candidate || typeof candidate !== 'object') throw new Error('The backup preview is no longer valid.');
+        await Storage.setAppDataForImport(candidate, identity);
+        this.data = candidate;
+        return true;
+      },
+
       /** Download a complete, versioned account-data backup without account identity or runtime state. */
       exportAllData() {
         let payload;
@@ -6809,6 +6878,73 @@ const App = {
         URL.revokeObjectURL(url);
         this.showSnackbar('Full backup downloaded.');
         return true;
+      },
+
+      showFullBackupRestoreModal() {
+        this.closeModal('profileModal');
+        const existing = document.getElementById('fullBackupRestoreModal');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.innerHTML = `
+          <div class="modal" id="fullBackupRestoreModal" data-persistent>
+            <div class="modal-content modal-content-narrow">
+              <button class="modal-close" onclick="App.closeModal('fullBackupRestoreModal')"><span class="material-icons">close</span></button>
+              <div class="modal-header"><h3>Restore full backup</h3></div>
+              <div class="modal-body">
+                <p>Select an Elistly full-backup v1 file. The preview is read-only. Replacing data cannot be undone.</p>
+                <input type="file" id="fullBackupRestoreInput" accept="application/json,.json">
+                <div id="fullBackupRestorePreview" class="import-preview-area u-mt-100"></div>
+              </div>
+              <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('fullBackupRestoreModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="fullBackupRestoreReplaceBtn" disabled>Replace account data</button>
+              </div>
+            </div>
+          </div>`;
+        document.body.appendChild(div.firstElementChild);
+        const input = document.getElementById('fullBackupRestoreInput');
+        const preview = document.getElementById('fullBackupRestorePreview');
+        const replace = document.getElementById('fullBackupRestoreReplaceBtn');
+        let candidate = null;
+        let identity = null;
+        const reject = message => { candidate = null; identity = null; replace.disabled = true; preview.textContent = message; };
+        input.addEventListener('change', () => {
+          const file = input.files[0];
+          if (!file) return;
+          if (file.size > this.importLimits.maxBytes) return reject('Backup file exceeds the 1 MiB limit.');
+          const reader = new FileReader();
+          reader.onerror = () => reject('Backup file could not be read.');
+          reader.onload = async () => {
+            try {
+              candidate = this.parseFullBackupRestore(reader.result);
+              if (backendClient) {
+                identity = await Storage.getImportIdentity();
+                if (Storage._readOutbox(identity.userId).length) throw new Error('Resolve pending account changes before restoring a backup.');
+              }
+              preview.textContent = `Ready to replace account data: ${this.fullBackupRestoreSummary(candidate)}.`;
+              replace.disabled = false;
+            } catch (error) { reject(error.message || 'Backup is invalid.'); }
+          };
+          reader.readAsText(file);
+        });
+        replace.addEventListener('click', async () => {
+          if (!candidate || replace.disabled) return;
+          replace.disabled = true;
+          try {
+            if (backendClient) {
+              const activeIdentity = await Storage.getImportIdentity();
+              if (!identity || activeIdentity.userId !== identity.userId || activeIdentity.accessToken !== identity.accessToken || Storage._readOutbox(identity.userId).length) throw new Error('Restore is stale or pending changes need resolution. Review the backup again.');
+            }
+            await this.applyFullBackupRestore(candidate, identity);
+            this.closeModal('fullBackupRestoreModal');
+            this.loadView('dashboard');
+            this.showNotification('Full backup restored.', 'success');
+          } catch (error) {
+            replace.disabled = false;
+            preview.textContent = `Restore was not saved; current data is unchanged. ${error.message || ''}`;
+          }
+        });
+        this.showModal('fullBackupRestoreModal');
       },
 
       /** Reset data modal: type RESET to clear all app data (categories, entities, settings). */
