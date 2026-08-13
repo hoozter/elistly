@@ -74,7 +74,7 @@
       items: [
         {
           q: 'How do I export my data?',
-          a: 'Settings → Data → Export downloads selected entity types, categories, entities, and optional settings as JSON. The current selective export and Profile → Export all data use different envelopes, so a guaranteed full round-trip restore remains roadmap work.'
+          a: 'Settings → Data → Export downloads selected entity types, categories, entities, and optional settings as JSON. Profile → Export all data downloads a schema-versioned full-account backup envelope containing all stored inventory data and restorable metadata. Restore from that backup remains roadmap work.'
         },
         {
           q: 'How do I import data?',

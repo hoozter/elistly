@@ -19,7 +19,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Search** — Find items by name from the header.
 - **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. Pending account edits survive reload in a local outbox and replay after reconnect. Concurrent edits use whole-document revisions, so a stale write remains local and is reported as a conflict rather than automatically merged.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
-- **Profile** — Download an account export, reset data (clear app data, keep account), or delete the account. The current export is not yet a guaranteed round-trip restore format. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
+- **Profile** — Download a versioned full-account backup envelope, reset data (clear app data, keep account), or delete the account. Restore from this backup is not implemented yet. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
 - **Windows Device Intake** — Settings provides the disclosed local-only collector download. In a new Computer form, **Import collected information** validates a saved report and fills only compatible existing draft fields; the ordinary Save action creates the Computer. The collector needs no administrator access and performs no network or directory lookup.
 
 ## Quick install

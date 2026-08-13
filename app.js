@@ -459,6 +459,10 @@ const defaultData = {
   entities: (PRESETS.it && PRESETS.it.entities) ? PRESETS.it.entities : {}
 };
 
+const FULL_BACKUP_EXCLUDED_TOP_LEVEL_KEYS = new Set([
+  'isAdmin', 'auth', 'accessToken', 'refreshToken', 'runtimeConfig', 'outbox', 'cache'
+]);
+
 // Sample data is loaded from sample-data.js (optional). Fallback if not loaded.
 if (typeof window.SAMPLE_ENTITIES === 'undefined') {
   window.SAMPLE_ENTITIES = { library: {}, it: {}, staff: {}, property: {}, blank: {} };
@@ -6756,33 +6760,55 @@ const App = {
           });
         });
       },
-      /** Export full account data: user info, app data, theme. For backup or portability. */
-      async exportAllData() {
-        const { data: { user } } = await backendClient.auth.getUser();
-        const theme = typeof localStorage !== 'undefined' ? localStorage.getItem('theme') : null;
-        const payload = {
-          version: this.data.version,
+      createFullBackupEnvelope() {
+        if (!this.data || typeof this.data !== 'object' || Array.isArray(this.data)) {
+          throw new Error('Current app data cannot be backed up safely.');
+        }
+        let data;
+        try {
+          data = JSON.parse(JSON.stringify(this.data));
+        } catch (_) {
+          throw new Error('Current app data cannot be backed up safely.');
+        }
+        if (!data || typeof data.settings !== 'object' || !data.settings || Array.isArray(data.settings)
+          || typeof data.workspaces !== 'object' || !data.workspaces || Array.isArray(data.workspaces)
+          || typeof data.currentWorkspaceId !== 'string') {
+          throw new Error('Current app data cannot be backed up safely.');
+        }
+        for (const key of FULL_BACKUP_EXCLUDED_TOP_LEVEL_KEYS) delete data[key];
+        return {
+          schema: 'elistly.full-backup',
+          schemaVersion: 1,
+          appVersion: typeof data.version === 'string' ? data.version : CURRENT_VERSION,
           exportedAt: new Date().toISOString(),
-          user: user ? { id: user.id, email: user.email, user_metadata: user.user_metadata } : null,
-          theme: theme || undefined,
-          appData: {
-            categories: this.data.categories,
-            entityTypes: this.data.entityTypes,
-            entities: this.data.entities,
-            settings: this.data.settings
-          }
+          metadata: {
+            theme: typeof localStorage === 'undefined' ? null : localStorage.getItem('theme')
+          },
+          data
         };
+      },
+
+      /** Download a complete, versioned account-data backup without account identity or runtime state. */
+      exportAllData() {
+        let payload;
+        try {
+          payload = this.createFullBackupEnvelope();
+        } catch (error) {
+          this.showNotification(error.message, 'error');
+          return false;
+        }
         const data = JSON.stringify(payload, null, 2);
         const blob = new Blob([data], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `elistly-full-export-${new Date().toISOString().split('T')[0]}.json`;
+        a.download = `elistly-full-backup-v1-${new Date().toISOString().split('T')[0]}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.showSnackbar('Export downloaded.');
+        this.showSnackbar('Full backup downloaded.');
+        return true;
       },
 
       /** Reset data modal: type RESET to clear all app data (categories, entities, settings). */
