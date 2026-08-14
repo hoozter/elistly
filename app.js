@@ -1699,6 +1699,38 @@ const App = {
         return `data-elistly-click-action="${actionId}"`;
       },
 
+      clearBulkSelection() {
+        this._selectedEntityIds = new Set();
+        this._bulkSelectionContext = null;
+      },
+
+      updateBulkSelection(categoryId, typeId, entities) {
+        const context = `${categoryId}:${typeId}`;
+        if (this._bulkSelectionContext !== context) {
+          this._selectedEntityIds = new Set();
+          this._bulkSelectionContext = context;
+        }
+        const visibleIds = new Set(entities.map(entity => entity.id));
+        this._selectedEntityIds = new Set([...(this._selectedEntityIds || [])].filter(id => visibleIds.has(id)));
+        this._visibleBulkSelectionEntities = entities;
+      },
+
+      renderBulkSelectionToolbar(typeId, entities) {
+        const selectedCount = this._selectedEntityIds?.size || 0;
+        const allSelected = entities.length > 0 && selectedCount === entities.length;
+        return `<div class="bulk-selection-toolbar" data-bulk-selection-toolbar>
+          <label><input type="checkbox" data-select-all-visible aria-label="Select all visible entities" ${allSelected ? 'checked' : ''} ${typeId ? '' : 'disabled'}> Select all visible</label>
+          <span data-selected-count>${selectedCount} selected</span>
+          <button type="button" class="btn btn-secondary" data-selected-csv-export ${selectedCount && typeId ? '' : 'disabled'}>Export selected CSV</button>
+        </div>`;
+      },
+
+      renderSelectableEntityMiniCard(entity) {
+        const title = this.getEntityCardTitle(entity) || entity.id;
+        const selected = this._selectedEntityIds?.has(entity.id);
+        return `<div class="bulk-selectable-entity"><label class="bulk-entity-checkbox"><input type="checkbox" data-entity-selection value="${this.escapeHtmlText(entity.id)}" aria-label="Select ${this.escapeHtmlText(title)}" ${selected ? 'checked' : ''}> Select</label>${this.renderEntityMiniCard(entity)}</div>`;
+      },
+
       viewActionAttribute(view) {
         const actionId = this.registerClickAction(() => this.loadView(view));
         return `data-elistly-click-action="${actionId}"`;
@@ -3021,7 +3053,10 @@ const App = {
         const entities = this.sortEntities(this.renderEntityList(categoryId, typeId, filters, query), typeId, sort);
         const results = document.querySelector('[data-filter-results]');
         const count = document.querySelector('[data-filter-result-count]');
-        if (results) results.innerHTML = entities.length ? `<div class="gallery-cards">${entities.map(entity => this.renderEntityMiniCard(entity)).join('')}</div>` : '<p class="empty-state">No matching items found</p>';
+        this.updateBulkSelection(categoryId, typeId, entities);
+        const toolbar = document.querySelector('[data-bulk-selection-toolbar]');
+        if (toolbar) toolbar.outerHTML = this.renderBulkSelectionToolbar(typeId, entities);
+        if (results) results.innerHTML = entities.length ? `<div class="gallery-cards">${entities.map(entity => this.renderSelectableEntityMiniCard(entity)).join('')}</div>` : '<p class="empty-state">No matching items found</p>';
         if (count) count.textContent = `${entities.length} item${entities.length === 1 ? '' : 's'}`;
       },
       
@@ -3089,6 +3124,7 @@ const App = {
               </div>
               <div class="entity-list">
                 ${this.renderAdvancedFilterControls(categoryId)}
+                ${this.renderBulkSelectionToolbar('', [])}
                 <div data-filter-results></div>
               </div>
             </div>
@@ -3107,6 +3143,25 @@ const App = {
         if (clearButton) clearButton.addEventListener('click', () => {
           if (typeControl) typeControl.value = '';
           this.updateAdvancedFilterControls();
+        });
+        mainContent.addEventListener('change', event => {
+          const entitySelection = event.target.closest('[data-entity-selection]');
+          if (entitySelection) {
+            if (!this._selectedEntityIds) this._selectedEntityIds = new Set();
+            if (entitySelection.checked) this._selectedEntityIds.add(entitySelection.value);
+            else this._selectedEntityIds.delete(entitySelection.value);
+            this.updateAdvancedFilterResults();
+            return;
+          }
+          if (event.target.matches('[data-select-all-visible]')) {
+            this._selectedEntityIds = event.target.checked ? new Set((this._visibleBulkSelectionEntities || []).map(entity => entity.id)) : new Set();
+            this.updateAdvancedFilterResults();
+          }
+        });
+        mainContent.addEventListener('click', event => {
+          if (!event.target.closest('[data-selected-csv-export]')) return;
+          const typeId = typeControl?.value || '';
+          if (typeId && this._selectedEntityIds?.size) this.downloadSelectedCategoryCsvExport(categoryId, typeId, this._visibleBulkSelectionEntities || []);
         });
         this.updateAdvancedFilterResults();
         this.ensureMainContentScrollable();
@@ -7116,7 +7171,7 @@ const App = {
         return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
       },
 
-      createCategoryCsvExport(categoryId, typeId) {
+      createCategoryCsvExport(categoryId, typeId, entitySource) {
         const category = this.data?.categories?.[categoryId];
         const type = this.data?.entityTypes?.[typeId];
         if (!category || !type || !this.getEntityTypeCategoryIds(type).includes(categoryId)) throw new Error('Choose a category and entity type to export.');
@@ -7129,7 +7184,7 @@ const App = {
           ...associations.map(association => ({ name: association.name, label: association.label || association.name, association: true }))
         ];
         if (columns.length > limits.maxColumns) throw new Error(`CSV export exceeds the ${limits.maxColumns}-column limit.`);
-        const entities = Object.values(this.data.entities || {}).filter(entity => entity && entity.type === typeId);
+        const entities = (entitySource || Object.values(this.data.entities || {})).filter(entity => entity && entity.type === typeId);
         if (entities.length > limits.maxRows) throw new Error(`CSV export exceeds the ${limits.maxRows}-row limit.`);
         const associationCell = (entity, association) => {
           const ids = Array.isArray(entity[association.name]) ? entity[association.name] : [entity[association.name]];
@@ -7146,9 +7201,14 @@ const App = {
         return { filename: `elistly-${this.csvExportSlug(category.label || category.id)}-${this.csvExportSlug(type.label || type.id)}-inventory.csv`, mimeType: 'text/csv;charset=utf-8', content };
       },
 
-      downloadCategoryCsvExport(categoryId, typeId) {
-        let exportFile;
-        try { exportFile = this.createCategoryCsvExport(categoryId, typeId); } catch (error) { this.showNotification(error.message, 'error'); return false; }
+      createSelectedCategoryCsvExport(categoryId, typeId, visibleEntities) {
+        const selectedIds = this._selectedEntityIds || new Set();
+        const entities = (visibleEntities || []).filter(entity => selectedIds.has(entity.id));
+        const exportFile = this.createCategoryCsvExport(categoryId, typeId, entities);
+        return { ...exportFile, filename: exportFile.filename.replace(/-inventory\.csv$/, '-selected.csv') };
+      },
+
+      downloadCsvExport(exportFile, successMessage) {
         const url = URL.createObjectURL(new Blob([exportFile.content], { type: exportFile.mimeType }));
         const link = document.createElement('a');
         link.href = url;
@@ -7157,8 +7217,20 @@ const App = {
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        this.showSnackbar('Inventory CSV downloaded.');
+        this.showSnackbar(successMessage);
         return true;
+      },
+
+      downloadCategoryCsvExport(categoryId, typeId) {
+        let exportFile;
+        try { exportFile = this.createCategoryCsvExport(categoryId, typeId); } catch (error) { this.showNotification(error.message, 'error'); return false; }
+        return this.downloadCsvExport(exportFile, 'Inventory CSV downloaded.');
+      },
+
+      downloadSelectedCategoryCsvExport(categoryId, typeId, visibleEntities) {
+        let exportFile;
+        try { exportFile = this.createSelectedCategoryCsvExport(categoryId, typeId, visibleEntities); } catch (error) { this.showNotification(error.message, 'error'); return false; }
+        return this.downloadCsvExport(exportFile, 'Selected inventory CSV downloaded.');
       },
 
       csvImportLimits: { maxBytes: 10 * 1024 * 1024, maxCharacters: 10 * 1024 * 1024, maxRows: 10000, maxColumns: 200, maxCellLength: 100000, maxCells: 2000000 },
