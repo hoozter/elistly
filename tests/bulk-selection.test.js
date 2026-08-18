@@ -115,10 +115,87 @@ async function testSelectionComposesWithVisibleFiltersAndResetsWithoutSaving() {
   });
 }
 
+async function testSelectedDeletionRequiresExplicitConfirmation() {
+  await withPage(async page => {
+    await page.evaluate(() => {
+      App.data = { settings: {}, categories: { devices: { id: 'devices', label: 'Devices', icon: 'devices' } }, entityTypes: { computer: { id: 'computer', label: 'Computer', categories: ['devices'], fields: [] } }, entities: { alpha: { id: 'alpha', type: 'computer', name: 'Alpha laptop' }, beta: { id: 'beta', type: 'computer', name: 'Beta laptop' } } };
+      window.__saveCalls = 0;
+      App.saveData = () => { window.__saveCalls += 1; };
+      App.renderCategoryView('devices');
+      document.getElementById('authSignInModal')?.remove();
+    });
+    await page.locator('[data-filter-type]').selectOption('computer');
+    await page.locator('[data-select-all-visible]').check();
+    assert.equal(await page.locator('[data-selected-delete]').count(), 1, 'selection toolbar provides deletion action');
+    await page.locator('[data-selected-delete]').click();
+    assert.deepEqual(await page.evaluate(() => ({
+      message: document.getElementById('confirmMessage')?.textContent,
+      entities: Object.keys(App.data.entities).sort(),
+      saves: window.__saveCalls
+    })), { message: 'Delete 2 selected items? This cannot be undone.', entities: ['alpha', 'beta'], saves: 0 });
+    await page.locator('#confirmModal .btn.btn-secondary').click();
+    assert.deepEqual(await page.evaluate(() => ({
+      count: document.querySelector('[data-selected-count]').textContent,
+      entities: Object.keys(App.data.entities).sort(),
+      saves: window.__saveCalls
+    })), { count: '2 selected', entities: ['alpha', 'beta'], saves: 0 });
+  });
+}
+
+async function testSelectedDeletionRemovesOnlyTheConfirmedSetAndPersists() {
+  await withPage(async page => {
+    await page.evaluate(() => {
+      App.data = { settings: { keep: true }, categories: { devices: { id: 'devices', label: 'Devices', icon: 'devices' }, people: { id: 'people', label: 'People', icon: 'group' } }, entityTypes: { computer: { id: 'computer', label: 'Computer', categories: ['devices'], fields: [] }, person: { id: 'person', label: 'Person', categories: ['people'], fields: [] } }, entities: { alpha: { id: 'alpha', type: 'computer', name: 'Alpha laptop' }, beta: { id: 'beta', type: 'computer', name: 'Beta laptop' }, person: { id: 'person', type: 'person', name: 'Ada', deviceId: 'alpha' } } };
+      window.__saveCalls = 0;
+      App.saveData = () => { window.__saveCalls += 1; };
+      App.renderCategoryView('devices');
+      document.getElementById('authSignInModal')?.remove();
+    });
+    await page.locator('[data-filter-type]').selectOption('computer');
+    await page.locator('[data-entity-selection][value="alpha"]').check();
+    await page.locator('[data-selected-delete]').click();
+    await page.locator('#confirmButton').click();
+    assert.deepEqual(await page.evaluate(() => ({
+      count: App._selectedEntityIds.size,
+      entities: Object.keys(App.data.entities).sort(),
+      linkedDevice: App.data.entities.person.deviceId,
+      categories: Object.keys(App.data.categories).sort(),
+      settings: App.data.settings,
+      saves: window.__saveCalls
+    })), { count: 0, entities: ['beta', 'person'], linkedDevice: 'alpha', categories: ['devices', 'people'], settings: { keep: true }, saves: 1 });
+  });
+}
+
+async function testSelectedDeletionKeepsLocalStateCoherentWhenPersistenceFails() {
+  await withPage(async page => {
+    await page.evaluate(() => {
+      App.data = { settings: {}, categories: { devices: { id: 'devices', label: 'Devices', icon: 'devices' } }, entityTypes: { computer: { id: 'computer', label: 'Computer', categories: ['devices'], fields: [] } }, entities: { alpha: { id: 'alpha', type: 'computer', name: 'Alpha laptop' }, beta: { id: 'beta', type: 'computer', name: 'Beta laptop' } } };
+      window.__notifications = [];
+      App.showNotification = (message, kind) => window.__notifications.push({ message, kind });
+      Storage.setAppData = () => Promise.reject(new Error('persistence unavailable'));
+      App.renderCategoryView('devices');
+      document.getElementById('authSignInModal')?.remove();
+    });
+    await page.locator('[data-filter-type]').selectOption('computer');
+    await page.locator('[data-entity-selection][value="alpha"]').check();
+    await page.locator('[data-selected-delete]').click();
+    await page.locator('#confirmButton').click();
+    await page.waitForFunction(() => window.__notifications.some(notification => notification.kind === 'error'));
+    assert.deepEqual(await page.evaluate(() => ({
+      count: App._selectedEntityIds.size,
+      entities: Object.keys(App.data.entities).sort(),
+      errors: window.__notifications.filter(notification => notification.kind === 'error').map(notification => notification.message)
+    })), { count: 0, entities: ['beta'], errors: ['Your changes could not be saved. Your local changes are still open.'] });
+  });
+}
+
 async function run() {
   await testCategoryViewProvidesAccessibleLocalBulkSelectionControls();
   await testSelectedCsvExportUsesVisibleSortedEntitiesAndExistingSafeSerializer();
   await testSelectionComposesWithVisibleFiltersAndResetsWithoutSaving();
+  await testSelectedDeletionRequiresExplicitConfirmation();
+  await testSelectedDeletionRemovesOnlyTheConfirmedSetAndPersists();
+  await testSelectedDeletionKeepsLocalStateCoherentWhenPersistenceFails();
 }
 
 run().then(() => console.log('PASS bulk selection')).catch(error => { console.error(`FAIL bulk selection: ${error.stack || error.message}`); process.exitCode = 1; });

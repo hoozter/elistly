@@ -1170,6 +1170,18 @@ const App = {
       setupEventListeners() {
         // Handle URL routing
         window.addEventListener('popstate', (e) => this.handleRouting());
+
+        document.addEventListener('keydown', (e) => {
+          const editableTarget = e.target?.closest?.('input, textarea, select, [contenteditable="true"]');
+          const searchShortcut = (e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !editableTarget);
+          if (!searchShortcut) return;
+          const searchInput = document.getElementById('searchInput');
+          if (!searchInput) return;
+          e.preventDefault();
+          document.body.classList.add('search-expanded');
+          searchInput.focus();
+          searchInput.select();
+        });
         
         // Settings button is wired via onclick in HTML
         // Profile dropdown is wired in initProfileDropdown when the auth session is ready.
@@ -1722,7 +1734,26 @@ const App = {
           <label><input type="checkbox" data-select-all-visible aria-label="Select all visible entities" ${allSelected ? 'checked' : ''} ${typeId ? '' : 'disabled'}> Select all visible</label>
           <span data-selected-count>${selectedCount} selected</span>
           <button type="button" class="btn btn-secondary" data-selected-csv-export ${selectedCount && typeId ? '' : 'disabled'}>Export selected CSV</button>
+          <button type="button" class="btn btn-danger" data-selected-delete ${selectedCount && typeId ? '' : 'disabled'}>Delete selected</button>
         </div>`;
+      },
+
+      confirmDeleteSelectedEntities(categoryId) {
+        const selectedIds = [...(this._selectedEntityIds || [])].filter(id => this.data.entities[id]);
+        if (!selectedIds.length) return;
+        this.showConfirmModal({
+          title: `Delete ${selectedIds.length} selected item${selectedIds.length === 1 ? '' : 's'}?`,
+          message: `Delete ${selectedIds.length} selected item${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`,
+          confirmLabel: 'Delete selected',
+          confirmVariant: 'danger',
+          onConfirm: () => {
+            selectedIds.forEach(id => delete this.data.entities[id]);
+            this.saveData();
+            this.clearBulkSelection();
+            this.loadView(categoryId || 'dashboard');
+            this.showNotification(`${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'} deleted successfully`, 'success');
+          }
+        });
       },
 
       renderSelectableEntityMiniCard(entity) {
@@ -3159,9 +3190,12 @@ const App = {
           }
         });
         mainContent.addEventListener('click', event => {
-          if (!event.target.closest('[data-selected-csv-export]')) return;
-          const typeId = typeControl?.value || '';
-          if (typeId && this._selectedEntityIds?.size) this.downloadSelectedCategoryCsvExport(categoryId, typeId, this._visibleBulkSelectionEntities || []);
+          if (event.target.closest('[data-selected-csv-export]')) {
+            const typeId = typeControl?.value || '';
+            if (typeId && this._selectedEntityIds?.size) this.downloadSelectedCategoryCsvExport(categoryId, typeId, this._visibleBulkSelectionEntities || []);
+          } else if (event.target.closest('[data-selected-delete]')) {
+            this.confirmDeleteSelectedEntities(categoryId);
+          }
         });
         this.updateAdvancedFilterResults();
         this.ensureMainContentScrollable();
