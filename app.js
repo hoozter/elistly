@@ -565,14 +565,7 @@ const App = {
             }
           }
           await this.initProfileDropdown(session.user);
-          const params = new URLSearchParams(window.location.search);
-          if (params.get('type') === 'verify_secondary_email' && params.get('token')) {
-            await this.confirmSecondaryEmailVerification(params.get('token'));
-          }
-          if (await this.requiresMFAVerification()) {
-            this.showMFAVerifyModal();
-            return;
-          }
+
         }
 
         var savedTheme = localStorage.getItem('theme');
@@ -829,7 +822,7 @@ const App = {
       <div class="form-group auth-password-row">
         <label for="authSignInPassword">Password</label>
         <input type="password" id="authSignInPassword" class="auth-input" required placeholder="••••••••" autocomplete="current-password">
-        <a href="#" class="auth-forgot" onclick="event.preventDefault(); App.showForgotPasswordModal();">Forgot password?</a>
+
       </div>
       <div id="authSignInError" class="auth-error hidden"></div>
       <div id="authSignInResendBlock" class="auth-resend-block hidden">
@@ -886,52 +879,6 @@ const App = {
         this.showModal('authSignUpModal');
       },
 
-      showForgotPasswordModal() {
-        const existing = document.getElementById('authForgotModal');
-        if (existing) existing.remove();
-        const html = `
-<div class="modal auth-modal inline-flex-display" id="authForgotModal" data-persistent>
-  <div class="auth-modal-card">
-    <div class="auth-modal-brand">
-      <span class="material-icons auth-modal-icon">lock_reset</span>
-      <h2 class="auth-modal-title">Reset password</h2>
-      <p class="auth-modal-tagline">Enter your email and we'll send a reset link</p>
-    </div>
-    <form id="authForgotForm" class="auth-form" onsubmit="event.preventDefault(); App.handleForgotPassword(document.getElementById('authForgotEmail').value);">
-      <div class="form-group">
-        <label for="authForgotEmail">Email</label>
-        <input type="email" id="authForgotEmail" class="auth-input" required placeholder="you@example.com" autocomplete="email">
-      </div>
-      <div id="authForgotError" class="auth-error hidden"></div>
-      <div id="authForgotSuccess" class="auth-success hidden"></div>
-      <button type="submit" class="btn btn-primary auth-submit" id="authForgotBtn">Send reset link</button>
-    </form>
-    <p class="auth-modal-footer"><button type="button" class="btn-link" onclick="App.closeModal('authForgotModal'); App.showSignInModal();">Back to sign in</button></p>
-  </div>
-</div>`;
-        const div = document.createElement('div');
-        div.innerHTML = html.trim();
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('authForgotModal');
-      },
-
-      async handleForgotPassword(email) {
-        if (!backendClient) return;
-        const errEl = document.getElementById('authForgotError');
-        const successEl = document.getElementById('authForgotSuccess');
-        const btn = document.getElementById('authForgotBtn');
-        if (errEl) errEl.style.display = 'none';
-        if (successEl) successEl.style.display = 'none';
-        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-        const { error } = await backendClient.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + '/' });
-        if (btn) { btn.disabled = false; btn.textContent = 'Send reset link'; }
-        if (error) {
-          if (errEl) { errEl.textContent = error.message || 'Something went wrong'; errEl.style.display = 'block'; }
-          return;
-        }
-        if (successEl) { successEl.textContent = 'Check your email for the reset link.'; successEl.style.display = 'block'; }
-      },
-
       async handleSignIn(email, password) {
         if (!backendClient) return;
         const errEl = document.getElementById('authSignInError');
@@ -954,11 +901,6 @@ const App = {
             this.closeModal('authSignInModal');
             this.showEmailConfirmationModal(email, false);
           }
-          return;
-        }
-        if (await this.requiresMFAVerification()) {
-          this.closeModal('authSignInModal');
-          this.showMFAVerifyModal();
           return;
         }
         this.closeModal('authSignInModal');
@@ -3523,39 +3465,9 @@ const App = {
         if (!backendClient) return;
         const { data: { user } } = await backendClient.auth.getUser();
         if (!user) return;
-        let factors = { totp: [] };
-        try {
-          const f = await backendClient.auth.mfa.listFactors();
-          if (f.data) factors = f.data;
-        } catch (_) {}
         const meta = user.user_metadata || {};
         const fromProfile = await this.getDisplayName(user.id);
         const userName = fromProfile || meta.user_name || '';
-        const hasTOTP = factors.totp && factors.totp.length > 0;
-        const totpFactorId = hasTOTP ? factors.totp[0].id : null;
-        let secondaryEmails = Array.isArray(meta.secondary_emails) ? meta.secondary_emails : [];
-        if (secondaryEmails.length === 0 && meta.recovery_email) {
-          secondaryEmails = [{ email: String(meta.recovery_email), verified: false }];
-        }
-        const primaryEmail = (user.email || '').replace(/</g, '&lt;');
-        const secondaryRows = secondaryEmails.map((item, i) => {
-          const email = (item.email || '').replace(/</g, '&lt;');
-          const badge = item.verified ? 'Verified' : 'Unverified';
-          const badgeClass = item.verified ? 'profile-email-badge profile-email-badge-verified' : 'profile-email-badge';
-          const verifyItem = item.verified ? '' : '<button type="button" role="menuitem" class="profile-email-menuitem" data-action="send-verify">Send verification</button>';
-          return `<div class="profile-email-row profile-email-secondary" data-index="${i}" data-email="${email.replace(/"/g, '&quot;')}">
-  <span class="profile-email-value">${email}</span>
-  <span class="${badgeClass}">${badge}</span>
-  <div class="profile-email-menu-wrap">
-    <button type="button" class="profile-email-menu-btn" aria-label="Options" aria-haspopup="true"><span class="material-icons">more_vert</span></button>
-    <div class="profile-email-dropdown" role="menu">
-      <button type="button" role="menuitem" class="profile-email-menuitem" data-action="set-default">Set as default</button>
-      ${verifyItem}
-      <button type="button" role="menuitem" class="profile-email-menuitem profile-email-menuitem-danger" data-action="delete">Delete</button>
-    </div>
-  </div>
-</div>`;
-        }).join('');
 
         const modalHtml = `
           <div class="modal" id="profileModal">
@@ -3567,40 +3479,7 @@ const App = {
                 <h3>Profile</h3>
               </div>
               <div class="modal-body">
-                <section class="profile-section profile-section-email">
-                  <h4 class="profile-section-heading">Email</h4>
-                  <p class="profile-help profile-email-intro">A secondary email lets you recover access if you lose your primary one. It must be verified before it can be used for password reset.</p>
-                  <div class="profile-email-card">
-                    <div class="profile-email-row profile-email-primary">
-                      <span class="profile-email-value">${primaryEmail}</span>
-                      <span class="profile-email-badge">Primary</span>
-                      <div class="profile-email-menu-wrap">
-                        <button type="button" class="profile-email-menu-btn" id="profilePrimaryMenuBtn" aria-label="Options" aria-haspopup="true"><span class="material-icons">more_vert</span></button>
-                        <div class="profile-email-dropdown" id="profilePrimaryDropdown" role="menu">
-                          <button type="button" role="menuitem" class="profile-email-menuitem" data-action="change-email">Change email</button>
-                        </div>
-                      </div>
-                    </div>
-                    ${secondaryRows}
-                    <div id="profileChangeEmailBlock" class="profile-change-email-block hidden">
-                      <input type="email" id="profileNewEmail" placeholder="New primary email" class="profile-input">
-                      <div class="profile-inline-actions">
-                        <button type="button" class="btn btn-primary btn-sm" id="profileConfirmNewEmail">Send confirmation</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="profileCancelEmail">Cancel</button>
-                      </div>
-                    </div>
-                    <div class="profile-add-email-block">
-                      <button type="button" class="btn btn-primary btn-sm" id="profileAddEmailBtn">Add another email</button>
-                    </div>
-                    <div id="profileAddEmailForm" class="profile-add-email-form hidden">
-                      <input type="email" id="profileNewSecondaryEmail" placeholder="Secondary email address" class="profile-input">
-                      <div class="profile-inline-actions">
-                        <button type="button" class="btn btn-primary btn-sm" id="profileAddSecondarySubmit">Add</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="profileAddSecondaryCancel">Cancel</button>
-                      </div>
-                    </div>
-                  </div>
-                </section>
+
                 <section class="profile-section">
                   <h4 class="profile-section-heading">Display name</h4>
                   <div class="profile-section-content">
@@ -3608,18 +3487,7 @@ const App = {
                     <p class="profile-help">Shown in the header and when your account is referenced.</p>
                   </div>
                 </section>
-                <section class="profile-section" id="profile2FASection">
-                  <h4 class="profile-section-heading">Two-factor authentication</h4>
-                  ${hasTOTP ? `
-                    <p class="profile-help">Two-factor authentication is on (authenticator app).</p>
-                    <div class="profile-inline-actions">
-                      <button type="button" class="btn btn-secondary btn-sm" id="profileDisableTOTPBtn">Disable authenticator</button>
-                    </div>
-                  ` : `
-                    <p class="profile-help">Add an extra layer of security when signing in.</p>
-                    <button type="button" class="btn btn-primary" id="profileEnable2FABtn">Enable two-factor authentication</button>
-                  `}
-                </section>
+
                 <section class="profile-section profile-section-data">
                   <h4 class="profile-section-heading">Data &amp; account</h4>
                   <p class="profile-help">Export all your data (inventory, settings, theme). Reset clears only app data. Delete account removes your account and all data permanently.</p>
@@ -3651,98 +3519,11 @@ const App = {
         div.innerHTML = modalHtml;
         document.body.appendChild(div.firstElementChild);
         this.showModal('profileModal');
-        this.bindProfileModal(user, totpFactorId, secondaryEmails);
+        this.bindProfileModal(user);
       },
 
-      bindProfileModal(user, totpFactorId, secondaryEmails) {
+      bindProfileModal(user) {
         const saveBtn = document.getElementById('profileSaveBtn');
-        const changeEmailBlock = document.getElementById('profileChangeEmailBlock');
-        const newEmailInput = document.getElementById('profileNewEmail');
-        const confirmNewEmailBtn = document.getElementById('profileConfirmNewEmail');
-        const cancelEmailBtn = document.getElementById('profileCancelEmail');
-        const primaryMenuBtn = document.getElementById('profilePrimaryMenuBtn');
-        const primaryDropdown = document.getElementById('profilePrimaryDropdown');
-        const addEmailBtn = document.getElementById('profileAddEmailBtn');
-        const addEmailForm = document.getElementById('profileAddEmailForm');
-        const newSecondaryInput = document.getElementById('profileNewSecondaryEmail');
-        const addSecondarySubmit = document.getElementById('profileAddSecondarySubmit');
-        const addSecondaryCancel = document.getElementById('profileAddSecondaryCancel');
-        const disableTOTPBtn = document.getElementById('profileDisableTOTPBtn');
-
-        const closeAllEmailDropdowns = () => {
-          document.querySelectorAll('.profile-email-dropdown').forEach(d => d.classList.remove('open'));
-        };
-
-        if (primaryMenuBtn && primaryDropdown) {
-          primaryMenuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            primaryDropdown.classList.toggle('open');
-          });
-          const changeItem = primaryDropdown.querySelector('[data-action="change-email"]');
-          if (changeItem) changeItem.addEventListener('click', () => {
-            primaryDropdown.classList.remove('open');
-            if (changeEmailBlock) changeEmailBlock.style.display = 'block';
-          });
-        }
-        if (cancelEmailBtn) {
-          cancelEmailBtn.addEventListener('click', () => {
-            if (changeEmailBlock) changeEmailBlock.style.display = 'none';
-            if (newEmailInput) newEmailInput.value = '';
-          });
-        }
-        if (confirmNewEmailBtn && newEmailInput) {
-          confirmNewEmailBtn.addEventListener('click', async () => {
-            const email = newEmailInput.value.trim();
-            if (!email) return;
-            const { error } = await backendClient.auth.updateUser({ email });
-            if (error) {
-              this.showSnackbar(error.message || 'Failed to update email', true);
-              return;
-            }
-            this.showSnackbar('Confirmation sent to the new email address.');
-            this.closeModal('profileModal');
-            this.showProfileModal();
-          });
-        }
-
-        if (addEmailBtn && addEmailForm) {
-          addEmailBtn.addEventListener('click', () => {
-            addEmailForm.style.display = 'block';
-            if (newSecondaryInput) newSecondaryInput.value = '';
-          });
-        }
-        if (addSecondaryCancel && addEmailForm) {
-          addSecondaryCancel.addEventListener('click', () => { addEmailForm.style.display = 'none'; });
-        }
-        if (addSecondarySubmit && newSecondaryInput) {
-          addSecondarySubmit.addEventListener('click', () => this.addSecondaryEmail(newSecondaryInput.value.trim(), addEmailForm));
-        }
-
-        document.querySelectorAll('.profile-email-secondary').forEach(row => {
-          const menuBtn = row.querySelector('.profile-email-menu-btn');
-          const dropdown = row.querySelector('.profile-email-dropdown');
-          const index = parseInt(row.dataset.index, 10);
-          const email = (row.dataset.email || '').replace(/&quot;/g, '"');
-          if (!menuBtn || !dropdown) return;
-          menuBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeAllEmailDropdowns();
-            dropdown.classList.toggle('open');
-          });
-          dropdown.querySelectorAll('[data-action]').forEach(btn => {
-            btn.addEventListener('click', async () => {
-              dropdown.classList.remove('open');
-              const action = btn.dataset.action;
-              if (action === 'set-default') await this.setDefaultEmail(email);
-              else if (action === 'send-verify') await this.sendSecondaryVerification(email);
-              else if (action === 'delete') await this.removeSecondaryEmail(index);
-            });
-          });
-        });
-
-        const enable2FABtn = document.getElementById('profileEnable2FABtn');
-        if (enable2FABtn) enable2FABtn.addEventListener('click', () => this.showTwoFAModal());
-
         if (saveBtn) saveBtn.addEventListener('click', () => this.saveProfile());
         const exportAllBtn = document.getElementById('profileExportAllBtn');
         const restoreAllBtn = document.getElementById('profileRestoreAllBtn');
@@ -3752,26 +3533,6 @@ const App = {
         if (restoreAllBtn) restoreAllBtn.addEventListener('click', () => this.showFullBackupRestoreModal());
         if (resetDataBtn) resetDataBtn.addEventListener('click', () => this.showResetDataModal());
         if (deleteAccountBtn) deleteAccountBtn.addEventListener('click', () => this.showDeleteAccountModal());
-        if (disableTOTPBtn && totpFactorId) {
-          disableTOTPBtn.addEventListener('click', () => {
-            this.showConfirmModal({
-              title: 'Disable authenticator?',
-              message: 'You will no longer need a code to sign in.',
-              confirmLabel: 'Disable',
-              confirmVariant: 'danger',
-              onConfirm: async () => {
-                const { error } = await backendClient.auth.mfa.unenroll({ factorId: totpFactorId });
-                if (error) {
-                  this.showSnackbar(error.message || 'Failed to disable', true);
-                  return;
-                }
-                this.closeModal('profileModal');
-                this.showSnackbar('Two-factor authentication disabled.');
-                this.showProfileModal();
-              }
-            });
-          });
-        }
       },
 
       async saveProfile() {
@@ -3793,328 +3554,6 @@ const App = {
           userLine.innerHTML = '<span class="material-icons">person</span>' + (display || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
         }
       },
-
-      async addSecondaryEmail(email, formEl) {
-        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-          this.showSnackbar('Please enter a valid email address.', true);
-          return;
-        }
-        const { data: { user } } = await backendClient.auth.getUser();
-        if (!user) return;
-        const primary = (user.email || '').toLowerCase();
-        if (email.toLowerCase() === primary) {
-          this.showSnackbar('This is already your primary email.', true);
-          return;
-        }
-        const meta = user.user_metadata || {};
-        let list = Array.isArray(meta.secondary_emails) ? meta.secondary_emails : [];
-        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
-        if (list.some(item => (item.email || '').toLowerCase() === email.toLowerCase())) {
-          this.showSnackbar('That email is already added.', true);
-          return;
-        }
-        list.push({ email, verified: false });
-        const { error } = await backendClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
-        if (error) {
-          this.showSnackbar(error.message || 'Failed to add email', true);
-          return;
-        }
-        if (formEl) formEl.style.display = 'none';
-        this.showSnackbar('Secondary email added. Send verification so it can be used for recovery.');
-        this.closeModal('profileModal');
-        this.showProfileModal();
-      },
-
-      async removeSecondaryEmail(index) {
-        const { data: { user } } = await backendClient.auth.getUser();
-        if (!user) return;
-        const meta = user.user_metadata || {};
-        let list = Array.isArray(meta.secondary_emails) ? [...meta.secondary_emails] : [];
-        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
-        if (index < 0 || index >= list.length) return;
-        list.splice(index, 1);
-        const { error } = await backendClient.auth.updateUser({ data: { user_metadata: { ...meta, secondary_emails: list } } });
-        if (error) {
-          this.showSnackbar(error.message || 'Failed to remove email', true);
-          return;
-        }
-        this.closeModal('profileModal');
-        this.showProfileModal();
-      },
-
-      async setDefaultEmail(secondaryEmail) {
-        const { data: { user } } = await backendClient.auth.getUser();
-        if (!user) return;
-        const primary = user.email || '';
-        const meta = user.user_metadata || {};
-        let list = Array.isArray(meta.secondary_emails) ? [...meta.secondary_emails] : [];
-        if (meta.recovery_email && list.length === 0) list = [{ email: meta.recovery_email, verified: false }];
-        const idx = list.findIndex(item => (item.email || '').toLowerCase() === (secondaryEmail || '').toLowerCase());
-        if (idx < 0) return;
-        const [removed] = list.splice(idx, 1);
-        list.push({ email: primary, verified: false });
-        const { error } = await backendClient.auth.updateUser({
-          email: removed.email,
-          data: { user_metadata: { ...meta, secondary_emails: list } }
-        });
-        if (error) {
-          this.showSnackbar(error.message || 'Failed to set default email', true);
-          return;
-        }
-        this.showSnackbar('Confirmation sent to the new primary email.');
-        this.closeModal('profileModal');
-        this.showProfileModal();
-      },
-
-      async sendSecondaryVerification(email) {
-        try {
-          const res = await apiRequest('/secondary-email/send', { method: 'POST', body: { email } });
-          const data = res.data;
-          if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to send verification');
-          if (data && data.error) throw new Error(data.error);
-          this.showSnackbar('Verification email sent. Check the inbox for that address.');
-        } catch (e) {
-          this.showSnackbar((e && e.message) || 'Failed to send verification.', true);
-        }
-        document.querySelectorAll('.profile-email-dropdown').forEach(d => d.classList.remove('open'));
-      },
-
-      async confirmSecondaryEmailVerification(token) {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('type');
-        url.searchParams.delete('token');
-        window.history.replaceState({}, '', url.toString());
-        try {
-          const res = await apiRequest('/secondary-email/confirm', { method: 'POST', body: { token } });
-          const data = res.data;
-          if (!res.ok) throw new Error((res.data && res.data.error) || 'Verification failed');
-          if (data && data.error) throw new Error(data.error);
-          this.showSnackbar('Secondary email verified. You can use it for account recovery.');
-        } catch (e) {
-          this.showSnackbar('Verification could not be completed. The link may have expired.', true);
-        }
-      },
-
-      async showTwoFAModal() {
-        if (!backendClient) return;
-        const modalHtml = `
-          <div class="modal" id="twoFAModal">
-            <div class="modal-content profile-modal-content">
-              <button class="modal-close" onclick="App.closeModal('twoFAModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Enable Two-Factor Authentication</h3>
-              </div>
-              <div class="modal-body">
-                <div id="twoFAStepIntro" class="profile-2fa-step">
-                  <p class="profile-help profile-2fa-intro">Two‑factor authentication uses an authenticator app to generate sign‑in codes.</p>
-                  <button type="button" class="btn btn-primary" id="twoFAStartTotp">Start setup</button>
-                </div>
-                <div id="twoFAStepTotp" class="profile-2fa-step profile-2fa-totp-setup hidden">
-                  <div id="twoFATOTPLoading" class="profile-2fa-totp-loading">
-                    <span class="profile-2fa-spinner"></span>
-                    <p class="profile-help">Setting up authenticator…</p>
-                  </div>
-                  <div id="twoFATOTPContent" class="profile-2fa-totp-content hidden">
-                    <p class="profile-help">Scan the QR code with your authenticator app, or enter the code manually if you're on the same device.</p>
-                    <div id="twoFATOTPQR" class="profile-totp-qr"></div>
-                    <div class="profile-2fa-secret-row">
-                      <label class="profile-help">Can't scan? Enter this code in your app:</label>
-                      <div class="profile-2fa-secret-wrap">
-                        <code id="twoFATOTPSecret" class="profile-totp-secret"></code>
-                        <button type="button" class="btn btn-secondary btn-sm" id="twoFATOTPCopySecret">Copy</button>
-                      </div>
-                    </div>
-                    <div class="profile-2fa-verify-row">
-                      <label class="profile-help">Enter the 6-digit code from your app:</label>
-                      <input type="text" id="twoFATOTPCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
-                      <button type="button" class="btn btn-primary" id="twoFATOTPVerify">Verify and enable</button>
-                    </div>
-                    <p id="twoFATOTPError" class="profile-error hidden"></p>
-                    <button type="button" class="btn btn-secondary btn-sm profile-2fa-back" id="twoFABackFromTotp">Back</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        `;
-        const existing = document.getElementById('twoFAModal');
-        if (existing) existing.remove();
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('twoFAModal');
-
-        const showStep = (stepId) => {
-          ['twoFAStepIntro', 'twoFAStepTotp'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.style.display = id === stepId ? 'block' : 'none';
-          });
-        };
-        showStep('twoFAStepIntro');
-
-        const startTotp = document.getElementById('twoFAStartTotp');
-        const backFromTotp = document.getElementById('twoFABackFromTotp');
-        const copySecret = document.getElementById('twoFATOTPCopySecret');
-        const verifyBtn = document.getElementById('twoFATOTPVerify');
-
-        if (startTotp) startTotp.addEventListener('click', async () => {
-          showStep('twoFAStepTotp');
-          await this.startTwoFATOTPSetup();
-        });
-        if (backFromTotp) backFromTotp.addEventListener('click', () => {
-          this._totpEnrollData = null;
-          showStep('twoFAStepIntro');
-        });
-
-        if (copySecret) copySecret.addEventListener('click', () => {
-          const secretEl = document.getElementById('twoFATOTPSecret');
-          if (!secretEl || !secretEl.textContent) return;
-          navigator.clipboard.writeText(secretEl.textContent).then(() => {
-            copySecret.textContent = 'Copied';
-            setTimeout(() => { copySecret.textContent = 'Copy'; }, 2000);
-          }).catch(() => this.showSnackbar('Could not copy', true));
-        });
-
-        if (verifyBtn) verifyBtn.addEventListener('click', async () => {
-          const codeEl = document.getElementById('twoFATOTPCode');
-          const errEl = document.getElementById('twoFATOTPError');
-          const code = codeEl && codeEl.value.trim();
-          if (!code || code.length !== 6) {
-            if (errEl) { errEl.textContent = 'Enter the 6-digit code from your app.'; errEl.style.display = 'block'; }
-            return;
-          }
-          const d = this._totpEnrollData;
-          if (!d) return;
-          const { data: challengeData, error: challengeError } = await backendClient.auth.mfa.challenge({ factorId: d.factorId });
-          if (challengeError) {
-            if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
-            return;
-          }
-          const { error: verifyError } = await backendClient.auth.mfa.verify({ factorId: d.factorId, challengeId: challengeData.id, code });
-          if (verifyError) {
-            if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
-            return;
-          }
-          this._totpEnrollData = null;
-          await backendClient.auth.refreshSession();
-          this.closeModal('twoFAModal');
-          this.showSnackbar('Two-factor authentication is on.');
-          this.closeModal('profileModal');
-          setTimeout(() => this.showProfileModal(), 250);
-        });
-      },
-
-      async startTwoFATOTPSetup() {
-        const loadingEl = document.getElementById('twoFATOTPLoading');
-        const contentEl = document.getElementById('twoFATOTPContent');
-        const qrEl = document.getElementById('twoFATOTPQR');
-        const secretEl = document.getElementById('twoFATOTPSecret');
-        const codeInput = document.getElementById('twoFATOTPCode');
-        const errEl = document.getElementById('twoFATOTPError');
-        if (loadingEl) loadingEl.style.display = 'flex';
-        if (contentEl) contentEl.style.display = 'none';
-        if (codeInput) codeInput.value = '';
-        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-
-        const { data, error } = await backendClient.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Authenticator' });
-        if (loadingEl) loadingEl.style.display = 'none';
-        if (error) {
-          this.showSnackbar(error.message || 'Failed to set up authenticator', true);
-          return;
-        }
-        const secret = (data.totp && data.totp.secret) || '';
-        this._totpEnrollData = { factorId: data.id, qrCode: data.totp && data.totp.qr_code, secret };
-        if (contentEl) contentEl.style.display = 'flex';
-        if (qrEl && data.totp && data.totp.qr_code) {
-          qrEl.innerHTML = '';
-          const img = document.createElement('img');
-          img.src = data.totp.qr_code;
-          img.alt = 'TOTP QR code';
-          qrEl.appendChild(img);
-        }
-        if (secretEl) secretEl.textContent = secret || '(use QR code)';
-      },
-
-      async requiresMFAVerification() {
-        if (!backendClient) return false;
-        const { data, error } = await backendClient.auth.mfa.getAuthenticatorAssuranceLevel();
-        if (error || !data) return false;
-        return data.nextLevel === 'aal2' && data.currentLevel !== 'aal2';
-      },
-
-      showMFAVerifyModal() {
-        const modalHtml = `
-          <div class="modal" id="mfaVerifyModal">
-            <div class="modal-content profile-modal-content">
-              <button class="modal-close" onclick="App.closeModal('mfaVerifyModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Two-Factor Verification</h3>
-              </div>
-              <div class="modal-body">
-                <p class="profile-help">Enter the 6-digit code from your authenticator app to finish signing in.</p>
-                <div class="profile-2fa-verify-row">
-                  <label class="profile-help">Verification code</label>
-                  <input type="text" id="mfaVerifyCode" class="profile-input profile-input-narrow" placeholder="000000" maxlength="6" autocomplete="one-time-code">
-                  <button type="button" class="btn btn-primary" id="mfaVerifySubmit">Verify</button>
-                </div>
-                <p id="mfaVerifyError" class="profile-error hidden"></p>
-              </div>
-              <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" id="mfaVerifyCancel">Cancel</button>
-              </div>
-            </div>
-          </div>
-        `;
-        const existing = document.getElementById('mfaVerifyModal');
-        if (existing) existing.remove();
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('mfaVerifyModal');
-
-        const submitBtn = document.getElementById('mfaVerifySubmit');
-        const cancelBtn = document.getElementById('mfaVerifyCancel');
-        const codeInput = document.getElementById('mfaVerifyCode');
-        const errEl = document.getElementById('mfaVerifyError');
-
-        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-          await backendClient.auth.signOut();
-          this.closeModal('mfaVerifyModal');
-          this.showSignInModal();
-        });
-
-        if (submitBtn) submitBtn.addEventListener('click', async () => {
-          const code = codeInput && codeInput.value.trim();
-          if (!code || code.length !== 6) {
-            if (errEl) { errEl.textContent = 'Enter the 6-digit code.'; errEl.style.display = 'block'; }
-            return;
-          }
-          const factors = await backendClient.auth.mfa.listFactors();
-          const totp = factors.data && factors.data.totp && factors.data.totp[0];
-          if (!totp) {
-            if (errEl) { errEl.textContent = 'No authenticator found.'; errEl.style.display = 'block'; }
-            return;
-          }
-          const { data: challengeData, error: challengeError } = await backendClient.auth.mfa.challenge({ factorId: totp.id });
-          if (challengeError) {
-            if (errEl) { errEl.textContent = challengeError.message || 'Challenge failed.'; errEl.style.display = 'block'; }
-            return;
-          }
-          const { error: verifyError } = await backendClient.auth.mfa.verify({ factorId: totp.id, challengeId: challengeData.id, code });
-          if (verifyError) {
-            if (errEl) { errEl.textContent = verifyError.message || 'Invalid code.'; errEl.style.display = 'block'; }
-            return;
-          }
-          this.closeModal('mfaVerifyModal');
-          window.location.reload();
-        });
-      },
-
-      _totpEnrollData: null,
 
       setTheme(theme) {
         if (theme !== 'light' && theme !== 'dark') return;
