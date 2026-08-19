@@ -3368,9 +3368,9 @@ const App = {
                         <div class="device-collector-card">
                           <strong>Windows Device Collector</strong>
                           <p class="help-text">Collects a disclosed, local-only device report without administrator access or network lookup.</p>
-                          <a class="btn btn-secondary" id="deviceCollectorDownload" href="downloads/Elistly-Windows-Device-Intake-v1.0.2.zip" download="Elistly-Windows-Device-Intake-v1.0.2.zip">
+                          <a class="btn btn-secondary" id="deviceCollectorDownload" href="downloads/Elistly-Windows-Device-Intake-v1.0.3.zip" download="Elistly-Windows-Device-Intake-v1.0.3.zip">
                             <span class="material-icons">laptop_windows</span>
-                            Download collector 1.0.2
+                            Download collector package 1.0.3
                           </a>
                           <button type="button" class="btn btn-secondary" onclick="App.showRecommendedWindowsFieldsConfirm()">
                             <span class="material-icons">playlist_add</span>

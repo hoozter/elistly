@@ -1,7 +1,7 @@
-# Windows collector candidate 1.0.2
+# Windows collector candidate 1.0.3
 
-- Archive: `downloads/Elistly-Windows-Device-Intake-v1.0.2.zip`
-- SHA-256: `a44940c564887f4edf8641d47a45aee7097b9aa568eef4ccfe114ec0d6364557`
+- Archive: `downloads/Elistly-Windows-Device-Intake-v1.0.3.zip`
+- SHA-256: `63348429c4adc81451141cf04de21972fb91e6b2d70e06b592f76ba2e3dcc195`
 - Contents:
   - `Elistly Device Collector.lnk`
   - `README.txt`
@@ -11,7 +11,7 @@
 
 Launch on Windows 10 or Windows 11:
 
-1. Verify the archive SHA-256 with `Get-FileHash .\Elistly-Windows-Device-Intake-v1.0.2.zip -Algorithm SHA256`.
+1. Verify the archive SHA-256 with `Get-FileHash .\Elistly-Windows-Device-Intake-v1.0.3.zip -Algorithm SHA256`.
 2. Extract the entire ZIP.
 3. Open the extracted folder.
 4. Double-click the `Elistly Device Collector` shortcut with the Elistly icon.

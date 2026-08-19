@@ -16,7 +16,7 @@ const appPath = path.join(root, 'app.js');
 const appHtmlPath = path.join(root, 'app.html');
 const serviceWorkerPath = path.join(root, 'sw.js');
 const rootReadmePath = path.join(root, 'README.md');
-const archivePath = path.join(root, 'downloads/Elistly-Windows-Device-Intake-v1.0.2.zip');
+const archivePath = path.join(root, 'downloads/Elistly-Windows-Device-Intake-v1.0.3.zip');
 const script = fs.readFileSync(scriptPath, 'utf8');
 const launcher = fs.readFileSync(launcherPath, 'utf8');
 const readme = fs.readFileSync(readmePath, 'utf8');
@@ -63,13 +63,13 @@ assert.doesNotMatch(app, /right-click Collect-ElistlyDevice\.ps1/i, 'in-app inst
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
 assert.match(appHtml, /styles\.css\?v=18/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
-assert.match(appHtml, /app\.js\?v=20/, 'app shell must request the draft-intake app bundle');
-assert.match(serviceWorker, /elistly-shell-v11/);
+assert.match(appHtml, /app\.js\?v=21/, 'app shell must request the current collector-download bundle');
+assert.match(serviceWorker, /elistly-shell-v12/);
 assert.match(serviceWorker, /styles\.css\?v=18/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
-assert.match(serviceWorker, /app\.js\?v=20/);
+assert.match(serviceWorker, /app\.js\?v=21/);
 for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript], ['app download', app]]) {
-  assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.2|Collector 1\.0\.2/i, `${name} must reference collector 1.0.2`);
+  assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.3|Collector 1\.0\.2/i, `${name} must reference collector package 1.0.3 or collector 1.0.2`);
 }
 const archive = fs.readFileSync(archivePath);
 const archiveHash = crypto.createHash('sha256').update(archive).digest('hex');

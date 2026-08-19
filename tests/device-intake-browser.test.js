@@ -70,7 +70,7 @@ const initial = {
 
     await page.evaluate(() => App.showSettingsModal());
     const settings = page.locator('#settingsModal');
-    assert.equal(await settings.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.2.zip');
+    assert.equal(await settings.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.3.zip');
     assert.match(await settings.textContent(), /Device Collector.*local-only.*administrator/is);
     assert.equal(await settings.locator('#deviceIntakeFile').count(), 0, 'Settings must not contain report selection');
     assert.doesNotMatch(await settings.textContent(), /Confirm import|Upload the report/i);

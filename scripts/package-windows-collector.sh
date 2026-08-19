@@ -3,8 +3,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source_dir="$repo_root/collector/windows"
-output_dir="$repo_root/downloads"
-archive="$output_dir/Elistly-Windows-Device-Intake-v1.0.2.zip"
+output_dir="${ELISTLY_COLLECTOR_OUTPUT_DIR:-$repo_root/downloads}"
+archive="$output_dir/Elistly-Windows-Device-Intake-v1.0.3.zip"
 staging=$(mktemp -d "${TMPDIR:-/tmp}/elistly-windows-collector.XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 
@@ -19,7 +19,13 @@ node "$repo_root/scripts/build-windows-shortcut.js" \
   'bin\Start Elistly Device Collector.bat' \
   'bin\Elistly.ico' \
   'Collect this Windows computer for Elistly'
-touch -r "$source_dir/Start Elistly Device Collector.bat" "$staging/Elistly Device Collector.lnk"
+chmod 0644 "$staging/README.txt" "$staging/Elistly Device Collector.lnk" "$staging/bin"/*
+TZ=UTC touch -d "@${SOURCE_DATE_EPOCH:-0}" \
+  "$staging/README.txt" \
+  "$staging/Elistly Device Collector.lnk" \
+  "$staging/bin/Start Elistly Device Collector.bat" \
+  "$staging/bin/Collect-ElistlyDevice.ps1" \
+  "$staging/bin/Elistly.ico"
 
 rm -f "$archive"
 (
