@@ -19,7 +19,7 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Search** — Find items by name from the header. In a category view, select an entity type to filter its configured fields and associations without changing stored inventory data.
 - **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. Pending account edits survive reload in a local outbox and replay after reconnect. Concurrent edits use whole-document revisions, so a stale write remains local and is reported as a conflict rather than automatically merged.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
-- **Profile** — Download a versioned full-account backup envelope, reset data (clear app data, keep account), or delete the account. Restore from this backup is not implemented yet. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
+- **Profile** — Export a versioned full-account backup, preview and explicitly replace account data from a compatible backup, reset data (clear app data, keep account), or delete the account. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
 - **Windows Device Intake** — Settings provides the disclosed local-only collector download. In a new Computer form, **Import collected information** validates a saved report and fills only compatible existing draft fields; the ordinary Save action creates the Computer. The collector needs no administrator access and performs no network or directory lookup.
 
 ## Quick install
@@ -38,7 +38,7 @@ Elistly needs Neon Auth, Neon Postgres, and the Cloudflare Worker API. Without c
 2. **Sidebar** — Open Dashboard, optional “Due & overdue,” and your categories.
 3. **Add items** — Use the + on a category card or open a category and add there. Edit by clicking an item.
 4. **Settings** (gear icon) — Appearance, dashboard layout, and **Data**: manage entity types/categories, export, import, add another preset.
-5. **Profile** (header → profile icon) — Display name, **Export all data**, **Reset data**, and **Delete account**. Password reset, email management, and MFA are not production-complete yet. If you’re an admin (see DOCS), the dropdown also has **Admin** to list/delete accounts.
+5. **Profile** (header → profile icon) — Display name, **Export all data**, **Restore full backup**, **Reset data**, and **Delete account**. Password reset, email management, and MFA are unavailable with the current Neon adapter, so Elistly does not offer those controls. If you’re an admin (see DOCS), the dropdown also has **Admin** to list/delete accounts.
 6. **Help** — Settings → About → **Help**, or (when signed in) profile menu → **Help**.
 
 ## Screenshot

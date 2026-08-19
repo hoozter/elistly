@@ -74,7 +74,7 @@
       items: [
         {
           q: 'How do I export my data?',
-          a: 'Settings → Data → Export downloads selected entity types, categories, entities, and optional settings as JSON. Profile → Export all data downloads a schema-versioned full-account backup envelope containing all stored inventory data and restorable metadata. Restore from that backup remains roadmap work.'
+          a: 'Settings → Data → Export downloads selected entity types, categories, entities, and optional settings as JSON. Profile → Export all data downloads a schema-versioned full-account backup envelope containing all stored inventory data and restorable metadata. Profile → Restore full backup validates and previews a compatible backup, then replaces account data only after you explicitly confirm.'
         },
         {
           q: 'How do I import data?',
@@ -103,7 +103,7 @@
         },
         {
           q: 'Can I use it offline or as an installable app?',
-          a: 'The application shell can be installed and cached where the browser supports PWAs. Durable offline edits and automatic reconnect replay are not release-proven yet, so do not rely on offline changes until that roadmap work is complete.'
+          a: 'The application shell can be installed and cached where the browser supports PWAs. Pending account edits are stored locally and replay in order after reconnect; a stale whole-document revision is retained locally and reported as a conflict rather than merged automatically.'
         },
         {
           q: 'How do I sign in or sign out?',
@@ -111,11 +111,11 @@
         },
         {
           q: 'Can I have multiple emails on my account?',
-          a: 'Not reliably yet. Parts of the profile UI exist, but secondary-email verification and primary-email changes are not production-complete against the current backend.'
+          a: 'No. The current Neon adapter does not support email management, and Elistly does not show controls for secondary-email verification or primary-email changes.'
         },
         {
           q: 'What is 2FA / TOTP?',
-          a: 'Two-factor authentication (2FA/TOTP) would add an authenticator-code step at login. Elistly’s current MFA controls are not production-complete against the current backend and should not be relied on until the roadmap implementation and tests are complete.'
+          a: 'Two-factor authentication (2FA/TOTP) would add an authenticator-code step at login. The current Neon adapter does not support MFA, and Elistly does not offer an MFA flow.'
         }
       ]
     },

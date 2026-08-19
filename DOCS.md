@@ -81,7 +81,7 @@ If you add due-date fields, Elistly can show due and overdue records as a focuse
 
 ### Search
 
-Use the header search to find entities by generated name/title. Field-value and association search are roadmap work.
+Use the header search to find entities by generated name/title. In a category view, choose an entity type and filter its configured fields and associations; these filters combine with the header search without changing stored inventory data.
 
 ### URL And Routing
 
@@ -117,13 +117,13 @@ Categories organize records and control where entity types can be used. Category
 
 ### Export
 
-Inventory export downloads selected categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** includes account metadata, theme, and app data. The two export envelopes are not yet one guaranteed round-trip backup format.
+Inventory export downloads selected categories, entity types, entities, and optional settings as JSON. Profile → **Export all data** creates a versioned full-account backup envelope containing authoritative app data and restorable metadata. **Restore full backup** validates and previews a compatible envelope, then replaces account data only after explicit confirmation.
 
 Each category view also has an **Export CSV** menu. It downloads one selected entity type with `ID`, `Type`, `Name`, then configured fields and links in their configured order. The CSV is UTF-8 with a BOM and CRLF rows for spreadsheet compatibility; arrays and multi-value links use `; `, links use `Label (id)`, and structured values use stable JSON. Cells beginning with `=`, `+`, `-`, or `@` are prefixed with an apostrophe to prevent spreadsheet formula execution while retaining the visible value.
 
 ### Import
 
-Import previews and merges the current top-level selective inventory format. **Import CSV** requires selecting one existing entity type and explicitly mapping CSV columns to its existing fields or links. It previews every proposed row, including ignored columns and validation errors, and creates rows only after a valid review. It never creates or modifies schemas, options, People, or link targets. CSV input is size- and parser-bounded; an export-added formula-safety apostrophe is decoded only when it precedes a spreadsheet formula prefix. It does not yet restore the full-account export envelope. Validate important restores on disposable data until the versioned round-trip format in the roadmap is complete.
+Import previews and merges the current top-level selective inventory format. **Import CSV** requires selecting one existing entity type and explicitly mapping CSV columns to its existing fields or links. It previews every proposed row, including ignored columns and validation errors, and creates rows only after a valid review. It never creates or modifies schemas, options, People, or link targets. CSV input is size- and parser-bounded; an export-added formula-safety apostrophe is decoded only when it precedes a spreadsheet formula prefix. Use **Restore full backup** for the validated full-account replacement workflow.
 
 ### Add Preset
 
@@ -145,7 +145,7 @@ Elistly always runs with an account.
 
 Opening the app without a session shows the sign-in screen. Signing out clears the local auth token and returns to sign-in.
 
-Password reset, secondary email verification, and MFA controls are present in parts of the UI but are not production-complete. The Worker returns explicit “not implemented” responses for unsupported flows; users must not rely on those controls until the roadmap gates are complete.
+The current Neon adapter supports sign-up, signup verification, sign-in, session refresh, and sign-out. Password reset, email management, and MFA are unsupported, so the browser does not offer controls that promise those actions.
 
 ## 9. Admin
 
