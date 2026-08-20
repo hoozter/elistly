@@ -594,6 +594,7 @@ const App = {
           try {
             const userData = stored;
             const storedVersion = userData.version || '1.0.0';
+            this.data = { ...this.data, ...userData };
             this.data.settings = this.normalizeSettings(userData.settings, this.data.settings);
             if (userData.workspaces && typeof userData.currentWorkspaceId === 'string') {
               this.data.workspaces = userData.workspaces;
@@ -1320,6 +1321,7 @@ const App = {
         const current = new URL(window.location);
         const activeView = current.searchParams.get('category') || current.searchParams.get('view') || 'dashboard';
 
+        this.data = { ...this.data, ...remoteData };
         this.data.settings = this.normalizeSettings(remoteData.settings, this.data.settings);
         if (remoteData.workspaces && typeof remoteData.currentWorkspaceId === 'string') {
           this.data.workspaces = remoteData.workspaces;

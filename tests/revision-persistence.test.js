@@ -358,6 +358,24 @@ async function testSyncStatusIsAccessibleInTheApplication() {
   });
 }
 
+async function testRemoteHydrationRetainsUnknownTopLevelAccountData() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      App.data = {
+        version: 'test', settings: {}, categories: {}, entityTypes: {}, entities: {},
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default'
+      };
+      App.applyRemoteSyncData({
+        version: 'test', settings: {},
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default',
+        retainedTopLevelMarker: 'must-survive-hydration'
+      });
+      return App.data.retainedTopLevelMarker;
+    });
+    assert.equal(observed, 'must-survive-hydration', 'account hydration must retain unknown authoritative top-level fields');
+  });
+}
+
 async function run() {
   await testConflictPreservesDirtyLocalState();
   await testConflictNotificationKeepsTheEditorOpen();
@@ -370,6 +388,7 @@ async function run() {
   await testOnlineReconnectRetriesPendingSave();
   await testMalformedOutboxFailsSafely();
   await testSyncStatusIsAccessibleInTheApplication();
+  await testRemoteHydrationRetainsUnknownTopLevelAccountData();
 }
 
 run()
