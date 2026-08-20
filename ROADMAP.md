@@ -30,24 +30,24 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Local first-party QR generation with bounded input and no third-party QR request.
 - Source-complete Windows Device Intake draft flow: bounded local report, compatible existing fields only, explicit draft conflicts, no inferred Person, and normal Save.
 - Checksummed Windows collector candidate with disclosed local-only behavior.
-- Current tested integration candidate adds explicitly confirmed selected-item deletion and the `/` / `Ctrl+K` / `Cmd+K` search-focus shortcut. These dirty source files must be integrated before another feature slice starts.
+- Integrated selected-item deletion requires exact-count confirmation and uses the existing revision/outbox save path once. The `/` / `Ctrl+K` / `Cmd+K` search-focus shortcut remains outside editable controls and retains accessible key metadata.
 
 ## Remaining release work
 
-### 1. Integrate the current inventory candidate
+### 1. Integrated inventory candidate (complete)
 
-- Review and commit only the current bulk-delete and search-shortcut source/test changes.
-- Confirm deletion captures the exact selected IDs, requires an exact-count confirmation, uses the existing revision/outbox save path once, preserves unrelated data and reports persistence failure honestly.
-- Keep the search shortcut out of editable controls, preserve browser/platform shortcuts and retain accessible key metadata.
-- Run the focused tests, every existing local browser/runtime test, syntax checks and `git diff --check` before moving on.
+- The selected-item deletion and search-shortcut source/test changes are integrated at `cdfa946`.
+- Deletion captures the exact selected IDs, requires exact-count confirmation, uses the existing revision/outbox save path once, preserves unrelated data and reports persistence failure honestly.
+- The search shortcut stays out of editable controls, preserves browser/platform shortcuts and retains accessible key metadata.
+- Focused and broad local browser/runtime tests, syntax checks and `git diff --check` passed before the later account-capability and package commits.
 
-### 2. Make account capabilities truthful
+### 2. Truthful account capabilities (complete in source)
 
-- Keep sign-in, sign-up, email verification, session refresh and sign-out on the current tested Neon Auth path.
-- Introduce one source-of-truth capability boundary for password reset/change, email management and MFA.
-- Hide or clearly disable every action the deployed adapter cannot actually complete. Do not keep interactive controls backed by “not implemented” methods or inferred Supabase-compatible behavior.
-- Add deterministic source/browser tests proving unsupported controls cannot promise success and supported actions preserve redirect, expiry and user-visible error behavior.
-- Implement a capability only after the current Neon Auth contract can be exercised end to end. Do not build a parallel account service to satisfy the UI.
+- Sign-in, sign-up, email verification, session refresh and sign-out remain on the current tested Neon Auth path.
+- Commit `30fef3e` introduced one source-of-truth boundary for password reset/change, email management and MFA capabilities.
+- Actions the deployed adapter cannot actually complete are hidden or clearly disabled; no interactive control promises success through a “not implemented” or inferred Supabase-compatible method.
+- Deterministic source/browser tests prove unsupported controls cannot promise success and supported actions preserve redirect, expiry and user-visible error behavior.
+- End-to-end capability acceptance remains part of the private signed-in integration gate below; no parallel account service was added.
 
 ### 3. Complete private signed-in integration acceptance
 
