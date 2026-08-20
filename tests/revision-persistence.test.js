@@ -376,6 +376,22 @@ async function testRemoteHydrationRetainsUnknownTopLevelAccountData() {
   });
 }
 
+async function testImportAcknowledgementAcceptsEquivalentJsonObjectOrder() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const candidate = { version: 'test', settings: { view: 'list', retained: true }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
+      const acknowledged = { currentWorkspaceId: 'default', workspaces: { default: { entities: {}, entityTypes: {}, categories: {}, name: 'Default' } }, settings: { retained: true, view: 'list' }, version: 'test' };
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'token' } } }) } };
+      window.ELISTLY_API_URL = '/mock';
+      Storage._cachedUserId = 'user-1';
+      window.fetch = async () => new Response(JSON.stringify({ payload: acknowledged, updated_at: '2026-08-20T00:00:00.000Z' }), { status: 200 });
+      await Storage.setAppDataForImport(candidate, { userId: 'user-1', accessToken: 'token', expectedUpdatedAt: null });
+      return Storage._cached;
+    });
+    assert.deepEqual(observed, { version: 'test', settings: { view: 'list', retained: true }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' }, 'a semantically identical JSON acknowledgement must complete the import');
+  });
+}
+
 async function run() {
   await testConflictPreservesDirtyLocalState();
   await testConflictNotificationKeepsTheEditorOpen();
@@ -389,6 +405,7 @@ async function run() {
   await testMalformedOutboxFailsSafely();
   await testSyncStatusIsAccessibleInTheApplication();
   await testRemoteHydrationRetainsUnknownTopLevelAccountData();
+  await testImportAcknowledgementAcceptsEquivalentJsonObjectOrder();
 }
 
 run()

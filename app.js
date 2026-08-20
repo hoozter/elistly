@@ -124,6 +124,17 @@ async function apiRequest(path, options = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+function jsonValuesEqual(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => jsonValuesEqual(value, right[index]));
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && jsonValuesEqual(left[key], right[key]));
+}
+
 // Storage layer: localStorage or account-backed API (one row per user in app_data)
 const Storage = {
   KEY: 'elistlyData',
@@ -398,7 +409,7 @@ const Storage = {
       const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt: identity.expectedUpdatedAt ?? null }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
-      if (!row.payload || JSON.stringify(row.payload) !== JSON.stringify(data)) throw new Error('Imported data acknowledgement did not match the reviewed data.');
+      if (!row.payload || !jsonValuesEqual(row.payload, data)) throw new Error('Imported data acknowledgement did not match the reviewed data.');
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
       try {
         this._cached = data;
