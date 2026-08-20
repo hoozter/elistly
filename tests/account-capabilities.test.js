@@ -23,6 +23,15 @@ function startStaticServer() {
   const server = await startStaticServer();
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  let signOutRequest = null;
+  await page.route('**/sign-out', async route => {
+    signOutRequest = {
+      method: route.request().method(),
+      contentType: route.request().headers()['content-type'] || '',
+      body: route.request().postData()
+    };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
     assert.deepEqual(await page.evaluate(() => window.elistlyClient.auth.capabilities), {
@@ -31,6 +40,12 @@ function startStaticServer() {
       mfa: false
     }, 'the Neon adapter must publish its supported account capabilities');
     assert.equal(await page.locator('.auth-forgot').count(), 0, 'an unavailable password-reset flow must not be interactive');
+    await page.evaluate(() => window.elistlyClient.auth.signOut());
+    assert.deepEqual(signOutRequest, {
+      method: 'POST',
+      contentType: 'application/json',
+      body: '{}'
+    }, 'sign-out must send the JSON request Neon Auth accepts');
 
     await page.evaluate(() => {
       backendClient = {

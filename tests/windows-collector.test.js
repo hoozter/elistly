@@ -64,7 +64,7 @@ assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
 assert.match(appHtml, /styles\.css\?v=18/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
 assert.match(appHtml, /app\.js\?v=21/, 'app shell must request the current collector-download bundle');
-assert.match(serviceWorker, /elistly-shell-v12/);
+assert.match(serviceWorker, /elistly-shell-v13/);
 assert.match(serviceWorker, /styles\.css\?v=18/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
 assert.match(serviceWorker, /app\.js\?v=21/);

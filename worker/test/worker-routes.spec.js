@@ -36,9 +36,10 @@ async function fetchFrom(worker, path, { method = "GET", body, rawBody } = {}) {
 }
 
 describe("Elistly Worker route seams", () => {
-  it("serves representative app data and profile reads through injected dependencies", async () => {
+  it("returns app-data revisions as lossless database text", async () => {
+    const calls = [];
     const worker = createWorker({
-      createSql: () => mockSql(),
+      createSql: () => mockSql(calls),
       authenticate: async () => user,
       checkAdmin: async () => false,
     });
@@ -48,6 +49,7 @@ describe("Elistly Worker route seams", () => {
 
     expect(await appData.json()).toEqual({ payload: { lists: ["mine"] }, updated_at: "2026-01-01" });
     expect(await profile.json()).toEqual({ profile: { display_name: "Member", updated_at: "2026-01-01" } });
+    expect(calls[0].query).toContain("updated_at::text AS updated_at");
   });
 
   it("rejects unauthenticated application data requests through the injected auth boundary", async () => {
@@ -188,6 +190,7 @@ describe("Elistly Worker route seams", () => {
     expect(await response.json()).toEqual({ payload: { entities: { updated: true } }, updated_at: "2026-08-12T00:01:00.000Z" });
     expect(calls).toHaveLength(1);
     expect(calls[0].query).toContain("app_data.updated_at =");
+    expect(calls[0].query).toContain("updated_at::text AS updated_at");
     expect(calls[0].values).toContain("2026-08-12T00:00:00.000Z");
   });
 

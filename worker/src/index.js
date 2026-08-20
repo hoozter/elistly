@@ -411,7 +411,7 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
 
       if (path === "/app-data") {
         if (req.method === "GET") {
-          const rows = await sql`SELECT payload, updated_at FROM app_data WHERE user_id = ${user.id}`;
+          const rows = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${user.id}`;
           return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
         }
         if (req.method === "PUT") {
@@ -434,7 +434,7 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
               SET payload = EXCLUDED.payload,
                   updated_at = EXCLUDED.updated_at
               WHERE (${expectedUpdatedAt}::timestamptz IS NOT NULL AND app_data.updated_at = ${expectedUpdatedAt}::timestamptz)
-            RETURNING payload, updated_at
+            RETURNING payload, updated_at::text AS updated_at
           `;
           if (!rows[0]) return jsonResponse({ error: "App data changed since preview" }, 409, origin);
           return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);

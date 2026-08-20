@@ -79,7 +79,7 @@ async function testActivationRetiresOnlyPriorElistlyShells() {
   let completed;
   harness.listeners.activate({ waitUntil: promise => { completed = promise; } });
   await completed;
-  assert.deepEqual(harness.deleted, ['elistly-shell-v10', 'elistly-shell-v11'], 'activation must retire only prior Elistly shell caches');
+  assert.deepEqual(harness.deleted, ['elistly-shell-v10', 'elistly-shell-v11', 'elistly-shell-v12'], 'activation must retire only prior Elistly shell caches');
 }
 
 function testRegistrationWaitsForSafeReload() {
@@ -96,8 +96,11 @@ function testShellVersionMatchesLoadedBundles() {
   const shellVersion = /elistly-shell-v(\d+)/.exec(serviceWorker)[1];
   const appVersion = /app\.js\?v=(\d+)/.exec(appDocument)[1];
   const styleVersion = /styles\.css\?v=(\d+)/.exec(appDocument)[1];
+  const authVersionMatch = /lib\/db\.js\?v=(\d+)/.exec(appDocument);
+  assert.ok(authVersionMatch, 'the Auth adapter must have an explicit cache-busting version');
   assert.match(serviceWorker, new RegExp(`app\\.js\\?v=${appVersion}`));
   assert.match(serviceWorker, new RegExp(`styles\\.css\\?v=${styleVersion}`));
+  assert.match(serviceWorker, new RegExp(`lib/db\\.js\\?v=${authVersionMatch[1]}`));
   assert.ok(Number(shellVersion) > 10, 'a changed shell must use a newer explicit shell version');
 }
 
