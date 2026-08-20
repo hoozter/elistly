@@ -75,11 +75,11 @@ async function testOfflineNavigationFallsBackToShell() {
 }
 
 async function testActivationRetiresOnlyPriorElistlyShells() {
-  const harness = loadServiceWorker({ fetch: async () => response(''), keys: ['elistly-shell-v10', 'elistly-shell-v11', 'elistly-shell-v12', 'elistly-shell-v13', 'unrelated-app-v1'] });
+  const harness = loadServiceWorker({ fetch: async () => response(''), keys: ['elistly-shell-v10', 'elistly-shell-v11', 'elistly-shell-v12', 'elistly-shell-v13', 'elistly-shell-v14', 'unrelated-app-v1'] });
   let completed;
   harness.listeners.activate({ waitUntil: promise => { completed = promise; } });
   await completed;
-  assert.deepEqual(harness.deleted, ['elistly-shell-v10', 'elistly-shell-v11', 'elistly-shell-v12', 'elistly-shell-v13'], 'activation must retire only prior Elistly shell caches');
+  assert.deepEqual(harness.deleted, ['elistly-shell-v10', 'elistly-shell-v11', 'elistly-shell-v12', 'elistly-shell-v13', 'elistly-shell-v14'], 'activation must retire only prior Elistly shell caches');
 }
 
 function testRegistrationWaitsForSafeReload() {
