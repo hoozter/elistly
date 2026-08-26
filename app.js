@@ -635,7 +635,7 @@ const App = {
               this.data.currentWorkspaceId = 'default';
               dataMutatedDuringInit = true;
             }
-            this.normalizeEntityTypeCategories();
+            if (this.normalizeActivationState()) dataMutatedDuringInit = true;
               const fontSize = this.getSafeFontSize();
               document.documentElement.setAttribute('data-font-size', ['small','normal','large','larger'].includes(fontSize) ? fontSize : 'normal');
 
@@ -1346,7 +1346,7 @@ const App = {
           this.data.entityTypes = { ...(remoteData.entityTypes || {}) };
           this.data.entities = { ...(remoteData.entities || {}) };
         }
-        this.normalizeEntityTypeCategories();
+        this.normalizeActivationState();
         this.renderSidebar();
         this.loadView(activeView);
       },
@@ -1386,32 +1386,31 @@ const App = {
         const preset = PRESETS[presetId];
         if (!preset) return;
         if (fromOnboarding) {
-          this.data.categories = JSON.parse(JSON.stringify(preset.categories || {}));
-          this.data.entityTypes = JSON.parse(JSON.stringify(preset.entityTypes || {}));
+          this.data.categories = {};
+          this.data.entityTypes = {};
           this.data.entities = {};
-          Storage.setOnboardingDone();
-          this.saveData();
-          const modal = document.getElementById('onboardingModal');
-          if (modal) modal.remove();
-          this.renderSidebar();
-          this.loadView('dashboard');
-          if (presetId !== 'blank') this.showNotification(`Added "${preset.label}" setup`, 'success');
-          const samples = (window.SAMPLE_ENTITIES || {})[presetId];
-          if (samples && samples.order && samples.order.some(function (t) { return Array.isArray(samples[t]) && samples[t].length > 0; })) {
-            setTimeout(function () { App.showSampleDataPrompt(presetId); }, 300);
-          }
-        } else {
-          Object.keys(preset.categories || {}).forEach(id => {
-            if (!this.data.categories[id]) this.data.categories[id] = JSON.parse(JSON.stringify(preset.categories[id]));
-          });
-          Object.keys(preset.entityTypes || {}).forEach(id => {
-            if (!this.data.entityTypes[id]) this.data.entityTypes[id] = JSON.parse(JSON.stringify(preset.entityTypes[id]));
-          });
-          this.normalizeEntityTypeCategories();
-          this.saveData();
-          this.renderSidebar();
-          this.loadView('dashboard');
-          this.showNotification(`Added "${preset.label}" preset (structure only; no sample items)`, 'success');
+        }
+        this.normalizeActivationState();
+        const newlyEnabledTypeIds = [];
+        Object.keys(preset.categories || {}).forEach(id => {
+          if (this.data.categories[id]) this.data.categories[id].enabled = true;
+        });
+        Object.keys(preset.entityTypes || {}).forEach(id => {
+          const type = this.data.entityTypes[id];
+          if (!type) return;
+          if (type.enabled === false) newlyEnabledTypeIds.push(id);
+          type.enabled = true;
+        });
+        if (fromOnboarding) Storage.setOnboardingDone();
+        this.saveData();
+        const modal = document.getElementById('onboardingModal');
+        if (modal) modal.remove();
+        this.renderSidebar();
+        this.loadView('dashboard');
+        if (presetId !== 'blank') this.showNotification(`Enabled "${preset.label}" setup`, 'success');
+        const samples = (window.SAMPLE_ENTITIES || {})[presetId];
+        if (newlyEnabledTypeIds.length && samples && samples.order && samples.order.some(typeId => newlyEnabledTypeIds.includes(typeId) && Array.isArray(samples[typeId]) && samples[typeId].length)) {
+          setTimeout(() => this.showSampleDataPrompt(presetId, newlyEnabledTypeIds), fromOnboarding ? 300 : 0);
         }
       },
       
@@ -1436,25 +1435,113 @@ const App = {
         return type.category ? [type.category] : [];
       },
 
-      showSampleDataPrompt(presetId) {
+      normalizeActivationState() {
+        let changed = false;
+        this.data.categories = this.data.categories || {};
+        this.data.entityTypes = this.data.entityTypes || {};
+        Object.values(this.data.categories).forEach(category => { if (category.enabled == null) { category.enabled = true; changed = true; } });
+        Object.values(this.data.entityTypes).forEach(type => { if (type.enabled == null) { type.enabled = true; changed = true; } });
+        SETUP_IDS.filter(id => id !== 'blank').forEach(presetId => {
+          const preset = PRESETS[presetId];
+          if (!preset) return;
+          Object.entries(preset.categories || {}).forEach(([categoryId, definition]) => {
+            const current = this.data.categories[categoryId];
+            if (!current) {
+              this.data.categories[categoryId] = { ...structuredClone(definition), enabled: false, presetIds: [presetId] };
+              changed = true;
+            }
+          });
+          Object.entries(preset.entityTypes || {}).forEach(([typeId, definition]) => {
+            const current = this.data.entityTypes[typeId];
+            if (!current) {
+              this.data.entityTypes[typeId] = { ...structuredClone(definition), enabled: false, presetIds: [presetId] };
+              changed = true;
+            }
+          });
+        });
+        this.normalizeEntityTypeCategories();
+        return changed;
+      },
+
+      getEnabledEntityTypes() {
+        return Object.values(this.data.entityTypes || {}).filter(type => this.isEntityTypeAvailable(type));
+      },
+
+      isEntityTypeAvailable(typeOrId) {
+        const type = typeof typeOrId === 'string'
+          ? this.data.entityTypes?.[typeOrId]
+          : typeOrId;
+        if (!type || type.enabled === false) return false;
+        const categoryIds = this.getEntityTypeCategoryIds(type);
+        if (!categoryIds.length) return true;
+        const categories = categoryIds.map(id => this.data.categories?.[id]).filter(Boolean);
+        return !categories.length || categories.some(category => category.enabled !== false);
+      },
+
+      getEnabledCategories() {
+        return Object.values(this.data.categories || {}).filter(category => category.enabled !== false);
+      },
+
+      setCategoryEnabled(categoryId, enabled) {
+        const category = this.data.categories && this.data.categories[categoryId];
+        if (!category) return false;
+        category.enabled = !!enabled;
+        this.saveData();
+        this.renderSidebar();
+        if (!enabled && this.currentView === categoryId) this.loadView('dashboard');
+        this.showNotification(`${category.label || categoryId} ${enabled ? 'enabled' : 'disabled'}`, 'success');
+        return true;
+      },
+
+      setEntityTypeEnabled(typeId, enabled, options = {}) {
+        const type = this.data.entityTypes && this.data.entityTypes[typeId];
+        if (!type) return false;
+        type.enabled = !!enabled;
+        this.getEntityTypeCategoryIds(type).forEach(categoryId => {
+          const category = this.data.categories[categoryId];
+          if (!category) return;
+          if (enabled) {
+            category.enabled = true;
+          } else if (Array.isArray(category.presetIds) && category.presetIds.length) {
+            const hasEnabledType = Object.values(this.data.entityTypes || {}).some(candidate =>
+              candidate.enabled !== false && this.getEntityTypeCategoryIds(candidate).includes(categoryId)
+            );
+            if (!hasEnabledType) category.enabled = false;
+          }
+        });
+        this.saveData();
+        this.renderSidebar();
+        if (!enabled && this.currentView && this.getEntityTypeCategoryIds(type).includes(this.currentView)) this.loadView('dashboard');
+        const sampleList = enabled && Array.isArray(type.presetIds) && type.presetIds.length
+          ? (window.SAMPLE_ENTITIES || {})[type.presetIds[0]]?.[typeId]
+          : null;
+        if (options.offerSamples !== false && Array.isArray(sampleList) && sampleList.length) this.showSampleDataPrompt(type.presetIds[0], [typeId]);
+        this.showNotification(`${type.label || typeId} ${enabled ? 'enabled' : 'disabled'}`, 'success');
+        return true;
+      },
+
+      showSampleDataPrompt(presetId, typeIds = null) {
         const preset = PRESETS[presetId];
         const label = preset ? preset.label : 'this setup';
+        this._pendingSampleRequest = { presetId, typeIds: Array.isArray(typeIds) ? typeIds.slice() : null };
+        const existing = document.getElementById('sampleDataModal');
+        if (existing) existing.remove();
         const modalHtml = `
           <div class="modal" id="sampleDataModal">
             <div class="modal-content sample-data-modal-content">
-              <button class="modal-close" onclick="App.closeModal('sampleDataModal')" aria-label="Close">
+              <button class="modal-close" onclick="App.closeModal('sampleDataModal'); App._pendingSampleRequest = null;" aria-label="Close">
                 <span class="material-icons">close</span>
               </button>
               <div class="modal-header">
-                <h3>Load sample data?</h3>
+                <h3>Add example data?</h3>
               </div>
               <div class="modal-body">
-                <p class="modal-description">Add example items so you can see how ${label} works. You can delete them anytime from the app.</p>
+                <p class="modal-description">The ${label} structure is enabled and empty. Would you like to add optional example items for the newly enabled asset types?</p>
               </div>
               <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" onclick="App.closeModal('sampleDataModal')">No thanks</button>
-                <button type="button" class="btn btn-primary" onclick="App.loadSampleData('${presetId}'); App.closeModal('sampleDataModal');">
-                  <span class="material-icons">add</span> Yes, load samples
+                <button type="button" class="btn btn-secondary" onclick="App.closeModal('sampleDataModal'); App._pendingSampleRequest = null;">No, keep it empty</button>
+                <button type="button" class="btn btn-primary" onclick="App.confirmSampleData(); App.closeModal('sampleDataModal');">
+                  <span class="material-icons">add</span> Add example data
                 </button>
               </div>
             </div>
@@ -1465,32 +1552,49 @@ const App = {
         this.showModal('sampleDataModal');
       },
 
-      loadSampleData(presetId) {
+      confirmSampleData() {
+        const request = this._pendingSampleRequest;
+        this._pendingSampleRequest = null;
+        if (request) this.loadSampleData(request.presetId, request.typeIds);
+      },
+
+      loadSampleData(presetId, typeIds = null) {
         const samples = (window.SAMPLE_ENTITIES || {})[presetId];
         if (!samples || !samples.order) return;
+        const allowedTypes = new Set(Array.isArray(typeIds) ? typeIds : samples.order);
         const createdIds = {};
         samples.order.forEach(typeId => {
+          if (!allowedTypes.has(typeId)) return;
           const type = this.data.entityTypes[typeId];
           const list = samples[typeId];
-          if (!Array.isArray(list)) return;
+          if (!type || !Array.isArray(list)) return;
           createdIds[typeId] = [];
-          list.forEach((data) => {
+          list.forEach((data, sampleIndex) => {
+            const sampleSource = `${presetId}:${typeId}:${sampleIndex}`;
+            const sampleScalarEntries = Object.entries(data).filter(([key]) => !key.endsWith('Index'));
+            const existing = Object.values(this.data.entities).find(entity =>
+              entity.type === typeId && (entity.sampleSource === sampleSource || sampleScalarEntries.every(([key, value]) => entity[key] === value))
+            );
+            if (existing) {
+              createdIds[typeId].push(existing.id);
+              return;
+            }
             const id = this.generateId();
-            const entity = { id, type: typeId };
+            const entity = { id, type: typeId, sampleSource };
             Object.keys(data).forEach(k => {
               if (k.endsWith('Index')) {
                 const assocName = k.replace(/Index$/, '');
-                const assoc = type && type.associations ? type.associations.find(a => a.name === assocName) : null;
+                const assoc = type.associations ? type.associations.find(a => a.name === assocName) : null;
                 const refType = assoc && assoc.association ? assoc.association.targetType : null;
                 entity[assocName] = refType && createdIds[refType] ? (createdIds[refType][data[k]] || '') : '';
               } else {
                 entity[k] = data[k];
               }
             });
-            if (type && type.enableNameGen) {
+            if (type.enableNameGen) {
               entity.autoName = this.generateAutoName(typeId, entity);
               delete entity.name;
-            } else if (type && type.fields && type.fields.some(f => f.name === 'firstName') && type.fields.some(f => f.name === 'lastName')) {
+            } else if (type.fields && type.fields.some(f => f.name === 'firstName') && type.fields.some(f => f.name === 'lastName')) {
               entity.name = [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim() || entity.name || '';
               delete entity.autoName;
             }
@@ -1501,7 +1605,7 @@ const App = {
         this.saveData();
         this.renderSidebar();
         this.loadView('dashboard');
-        this.showNotification('Sample data added', 'success');
+        this.showNotification('Example data added', 'success');
       },
 
       getEntityDisplayName(entityOrId) {
@@ -2317,7 +2421,7 @@ const App = {
         this.data.categories = { ...(w.categories || {}) };
         this.data.entityTypes = { ...(w.entityTypes || {}) };
         this.data.entities = { ...(w.entities || {}) };
-        this.normalizeEntityTypeCategories();
+        this.normalizeActivationState();
         this.saveData();
         this.renderSidebar();
         this.loadView('dashboard');
@@ -2367,10 +2471,17 @@ const App = {
         const entityTypes = JSON.parse(JSON.stringify(preset.entityTypes || {}));
         Object.values(entityTypes).forEach(t => {
           if (t.category && !Array.isArray(t.categories)) t.categories = [t.category];
+          t.presetIds = [presetId];
+          t.enabled = true;
+        });
+        const categories = JSON.parse(JSON.stringify(preset.categories || {}));
+        Object.values(categories).forEach(category => {
+          category.presetIds = [presetId];
+          category.enabled = true;
         });
         this.data.workspaces[id] = {
           name,
-          categories: JSON.parse(JSON.stringify(preset.categories || {})),
+          categories,
           entityTypes,
           entities: {}
         };
@@ -2502,7 +2613,7 @@ const App = {
           ` : ''}
         `;
         
-        const categoriesHtml = Object.values(this.data.categories)
+        const categoriesHtml = this.getEnabledCategories()
           .map(category => `
             <li>
               <a href="#" class="${currentCategory === category.id ? 'active' : ''}"
@@ -2531,6 +2642,7 @@ const App = {
           return;
         }
         if (view === 'overdue' && !this.hasDueDateTypes()) view = 'dashboard';
+        if (this.data.categories?.[view]?.enabled === false) view = 'dashboard';
         this.updateURL({ view: view === 'dashboard' ? null : view, category: view === 'dashboard' ? null : view });
         const mainContent = document.getElementById('mainContent');
         if (!mainContent) return;
@@ -2548,7 +2660,7 @@ const App = {
       },
 
       hasDueDateTypes() {
-        return Object.values(this.data.entityTypes || {}).some(type =>
+        return this.getEnabledEntityTypes().some(type =>
           Array.isArray(type.fields) && type.fields.some(f => f.type === 'date' && /due/i.test(f.name))
         );
       },
@@ -2563,6 +2675,7 @@ const App = {
       getOverdueEntities() {
         const today = new Date().toISOString().slice(0, 10);
         return Object.values(this.data.entities).filter(entity => {
+          if (!this.isEntityTypeAvailable(entity.type)) return false;
           const dueField = this.getDueDateFieldName(entity.type);
           if (!dueField || !entity[dueField]) return false;
           return entity[dueField] < today;
@@ -2580,6 +2693,7 @@ const App = {
         const todayStr = today.toISOString().slice(0, 10);
         const in7Str = in7.toISOString().slice(0, 10);
         return Object.values(this.data.entities).filter(entity => {
+          if (!this.isEntityTypeAvailable(entity.type)) return false;
           const dueField = this.getDueDateFieldName(entity.type);
           if (!dueField || !entity[dueField]) return false;
           const d = entity[dueField];
@@ -2773,10 +2887,11 @@ const App = {
 
         // Get all entities and sort them (guard against missing name/autoName)
         let allEntities = Object.values(this.data.entities)
+          .filter(entity => this.isEntityTypeAvailable(entity.type))
           .sort((a, b) => this.getEntityDisplayName(a).localeCompare(this.getEntityDisplayName(b)));
 
         // Visible categories (used by gallery and category cards)
-        let visibleCategories = Object.values(this.data.categories)
+        let visibleCategories = this.getEnabledCategories()
           .filter(cat => cat.visibleInDashboard !== false);
         if (Array.isArray(settings.categoryOrder)) {
           const ordered = [];
@@ -2895,6 +3010,7 @@ const App = {
         // Render category-based view (Category Cards or grouped List)
         const cardsHtml = visibleCategories.map(category => {
           let entities = Object.values(this.data.entities)
+            .filter(entity => this.isEntityTypeAvailable(entity.type))
             .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(category.id));
           if (itemsLimit >= 1) entities = entities.slice(0, itemsLimit);
 
@@ -2950,6 +3066,7 @@ const App = {
       
       renderEntityList(categoryId, typeId = '', filters = {}, query = '') {
         const entities = Object.values(this.data.entities)
+          .filter(entity => this.isEntityTypeAvailable(entity.type))
           .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId))
           .filter(entity => !typeId || entity.type === typeId)
           .filter(entity => typeId ? this.filterEntitiesForType(typeId, filters, query).includes(entity) : this.getEntityCardTitle(entity).toLocaleLowerCase().includes(String(query).toLocaleLowerCase()))
@@ -2968,7 +3085,7 @@ const App = {
       },
 
       renderAdvancedFilterControls(categoryId) {
-        const types = Object.values(this.data.entityTypes || {}).filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
+        const types = this.getEnabledEntityTypes().filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
         return `<div class="advanced-filters" data-advanced-filters>
           <label>Filter type <select data-filter-type><option value="">All types</option>${types.map(type => `<option value="${this.escapeHtmlText(type.id)}">${this.escapeHtmlText(type.label)}</option>`).join('')}</select></label>
           <label>Sort by <select data-sort-field><option value="name">Generated name</option></select></label>
@@ -2999,7 +3116,9 @@ const App = {
           if (descriptor.type === 'checkbox') {
             control.append(new Option('Yes', 'true'), new Option('No', 'false'));
           } else if (descriptor.advancedAssociation) {
-            Object.values(this.data.entities || {}).filter(entity => entity.type === descriptor.association.targetType).forEach(entity => control.appendChild(new Option(this.getEntityDisplayName(entity), entity.id)));
+            if (this.isEntityTypeAvailable(descriptor.association.targetType)) {
+              Object.values(this.data.entities || {}).filter(entity => entity.type === descriptor.association.targetType).forEach(entity => control.appendChild(new Option(this.getEntityDisplayName(entity), entity.id)));
+            }
           } else if (descriptor.type === 'dropdown') {
             (descriptor.options || []).forEach(option => control.appendChild(new Option(option.label || option.value, option.value)));
           } else {
@@ -3054,7 +3173,7 @@ const App = {
         if (!mainContent) return;
         
         // Get entity types for this category
-        const categoryEntityTypes = Object.values(this.data.entityTypes)
+        const categoryEntityTypes = this.getEnabledEntityTypes()
           .filter(type => this.getEntityTypeCategoryIds(type).includes(categoryId));
         
         const html = `
@@ -3163,6 +3282,7 @@ const App = {
         query = query.toLowerCase();
         
         const matchingEntities = Object.values(this.data.entities)
+          .filter(entity => this.isEntityTypeAvailable(entity.type))
           .filter(entity => {
             const name = this.getEntityCardTitle(entity).toLowerCase();
             return name.includes(query);
@@ -3396,7 +3516,7 @@ const App = {
                         </div>
                         <button class="btn btn-secondary" onclick="App.showAddPresetModal()">
                           <span class="material-icons">add_circle_outline</span>
-                          Add preset
+                          Enable preset
                         </button>
                         ${this.data.workspaces && Object.keys(this.data.workspaces).length ? `
                         <button class="btn btn-secondary" onclick="App.showRenameWorkspaceModal()">
@@ -3642,13 +3762,17 @@ const App = {
           console.error('Entity type not found:', entityType);
           return;
         }
-        
+        if (!this.isEntityTypeAvailable(type)) {
+          this.showNotification(`${type.label || entityType} is disabled. Enable it from Manage entity types first.`, 'error');
+          return;
+        }
+
         const entity = entityId ? this.data.entities[entityId] : null;
         if (entityId && !entity) {
           console.error('Entity not found:', entityId);
           return;
         }
-        
+
         const isEdit = !!entity;
         if (isEdit && type.enableNameGen) {
           const nextName = this.generateAutoName(entityType, entity);
@@ -3943,11 +4067,19 @@ const App = {
         const row = document.createElement('div'); row.className = 'association-field-row';
         const select = document.createElement('select'); select.id = assoc.name; select.name = assoc.name; if (assoc.required) select.required = true; select.appendChild(new Option('— None —', ''));
         const targetType = assoc.association.targetType;
-        Object.values(this.data.entities).filter(entity => entity.type === targetType).forEach(entity => select.appendChild(new Option(this.getEntityDisplayName(entity), entity.id, false, value === entity.id)));
+        const targetTypeAvailable = this.isEntityTypeAvailable(targetType);
+        if (targetTypeAvailable) {
+          Object.values(this.data.entities).filter(entity => entity.type === targetType).forEach(entity => select.appendChild(new Option(this.getEntityDisplayName(entity), entity.id, false, value === entity.id)));
+        }
         const link = document.createElement('a'); link.href = '#'; link.className = 'association-add-link'; link.dataset.targetType = targetType; link.dataset.assocName = assoc.name; link.dataset.targetLabel = this.data.entityTypes[targetType]?.label || targetType;
-        link.append(document.createTextNode('Add '), document.createTextNode(link.dataset.targetLabel));
-        link.addEventListener('click', event => this.showInlineAddEntity(event, link));
-        row.append(select, link); group.appendChild(row); return group;
+        if (targetTypeAvailable) {
+          link.append(document.createTextNode('Add '), document.createTextNode(link.dataset.targetLabel));
+          link.addEventListener('click', event => this.showInlineAddEntity(event, link));
+          row.append(select, link);
+        } else {
+          row.append(select);
+        }
+        group.appendChild(row); return group;
       },
       renderFieldInput(field, value) {
         const host = document.createElement('div');
@@ -3965,7 +4097,7 @@ const App = {
         const wrap = link.closest('.association-field-wrap');
         if (wrap.querySelector('.inline-add-entity')) return;
         const type = this.data.entityTypes[targetType];
-        if (!type || !type.fields) return;
+        if (!this.isEntityTypeAvailable(type) || !type.fields) return;
         const inlineEl = document.createElement('div');
         inlineEl.className = 'inline-add-entity';
         const title = document.createElement('div'); title.className = 'inline-add-title'; title.textContent = `New ${targetLabel}`;
@@ -4141,7 +4273,22 @@ const App = {
           info.append(icon(category.icon || 'folder'), make('span', '', category.label || category.id || ''));
           const actions = make('div', 'category-actions');
           const edit = make('button', 'btn btn-secondary'); edit.type = 'button'; edit.title = 'Edit'; edit.appendChild(icon('edit')); edit.addEventListener('click', () => this.editCategory(category.id));
-          const remove = make('button', 'btn btn-danger'); remove.type = 'button'; remove.title = 'Delete'; remove.appendChild(icon('delete')); remove.addEventListener('click', () => this.deleteCategory(category.id));
+          const isBuiltIn = Array.isArray(category.presetIds) && category.presetIds.length > 0;
+          const remove = make('button', isBuiltIn ? 'btn btn-secondary' : 'btn btn-danger'); remove.type = 'button';
+          if (isBuiltIn) {
+            const enabling = category.enabled === false;
+            remove.title = enabling ? 'Enable' : 'Disable';
+            remove.appendChild(icon(enabling ? 'visibility' : 'visibility_off'));
+            remove.addEventListener('click', () => {
+              this.closeModal('categoryManagerModal');
+              this.setCategoryEnabled(category.id, enabling);
+              this.showCategoryManager();
+            });
+          } else {
+            remove.title = 'Delete';
+            remove.appendChild(icon('delete'));
+            remove.addEventListener('click', () => this.deleteCategory(category.id));
+          }
           actions.append(edit, remove); row.append(info, actions); list.appendChild(row);
         });
         body.appendChild(list); const footer = make('div', 'modal-actions'); const add = make('button', 'btn btn-primary', 'New Category'); add.type = 'button'; add.prepend(icon('add')); add.addEventListener('click', () => this.showCategoryForm()); footer.appendChild(add);
@@ -4297,6 +4444,10 @@ const App = {
       },
       
       deleteCategory(categoryId) {
+        const currentCategory = this.data.categories[categoryId];
+        if (Array.isArray(currentCategory?.presetIds) && currentCategory.presetIds.length) {
+          return this.setCategoryEnabled(categoryId, false);
+        }
         return this.showSafeCategoryDelete(categoryId);
         const category = this.data.categories[categoryId];
         if (!category) return;
@@ -4332,6 +4483,12 @@ const App = {
       },
       
       confirmDeleteCategory(categoryId) {
+        const category = this.data.categories[categoryId];
+        if (Array.isArray(category?.presetIds) && category.presetIds.length) {
+          const modal = document.getElementById('confirmDeleteCategoryModal');
+          if (modal) modal.remove();
+          return this.setCategoryEnabled(categoryId, false);
+        }
         // Delete all entities in this category
         Object.entries(this.data.entities).forEach(([entityId, entity]) => {
           if (this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId)) {
@@ -4740,7 +4897,22 @@ const App = {
           const row = make('div', 'category-item entity-type-row'); const info = make('div', 'category-info'); info.append(icon(type.icon || 'folder'), make('span', '', type.label || type.id || ''));
           const actions = make('div', 'category-actions');
           const edit = make('button', 'btn btn-secondary'); edit.type = 'button'; edit.title = 'Edit'; edit.appendChild(icon('edit')); edit.addEventListener('click', () => this.editEntityType(type.id));
-          const remove = make('button', 'btn btn-danger'); remove.type = 'button'; remove.title = 'Delete'; remove.appendChild(icon('delete')); remove.addEventListener('click', () => this.deleteEntityType(type.id));
+          const isBuiltIn = Array.isArray(type.presetIds) && type.presetIds.length > 0;
+          const remove = make('button', isBuiltIn ? 'btn btn-secondary' : 'btn btn-danger'); remove.type = 'button';
+          if (isBuiltIn) {
+            const enabling = type.enabled === false;
+            remove.title = enabling ? 'Enable' : 'Disable';
+            remove.appendChild(icon(enabling ? 'visibility' : 'visibility_off'));
+            remove.addEventListener('click', () => {
+              this.closeModal('entityTypeManagerModal');
+              this.setEntityTypeEnabled(type.id, enabling);
+              if (!enabling) this.showEntityTypeManager();
+            });
+          } else {
+            remove.title = 'Delete';
+            remove.appendChild(icon('delete'));
+            remove.addEventListener('click', () => this.deleteEntityType(type.id));
+          }
           actions.append(edit, remove); row.append(info, actions); list.appendChild(row);
         });
         body.appendChild(list); const footer = make('div', 'modal-actions modal-actions-wrap');
@@ -5433,6 +5605,7 @@ const App = {
           const newId = this.generateId();
           this.data.entityTypes[newId] = {
             id: newId,
+            enabled: true,
             ...data
           };
         }
@@ -5567,38 +5740,13 @@ const App = {
       },
       
       deleteEntityType(typeId) {
-        return this.showSafeEntityTypeDelete(typeId);
         const type = this.data.entityTypes[typeId];
-        if (!type) return;
-        
-        const hasEntities = Object.values(this.data.entities)
-          .some(entity => entity.type === typeId);
-        
-        const confirmModal = `
-          <div class="modal" id="confirmDeleteTypeModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('confirmDeleteTypeModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Confirm Delete Type</h3>
-              </div>
-              ${hasEntities ? `
-                <p class="text-danger">Warning: There are entities of this type. Deleting it will also delete all associated entities.</p>
-              ` : ''}
-              <p>Are you sure you want to delete the entity type "${type.label}"?</p>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteTypeModal')">Cancel</button>
-                <button class="btn btn-danger" onclick="App.confirmDeleteEntityType('${typeId}')">Delete</button>
-              </div>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = confirmModal;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('confirmDeleteTypeModal');
+        if (Array.isArray(type?.presetIds) && type.presetIds.length) {
+          this.setEntityTypeEnabled(typeId, false, { offerSamples: false });
+          this.closeEntityTypeManager();
+          return;
+        }
+        return this.showSafeEntityTypeDelete(typeId);
       },
 
       showSafeEntityTypeDelete(typeId) {
@@ -5610,6 +5758,12 @@ const App = {
       },
       
       confirmDeleteEntityType(typeId) {
+        const type = this.data.entityTypes[typeId];
+        if (Array.isArray(type?.presetIds) && type.presetIds.length) {
+          this.closeModal('confirmDeleteTypeModal');
+          this.setEntityTypeEnabled(typeId, false, { offerSamples: false });
+          return;
+        }
         // Delete all entities of this type
         Object.entries(this.data.entities).forEach(([entityId, entity]) => {
           if (entity.type === typeId) {
@@ -7124,16 +7278,20 @@ const App = {
                 <span class="material-icons">close</span>
               </button>
               <div class="modal-header">
-                <h3>Add preset</h3>
+                <h3>Enable preset</h3>
               </div>
-              <p class="preset-modal-copy">Add categories and entity types from a template. Your existing data is kept.</p>
+              <p class="preset-modal-copy">Enable the preset's built-in categories and entity types. Existing data and customizations are kept; example data is optional.</p>
               <div class="button-stack u-m-0">
-                ${presets.map(p => `
-                  <button type="button" class="btn btn-secondary btn-left" onclick="App.applyPreset('${p.id}', false); App.closeModal('addPresetModal');">
-                    <span class="material-icons u-mr-050">folder</span>
-                    <span>${p.label}</span>
-                  </button>
-                `).join('')}
+                ${presets.map(p => {
+                  const typeIds = Object.keys(p.entityTypes || {});
+                  const disabledCount = typeIds.filter(id => this.data.entityTypes[id]?.enabled === false).length;
+                  const allEnabled = typeIds.length > 0 && disabledCount === 0;
+                  return `
+                  <button type="button" class="btn btn-secondary btn-left" ${allEnabled ? 'disabled' : ''} onclick="App.applyPreset('${p.id}', false); App.closeModal('addPresetModal');">
+                    <span class="material-icons u-mr-050">${allEnabled ? 'check_circle' : 'visibility'}</span>
+                    <span>${p.label}${allEnabled ? ' — enabled' : ` — enable ${disabledCount}`}</span>
+                  </button>`;
+                }).join('')}
               </div>
             </div>
           </div>`;
