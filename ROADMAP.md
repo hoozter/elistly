@@ -1,6 +1,6 @@
 # Elistly roadmap
 
-Last updated: 2026-08-18
+Last updated: 2026-08-27
 
 Elistly’s next release is a trustworthy account-backed modular inventory: user-defined categories, entity types and fields remain authoritative; account data survives failure and conflict honestly; import/export is reversible enough to trust; and optional Windows Device Intake populates the normal Add Device flow without inventing schema or people.
 
@@ -31,6 +31,7 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Source-complete Windows Device Intake draft flow: bounded local report, compatible existing fields only, explicit draft conflicts, no inferred Person, and normal Save.
 - Checksummed Windows collector candidate with disclosed local-only behavior.
 - Integrated selected-item deletion requires exact-count confirmation and uses the existing revision/outbox save path once. The `/` / `Ctrl+K` / `Cmd+K` search-focus shortcut remains outside editable controls and retains accessible key metadata.
+- The built-in entity-type catalog is materialized for every workspace and remains visible in management while default-disabled. Presets enable catalog entries explicitly; they do not control whether entries exist or can be discovered.
 
 ## Remaining release work
 
@@ -49,7 +50,7 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Deterministic source/browser tests prove unsupported controls cannot promise success and supported actions preserve redirect, expiry and user-visible error behavior.
 - End-to-end capability acceptance remains part of the private signed-in integration gate below; no parallel account service was added.
 
-### 3. Complete private signed-in integration acceptance
+### 3. Complete private signed-in integration acceptance (complete)
 
 Use a disposable/private Elistly environment and synthetic accounts; never production family or inventory data.
 
@@ -60,7 +61,9 @@ Use a disposable/private Elistly environment and synthetic accounts; never produ
 - Exercise bounded CSV import/export and selected-item deletion through the real save lifecycle.
 - Review Worker logs only for the exercised failures; do not start general observability infrastructure.
 
-### 4. Accept Windows Device Intake
+The private synthetic-account gate is complete. It exposed and drove fixes for live account persistence, hydration, restore acknowledgements and cached-client refresh. The final recreated account signs in cleanly against the deployed Worker and remains ready for use without retained acceptance inventory.
+
+### 4. Accept Windows Device Intake (source and private integration complete)
 
 - Review the exact source-complete candidate and integrate it without reopening the abandoned Settings import/schema/person transaction.
 - In the private signed-in environment, import a synthetic report into a new compatible Computer draft, resolve a non-empty-field conflict, leave Person as None, save once and reload the account.
@@ -68,7 +71,9 @@ Use a disposable/private Elistly environment and synthetic accounts; never produ
 - If real-machine evidence finds a defect, fix its authoritative parser, mapper, form or package source and rerun only the affected path.
 - Do not add remote collection requests, directory enrichment, automatic matching, existing-device update or schema generation to this release.
 
-### 5. Release-candidate acceptance
+The deployed private-account flow imports into the ordinary Computer draft, presents non-empty-field conflicts, keeps Person unassigned, saves once and survives reload. Physical Windows 10/11 execution remains an external gate, with the unverified surfaces recorded in `collector/windows/CANDIDATE.md`.
+
+### 5. Release-candidate acceptance (current source verified; deployment and external gates pending)
 
 Run this once against the exact candidate source and artifacts, not after every local change.
 
@@ -79,6 +84,8 @@ Run this once against the exact candidate source and artifacts, not after every 
 - Accessibility checks cover keyboard reachability, labels, focus order and destructive confirmations for the changed flows. Do not create a synthetic visual test suite.
 - README, DOCS, deployment instructions, known limitations and screenshots describe only verified behavior.
 - No production deployment, data migration or release occurs without David’s explicit approval.
+
+The full local source gates pass from commit `c4c0791`, including focused proof that every built-in entity type is discoverable while default-disabled and that presets only enable entries explicitly. The deployed application assets were last checked byte-for-byte at `e9c8758`; that deployed candidate is now superseded by the later preset-activation and built-in-catalog source changes and must not be represented as the current source candidate. The published collector 1.0.3 archive still matches the recorded SHA-256 and contents. Fresh deployed sign-in was clean with no console errors at the prior deployed boundary. No additional machine-feasible release work is authorized by this roadmap: remaining acceptance requires deployment approval, exact post-deployment asset verification, real Windows execution, a real mobile browser and David’s explicit release approval.
 
 ## Triggered work, not background work
 
