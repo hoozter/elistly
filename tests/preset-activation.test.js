@@ -169,6 +169,43 @@ async function testCustomPresetIdCollisionStaysCustom() {
   });
 }
 
+async function testEntityTypeManagerAlwaysShowsDisabledBuiltInCatalog() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        settings: {}, categories: {}, entityTypes: {}, entities: {},
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } },
+        currentWorkspaceId: 'default'
+      };
+      let saves = 0;
+      App.saveData = () => { saves += 1; };
+      App.renderSidebar = () => {};
+      App.loadView = () => {};
+      App.showNotification = () => {};
+
+      const catalogIds = [...new Set(
+        ['it', 'library', 'staff', 'property']
+          .flatMap(presetId => Object.keys(App._presets[presetId]?.entityTypes || {}))
+      )].sort();
+
+      App.showEntityTypeManager();
+      const modal = document.getElementById('entityTypeManagerModal');
+      const rows = [...modal.querySelectorAll('.entity-type-row')];
+      const storedIds = Object.keys(App.data.entityTypes).sort();
+      const allDisabled = Object.values(App.data.entityTypes).every(type => type.enabled === false);
+      const enableActions = [...modal.querySelectorAll('.entity-type-row .category-actions button[title="Enable"]')].length;
+
+      return { catalogIds, storedIds, rowCount: rows.length, allDisabled, enableActions, saves };
+    });
+
+    assert.deepEqual(result.storedIds, result.catalogIds);
+    assert.equal(result.rowCount, result.catalogIds.length);
+    assert.equal(result.allDisabled, true);
+    assert.equal(result.enableActions, result.catalogIds.length);
+    assert.equal(result.saves, 1);
+  });
+}
+
 async function testBuiltInCategoryDisableIsNonDestructiveAndHidden() {
   await withPage(async page => {
     const result = await page.evaluate(() => {
@@ -300,6 +337,7 @@ Promise.resolve()
   .then(testActivationStateIsWorkspaceLocalAndMigratesExistingTypesEnabled)
   .then(testSampleLoadingIsExplicitScopedAndIdempotent)
   .then(testCustomPresetIdCollisionStaysCustom)
+  .then(testEntityTypeManagerAlwaysShowsDisabledBuiltInCatalog)
   .then(testBuiltInCategoryDisableIsNonDestructiveAndHidden)
   .then(testDisabledTypesDoNotLeakIntoNavigationOrFilters)
   .then(testDisabledCategoriesHideTheirTypesAndAssociationEntities)

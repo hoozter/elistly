@@ -635,7 +635,6 @@ const App = {
               this.data.currentWorkspaceId = 'default';
               dataMutatedDuringInit = true;
             }
-            if (this.normalizeActivationState()) dataMutatedDuringInit = true;
               const fontSize = this.getSafeFontSize();
               document.documentElement.setAttribute('data-font-size', ['small','normal','large','larger'].includes(fontSize) ? fontSize : 'normal');
 
@@ -689,6 +688,10 @@ const App = {
             console.error('Error loading user data:', e);
           }
         }
+
+        // The built-in catalog is part of every workspace, including a blank first run.
+        // Presets select from it; they are not the source of discoverability.
+        if (this.normalizeActivationState()) dataMutatedDuringInit = true;
 
           const personType = this.data.entityTypes && this.data.entityTypes.person;
           if (personType && Array.isArray(personType.fields)) {
@@ -4887,6 +4890,9 @@ const App = {
       },
       
       showEntityTypeManager() {
+        // Remote/legacy blank workspaces may not have catalog entries materialized yet.
+        // Populate them before rendering so this screen is always the source of truth.
+        if (this.normalizeActivationState()) this.saveData();
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const icon = (name) => make('span', 'material-icons', name);
         const modal = make('div', 'modal'); modal.id = 'entityTypeManagerModal'; const content = make('div', 'modal-content');
@@ -4902,7 +4908,7 @@ const App = {
           if (isBuiltIn) {
             const enabling = type.enabled === false;
             remove.title = enabling ? 'Enable' : 'Disable';
-            remove.appendChild(icon(enabling ? 'visibility' : 'visibility_off'));
+            remove.append(icon(enabling ? 'visibility' : 'visibility_off'), make('span', '', enabling ? 'Enable' : 'Disable'));
             remove.addEventListener('click', () => {
               this.closeModal('entityTypeManagerModal');
               this.setEntityTypeEnabled(type.id, enabling);
