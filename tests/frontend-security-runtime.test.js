@@ -381,7 +381,9 @@ async function testEntityTypeEditorParity() {
       const type = addedField.querySelector('select[name$=".type"]');
       type.value = 'dropdown';
       type.dispatchEvent(new Event('change', { bubbles: true }));
-      click('button', 'Add Option');
+      const addOption = [...addedField.querySelectorAll('button')].find(element => element.textContent.includes('Add Option'));
+      if (!addOption) throw new Error('Missing Add Option');
+      addOption.click();
       const optionRowsBeforeRemove = addedField.querySelectorAll('.option-row').length;
       addedField.querySelector('.option-row .btn-danger').click();
       const optionRowsAfterRemove = addedField.querySelectorAll('.option-row').length;
@@ -438,6 +440,75 @@ async function testEntityTypeEditorParity() {
     assert.equal(result.visibleDevice, true, 'an existing device must remain visible in its category view after title-generation settings are saved');
     assert.deepEqual(result.saved.nameGen, { prefixEnabled: true, prefix: 'Unit-', partOfNamePrefix: true, suffixType: 'number', componentsOrder: [{ type: 'field', name: 'status' }] }, 'save must retain title-generator interaction data shape');
     assert.equal(result.labelAfterCancel, 'Device', 'cancel must not persist editor changes');
+  });
+}
+
+async function testComputerNamesAreProspectiveOnly() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        version: 'test', settings: {},
+        categories: { hardware: { id: 'hardware', label: 'Hardware', enabled: true } },
+        entityTypes: {
+          computer: {
+            id: 'computer', label: 'Computer', icon: 'computer', categories: ['hardware'], enabled: true,
+            enableNameGen: true,
+            nameGen: {
+              prefixEnabled: true, prefix: 'NEW-', suffixType: 'number',
+              componentsOrder: [{ type: 'field', name: 'hostname' }]
+            },
+            fields: [{ name: 'hostname', label: 'Hostname', type: 'text', partOfName: true }],
+            associations: []
+          }
+        },
+        entities: {
+          existing: { id: 'existing', type: 'computer', hostname: 'ALPHA', autoName: 'SAVED-ALPHA' }
+        },
+        workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } },
+        currentWorkspaceId: 'default'
+      };
+      App.saveData = () => {};
+      App.loadView = () => {};
+      App.closeEntityModal = () => document.getElementById('entityModal')?.remove();
+
+      App.showEntityForm('computer', 'existing');
+      const afterOpen = App.data.entities.existing.autoName;
+      App.showEntityEditMode(true);
+      const existingForm = document.querySelector('#entityForm');
+      existingForm.querySelector('[name="hostname"]').value = 'CHANGED';
+      existingForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const afterLockedSave = App.data.entities.existing.autoName;
+
+      App.data.entityTypes.computer.nameGen.prefix = 'LATER-';
+      App.showEntityForm('computer');
+      const createForm = document.querySelector('#entityForm');
+      createForm.querySelector('[name="hostname"]').value = 'BETA';
+      createForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const created = Object.values(App.data.entities).find(entity => entity.id !== 'existing');
+
+      App.showEntityForm('computer', 'existing');
+      App.showEntityEditMode(true);
+      const manualForm = document.querySelector('#entityForm');
+      const nameInput = manualForm.querySelector('#nameInput');
+      nameInput.dataset.unlocked = 'true';
+      nameInput.readOnly = false;
+      nameInput.value = 'MY-COMPUTER';
+      manualForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+      return {
+        afterOpen,
+        afterLockedSave,
+        createdName: created.autoName,
+        afterManualRename: App.data.entities.existing.autoName,
+        existingDisplayName: App.getEntityDisplayName(App.data.entities.existing)
+      };
+    });
+
+    assert.equal(result.afterOpen, 'SAVED-ALPHA', 'opening a saved Computer must not regenerate its name');
+    assert.equal(result.afterLockedSave, 'SAVED-ALPHA', 'ordinary edits must preserve the saved Computer name');
+    assert.equal(result.createdName, 'LATER-BETA', 'changed generation settings must apply to newly created Computers');
+    assert.equal(result.afterManualRename, 'MY-COMPUTER', 'unlocking and editing the name must deliberately replace the saved name');
+    assert.equal(result.existingDisplayName, 'MY-COMPUTER', 'the deliberate replacement must be the displayed device name');
   });
 }
 
@@ -856,7 +927,7 @@ async function testImportCollisionHardening() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, importHardening: testImportCollisionHardening, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
+const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, importHardening: testImportCollisionHardening, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, prospectiveNames: testComputerNamesAreProspectiveOnly, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
 const selected = process.argv[2] || 'import';
 if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
 tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {

@@ -722,9 +722,8 @@ const App = {
 
         const componentsChanged = this.normalizeNameComponents();
         const schemaChanged = this.normalizeEntityTypeSchema();
-        const namesChanged = this.normalizeAutoNames();
         document.documentElement.setAttribute('data-font-size', this.getSafeFontSize());
-        if (componentsChanged || schemaChanged || namesChanged) dataMutatedDuringInit = true;
+        if (componentsChanged || schemaChanged) dataMutatedDuringInit = true;
         if (dataMutatedDuringInit) this.saveData();
         this.buildIconGrid();
         this.renderSidebar();
@@ -3777,14 +3776,6 @@ const App = {
         }
 
         const isEdit = !!entity;
-        if (isEdit && type.enableNameGen) {
-          const nextName = this.generateAutoName(entityType, entity);
-          if (nextName && entity.autoName !== nextName) {
-            entity.autoName = nextName;
-            this.data.entities[entity.id] = entity;
-            this.saveData();
-          }
-        }
         
         // Close any open dropdowns
         document.querySelectorAll('.dropdown-menu').forEach(menu => {
@@ -3857,7 +3848,7 @@ const App = {
           unlock.addEventListener('click', () => this.toggleNameLock(unlock));
           addIcon(unlock, 'lock');
           lockRow.append(nameInput, unlock);
-          group.append(lockRow, makeElement('div', 'help-text', 'Name will be auto-generated based on fields'));
+          group.append(lockRow, makeElement('div', 'help-text', isEdit ? 'Saved name stays unchanged unless you unlock and edit it' : 'Name will be generated from the current naming settings'));
           group.lastElementChild.id = 'nameGenStatus';
           basic.appendChild(group);
         }
@@ -4159,15 +4150,19 @@ const App = {
           data[f.name] = formData.get(f.name) === 'yes';
         });
 
-        // Generate auto name if needed
+        // Naming settings are prospective: generate once on creation, then preserve the saved name.
         if (type.enableNameGen) {
           const nameInput = form.querySelector('#nameInput');
           const unlocked = nameInput && nameInput.dataset.unlocked === 'true';
-          data.autoName = this.generateAutoName(entityType, data, data.id);
-          if (!unlocked) {
+          const requestedName = (formData.get('name') || '').trim();
+          if (!entityId) {
+            data.autoName = unlocked && requestedName
+              ? requestedName
+              : this.generateAutoName(entityType, data, data.id);
             delete data.name;
-          } else if (formData.get('name')) {
-            data.name = formData.get('name');
+          } else if (unlocked && requestedName) {
+            data.autoName = requestedName;
+            delete data.name;
           }
         } else if (type.fields.some(f => f.name === 'firstName') && type.fields.some(f => f.name === 'lastName')) {
           data.name = [data.firstName, data.lastName].filter(Boolean).join(' ').trim() || data.name || '';
@@ -4638,72 +4633,6 @@ const App = {
         });
 
         return prefix + parts.join('');
-      },
-
-      normalizeAutoNames() {
-        let changed = false;
-        const byType = {};
-        Object.values(this.data.entities || {}).forEach(entity => {
-          const type = this.data.entityTypes[entity.type];
-          if (!type || !type.enableNameGen) return;
-          const baseName = this.buildAutoNameBase(entity.type, entity) || '';
-          if (!baseName) {
-            if (entity.autoName) {
-              entity.autoName = '';
-              changed = true;
-            }
-            return;
-          }
-          if (!byType[entity.type]) byType[entity.type] = {};
-          if (!byType[entity.type][baseName]) byType[entity.type][baseName] = [];
-          byType[entity.type][baseName].push(entity);
-        });
-
-        Object.entries(byType).forEach(([typeId, groups]) => {
-          const type = this.data.entityTypes[typeId];
-          Object.entries(groups).forEach(([baseName, list]) => {
-            if (!baseName) return;
-            const sorted = list.slice().sort((a, b) => a.id.localeCompare(b.id));
-            if (sorted.length === 1) {
-              const single = sorted[0];
-              if (single.autoName !== baseName) {
-                single.autoName = baseName;
-                changed = true;
-              }
-              if (single.name && single.name.startsWith(baseName)) {
-                const tail = single.name.slice(baseName.length);
-                const looksLikeSuffix = (tail.length === 2 && /^\d+$/.test(tail)) || (tail.length === 1 && /^[A-Z]$/.test(tail));
-                if (looksLikeSuffix) {
-                  delete single.name;
-                  changed = true;
-                }
-              }
-              return;
-            }
-            if (type.nameGen.suffixType === 'letter') {
-              let suffix = 'A';
-              sorted.forEach(entity => {
-                const next = baseName + suffix;
-                if (entity.autoName !== next) {
-                  entity.autoName = next;
-                  changed = true;
-                }
-                suffix = String.fromCharCode(suffix.charCodeAt(0) + 1);
-              });
-              return;
-            }
-            let idx = 1;
-            sorted.forEach(entity => {
-              const next = baseName + String(idx).padStart(2, '0');
-              if (entity.autoName !== next) {
-                entity.autoName = next;
-                changed = true;
-              }
-              idx += 1;
-            });
-          });
-        });
-        return changed;
       },
 
       normalizeNameComponents() {
