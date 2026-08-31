@@ -352,11 +352,14 @@ async function testEntityTypeEditorParity() {
       const original = {
         id: 'device', label: 'Device', icon: 'memory', categories: ['hardware'], enableNameGen: false,
         nameGen: { prefix: '', prefixEnabled: false, suffixType: 'number', componentsOrder: [] },
-        fields: [{ name: 'serial', label: 'Serial', type: 'text', required: true, visibleInCard: true, partOfName: false }],
+        fields: [
+          { name: 'serial', label: 'Serial', type: 'text', required: true, visibleInCard: true, partOfName: false },
+          { name: 'memorySummary', label: 'Memory', type: 'dropdown', required: false, visibleInCard: true, partOfName: false, options: [{ value: '16GB', nameValue: '16' }], collection: { provider: 'windows', capability: 'memory.total' } }
+        ],
         associations: [{ name: 'owner', label: 'Owner', type: 'association', required: false, visibleInCard: false, partOfName: false, association: { kind: 'belongs_to', targetType: 'person' } }]
       };
       App.data = {
-        version: 'test', settings: {}, entities: {},
+        version: 'test', settings: {}, entities: { device1: { id: 'device1', type: 'device', serial: 'ABC', memorySummary: '16 GB' } },
         categories: { hardware: { id: 'hardware', label: 'Hardware' } },
         entityTypes: {
           device: structuredClone(original),
@@ -373,7 +376,7 @@ async function testEntityTypeEditorParity() {
         element.click();
       };
       click('button', 'Add Field');
-      const addedField = form.querySelectorAll('.field-card, .field-editor')[1];
+      const addedField = form.querySelectorAll('.field-card, .field-editor')[2];
       addedField.querySelector('input[name$=".label"]').value = 'Status';
       const type = addedField.querySelector('select[name$=".type"]');
       type.value = 'dropdown';
@@ -400,6 +403,8 @@ async function testEntityTypeEditorParity() {
       const fieldsAfterRemove = form.querySelectorAll('.field-card, .field-editor').length;
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       const saved = App.data.entityTypes.device;
+      App.renderCategoryView('hardware');
+      const visibleDevice = Boolean(document.querySelector('[data-entity-selection][value="device1"]'));
       App.editEntityType('device');
       const cancelForm = document.querySelector('#entityTypeForm');
       cancelForm.querySelector('input[name="label"]').value = 'Discarded';
@@ -408,19 +413,29 @@ async function testEntityTypeEditorParity() {
         optionRowsBeforeRemove, optionRowsAfterRemove, associationsAfterAdd, associationsAfterRemove,
         fieldsAfterRemove, preview, nameSectionVisible: !form.querySelector('.name-generation-settings')?.classList.contains('hidden'),
         prefixEnabled: !form.querySelector('input[name="namePrefix"]').disabled,
-        saved, labelAfterCancel: App.data.entityTypes.device.label
+        saved,
+        memoryProposal: ElistlyDeviceIntake.createDraftProposal({ computer: { memorySummary: '16 GB' } }, saved, {}),
+        visibleDevice,
+        labelAfterCancel: App.data.entityTypes.device.label
       };
     });
     assert.equal(result.optionRowsBeforeRemove, 2, 'dropdown type switch must create an option and add must append another');
     assert.equal(result.optionRowsAfterRemove, 1, 'option removal must remove exactly one option');
     assert.equal(result.associationsAfterAdd, 2, 'link add must append an association editor');
     assert.equal(result.associationsAfterRemove, 1, 'link removal must remove exactly one association editor');
-    assert.equal(result.fieldsAfterRemove, 1, 'field removal must remove exactly one field editor');
+    assert.equal(result.fieldsAfterRemove, 2, 'field removal must remove exactly one field editor');
     assert.equal(result.nameSectionVisible, true, 'title generator interactions must reveal the editor');
     assert.equal(result.prefixEnabled, true, 'prefix interaction must enable the prefix input');
     assert.match(result.preview, /Unit-/, 'title generator interactions must update preview');
-    assert.deepEqual(result.saved.fields.map(field => ({ label: field.label, type: field.type, options: field.options })), [{ label: 'Status', type: 'dropdown', options: [] }]);
+    assert.deepEqual(result.saved.fields.map(field => ({ label: field.label, type: field.type, options: field.options })), [
+      { label: 'Memory', type: 'dropdown', options: [{ value: '16GB', nameValue: '16' }] },
+      { label: 'Status', type: 'dropdown', options: [] }
+    ]);
+    assert.deepEqual(result.saved.fields[0].collection, { provider: 'windows', capability: 'memory.total' }, 'editing title generation must preserve intake capability metadata');
+    assert.deepEqual(result.memoryProposal.mapped.map(item => ({ field: item.field, value: item.value })), [{ field: 'memorySummary', value: '16GB' }], 'RAM import must still map after title-generation settings are saved');
     assert.equal(result.saved.associations.length, 1, 'save must retain the remaining association');
+    assert.deepEqual(result.saved.categories, ['hardware'], 'saving title generation must not detach the type from its selected category');
+    assert.equal(result.visibleDevice, true, 'an existing device must remain visible in its category view after title-generation settings are saved');
     assert.deepEqual(result.saved.nameGen, { prefixEnabled: true, prefix: 'Unit-', partOfNamePrefix: true, suffixType: 'number', componentsOrder: [{ type: 'field', name: 'status' }] }, 'save must retain title-generator interaction data shape');
     assert.equal(result.labelAfterCancel, 'Device', 'cancel must not persist editor changes');
   });

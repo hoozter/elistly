@@ -5531,10 +5531,10 @@ const App = {
         const formData = new FormData(form);
         
         // Process fields and associations separately
-        const fields = this.processFieldsData(formData);
+        const fields = this.processFieldsData(formData, this.data.entityTypes[typeId]?.fields || []);
         const associations = this.processAssociationsData(formData);
         
-        const categories = Object.keys(this.data.categories || {}).filter(catId => formData.get(`category_${catId}`) === '1');
+        const categories = Object.keys(this.data.categories || {}).filter(catId => formData.has(`category_${catId}`));
         const data = {
           label: formData.get('label'),
           categories: categories,
@@ -5623,7 +5623,7 @@ const App = {
         this.showNotification(`Entity type ${typeId ? 'updated' : 'created'} successfully`, 'success');
       },
       
-      processFieldsData(formData) {
+      processFieldsData(formData, existingFields = []) {
         const fields = [];
         const entries = Array.from(formData.entries());
         
@@ -5657,6 +5657,11 @@ const App = {
             visibleInCard: group.visibleInCard === 'on',
             partOfName: group.partOfName === 'on'
           };
+
+          const existingField = existingFields.find(candidate => candidate.name === name);
+          if (existingField?.collection) {
+            field.collection = JSON.parse(JSON.stringify(existingField.collection));
+          }
           
           if (field.type === 'dropdown') {
             field.options = [];
