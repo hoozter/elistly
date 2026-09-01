@@ -73,9 +73,9 @@ The private synthetic-account gate is complete. It exposed and drove fixes for l
 
 The deployed private-account flow imports into the ordinary Computer draft, presents non-empty-field conflicts, keeps Person unassigned, saves once and survives reload. Physical Windows 10/11 execution remains an external gate, with the unverified surfaces recorded in `collector/windows/CANDIDATE.md`.
 
-### 5. Release-candidate acceptance (current source verified; deployment and external gates pending)
+### 5. Release acceptance (published; external hardware evidence remains a known limitation)
 
-Run this once against the exact candidate source and artifacts, not after every local change.
+The release candidate was accepted and published after explicit approval on 2026-09-01. The checks below describe the evidence retained for that release and the one hardware-specific limitation that remains disclosed rather than blocking publication.
 
 - All Worker and browser/runtime tests pass from the release commit; syntax and repository-secret checks pass.
 - A fresh private account passes the signed-in integration workflow in milestone 3.
@@ -85,7 +85,7 @@ Run this once against the exact candidate source and artifacts, not after every 
 - README, DOCS, deployment instructions, known limitations and screenshots describe only verified behavior.
 - No production deployment, data migration or release occurs without David’s explicit approval.
 
-The full local source gates pass from commit `c4c0791`, including focused proof that every built-in entity type is discoverable while default-disabled and that presets only enable entries explicitly. The deployed application assets were last checked byte-for-byte at `e9c8758`; that deployed candidate is now superseded by the later preset-activation and built-in-catalog source changes and must not be represented as the current source candidate. The published collector 1.0.3 archive still matches the recorded SHA-256 and contents. Fresh deployed sign-in was clean with no console errors at the prior deployed boundary. No additional machine-feasible release work is authorized by this roadmap: remaining acceptance requires deployment approval, exact post-deployment asset verification, real Windows execution, a real mobile browser and David’s explicit release approval.
+Release approval was given on 2026-09-01. Commit `2a5616e` is published to production and the deployed `app.js` was verified byte-for-byte against that commit. All 75 browser/runtime tests and all 6 Worker tests pass from the published source; syntax and repository whitespace checks also pass. The published collector 1.0.3 archive still matches its recorded SHA-256 and contents. Prior private signed-in acceptance covered account persistence, restore, conflict handling and Device Intake through ordinary Add Computer. Physical Windows 10/11 collector execution remains unavailable evidence and is disclosed in `collector/windows/CANDIDATE.md`; it is not represented as verified and does not block this published release.
 
 ## Triggered work, not background work
 
