@@ -3831,7 +3831,15 @@ const App = {
         form.dataset.typeId = entityType;
         form.dataset.entityId = entityId || '';
         form.autocomplete = 'off';
-        form.addEventListener('submit', event => this.saveEntity(event, entityType, entityId));
+        form.addEventListener('submit', event => {
+          if (Number(form.dataset.deviceIntakePendingConflicts) > 0) {
+            event.preventDefault();
+            form.querySelector('.device-intake-conflict[data-resolved="false"] button')?.focus();
+            this.showNotification('Choose a value for every imported field conflict before saving.', 'error');
+            return;
+          }
+          this.saveEntity(event, entityType, entityId);
+        });
         const sections = makeElement('div', `form-sections${isEdit ? ' hidden' : ''}`);
         sections.id = 'entityEdit';
         const basic = makeElement('div', 'modal-group carded-section');
@@ -3927,10 +3935,18 @@ const App = {
         return true;
       },
 
+      setDeviceIntakePendingConflictCount(form, count) {
+        const pending = Math.max(0, Number(count) || 0);
+        form.dataset.deviceIntakePendingConflicts = String(pending);
+        const save = form.querySelector('button[type="submit"]');
+        if (save) save.disabled = pending > 0;
+      },
+
       async readDeviceIntakeDraftReport(event, type, form, result) {
         const readId = String(Number(result.dataset.deviceIntakeRead || 0) + 1);
         result.dataset.deviceIntakeRead = readId;
         result.replaceChildren();
+        this.setDeviceIntakePendingConflictCount(form, 0);
         try {
           const file = event.target.files?.[0];
           if (!file) return;
@@ -3964,9 +3980,11 @@ const App = {
         if (proposal.conflicts.length) {
           const conflicts = make('section', 'device-intake-conflicts');
           conflicts.appendChild(make('h5', '', 'Choose values for existing draft fields'));
+          conflicts.appendChild(make('p', 'help-text device-intake-conflict-guidance', 'Resolve every conflict to make Save available.'));
           for (const item of proposal.conflicts) {
             const row = make('div', 'device-intake-conflict');
             row.dataset.field = item.field;
+            row.dataset.resolved = 'false';
             const field = (type.fields || []).find(candidate => candidate.name === item.field);
             row.appendChild(make('p', '', `${field?.label || item.field}: current “${item.current}”; collected “${item.value}”.`));
             const actions = make('div', 'device-intake-conflict-actions');
@@ -3976,9 +3994,12 @@ const App = {
             use.type = 'button';
             const resolution = make('span', 'help-text');
             const resolve = text => {
+              row.dataset.resolved = 'true';
               keep.disabled = true;
               use.disabled = true;
               resolution.textContent = text;
+              const pending = conflicts.querySelectorAll('.device-intake-conflict[data-resolved="false"]').length;
+              this.setDeviceIntakePendingConflictCount(form, pending);
             };
             keep.addEventListener('click', () => resolve('Kept current value.'));
             use.addEventListener('click', () => {
@@ -3991,6 +4012,7 @@ const App = {
           }
           result.appendChild(conflicts);
         }
+        this.setDeviceIntakePendingConflictCount(form, proposal.conflicts.length);
 
         if (Object.keys(proposal.accountContext).length) {
           const context = make('section', 'device-intake-account-context');

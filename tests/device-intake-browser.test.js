@@ -154,9 +154,15 @@ const initial = {
     assert.equal(await page.evaluate(() => window.__deviceIntakeXss), 0);
     assert.match(await form.locator('details.device-intake-unmapped').textContent(), /Not imported.*windowsEdition.*No existing field/is);
     assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeDraftImport, 'draft import must not mutate application data');
+    assert.equal(await form.getByRole('button', { name: 'Save' }).isDisabled(), true, 'every draft conflict must be explicitly resolved before Save');
+    await form.evaluate(node => node.requestSubmit());
+    assert.equal(await page.evaluate(() => JSON.stringify(App.data)), beforeDraftImport, 'unresolved conflicts must block non-button submission paths');
+    assert.equal(await page.locator('#entityModal').count(), 1, 'blocked submission keeps the Add Computer draft open');
 
     await form.locator('.device-intake-conflict[data-field="hostname"]').getByRole('button', { name: 'Keep current' }).click();
+    assert.equal(await form.getByRole('button', { name: 'Save' }).isDisabled(), true, 'Save remains blocked while another conflict is unresolved');
     await form.locator('.device-intake-conflict[data-field="model"]').getByRole('button', { name: 'Use collected' }).click();
+    assert.equal(await form.getByRole('button', { name: 'Save' }).isDisabled(), false, 'Save becomes available after every conflict has an explicit choice');
     assert.equal(await form.locator('[name="hostname"]').inputValue(), 'MANUAL-PC');
     assert.equal(await form.locator('[name="model"]').inputValue(), 'Latitude 7450');
 
