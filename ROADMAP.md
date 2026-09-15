@@ -87,13 +87,13 @@ The release candidate was accepted and published after explicit approval on 2026
 
 Release approval was given on 2026-09-01. Commit `2a5616e` is published to production and the deployed `app.js` was verified byte-for-byte against that commit. All 75 browser/runtime tests and all 6 Worker tests pass from the published source; syntax and repository whitespace checks also pass. The published collector 1.0.3 archive still matches its recorded SHA-256 and contents. Prior private signed-in acceptance covered account persistence, restore, conflict handling and Device Intake through ordinary Add Computer. Physical Windows 10/11 collector execution remains unavailable evidence and is disclosed in `collector/windows/CANDIDATE.md`; it is not represented as verified and does not block this published release.
 
-## Stored-XSS hardening (source complete, 2026-09-15; not deployed)
+## Stored-XSS hardening (published, 2026-09-15)
 
 - Remaining live HTML interpolation now escapes workspace IDs/names, appearance values, profile/account values, API errors and title-component labels at the rendering boundary. Stored values and callback IDs remain literal and unchanged.
 - Existing DOM-based category/type editors and export views now own their public entry points; superseded HTML implementations and unused editor helpers were removed.
-- Four browser regressions reproduced active-node injection before the fix and passed afterward. The security runner now runs all scenarios by default, including import/reload/click, editor/export, settings, local QR and import persistence coverage.
-- The application bundle and service-worker shell versions are advanced for a future authorized release. No deployment, push, history rewrite or production-data change was performed.
-- Next action: review and authorize publication of this local hardening candidate. Native Windows collector acceptance remains the previously disclosed external hardware gate; no additional feature work is authorized by that wait.
+- Four browser regressions reproduced active-node injection before the fix and passed afterward. The security runner runs all scenarios by default, including import/reload/click, editor/export, settings, local QR and import persistence coverage.
+- The application bundle and service-worker shell versions were advanced and published. Production `app.html` requests bundle version 27; deployed `app.js` and `sw.js` match the accepted source byte-for-byte.
+- Native Windows collector acceptance remains the previously disclosed external hardware gate; no additional feature work is authorized by that wait.
 
 ## Triggered work, not background work
 
