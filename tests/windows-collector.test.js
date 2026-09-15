@@ -61,13 +61,13 @@ assert.match(packageScript, /bin\/Elistly\.ico/);
 assert.match(app, /Double-click.*Elistly Device Collector.*shortcut/i, 'in-app instructions must name the branded shortcut');
 assert.doesNotMatch(app, /right-click Collect-ElistlyDevice\.ps1/i, 'in-app instructions must not direct users to the policy-blocked path');
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
-assert.match(appHtml, /styles\.css\?v=18/);
+assert.match(appHtml, /styles\.css\?v=19/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
-assert.match(appHtml, /app\.js\?v=24/, 'app shell must request the current collector-download bundle');
-assert.match(serviceWorker, /elistly-shell-v16/);
-assert.match(serviceWorker, /styles\.css\?v=18/);
+assert.match(appHtml, /app\.js\?v=25/, 'app shell must request the current collector-download bundle');
+assert.match(serviceWorker, /elistly-shell-v17/);
+assert.match(serviceWorker, /styles\.css\?v=19/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
-assert.match(serviceWorker, /app\.js\?v=24/);
+assert.match(serviceWorker, /app\.js\?v=25/);
 for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript], ['app download', app]]) {
   assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.3|Collector 1\.0\.2/i, `${name} must reference collector package 1.0.3 or collector 1.0.2`);
 }

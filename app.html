@@ -35,7 +35,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=18" />
+  <link rel="stylesheet" href="styles.css?v=19" />
 </head>
 <body>
   <div class="app-container">
@@ -58,7 +58,7 @@
         </button>
       </div>
       <div class="header-actions">
-        <span id="syncStatus" class="sync-status" data-state="synced" role="status" aria-live="polite">Changes are synced.</span>
+        <span id="syncStatus" class="sync-status" data-state="idle" role="status" aria-live="polite" hidden></span>
         <div class="dropdown hidden" id="profileDropdownWrap">
           <button type="button" class="header-icon-btn" id="profileBtn" aria-label="Profile" aria-haspopup="true" aria-expanded="false">
             <span class="material-icons">person</span>
@@ -150,6 +150,6 @@
   <script src="vendor/qrcode-generator/qrcode.js"></script>
   <script src="vendor/qrcode-generator/qrcode_UTF8.js"></script>
   <script src="device-intake.js?v=3"></script>
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>

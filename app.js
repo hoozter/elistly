@@ -145,7 +145,7 @@ const Storage = {
   _cachedUserId: null,
   _isDirty: false,
   _saveChains: {},
-  _syncStatus: { state: 'synced', message: 'Changes are synced.' },
+  _syncStatus: { state: 'idle', message: '' },
 
   _getUserCacheKey(userId) {
     return `${this.USER_CACHE_PREFIX}${userId}`;
@@ -277,7 +277,11 @@ const Storage = {
       try {
         const onRemoteSync = typeof options.onRemoteSync === 'function' ? options.onRemoteSync : null;
         const user = await getAuthUser();
-        if (!user) return null;
+        if (!user) {
+          const error = new Error('Signed-in account data could not be confirmed.');
+          this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
+          throw error;
+        }
 
         this._migrateLegacyCache(user.id);
         const outbox = this._readOutbox(user.id);
@@ -302,7 +306,9 @@ const Storage = {
         const res = await apiRequest('/app-data');
         if (!res.ok) {
           console.error('Storage.getAppData API error', res.data);
-          return null;
+          const error = new Error((res.data && res.data.error) || 'Account data could not be loaded.');
+          this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
+          throw error;
         }
         const remote = res.data || {};
         this._cached = remote && remote.payload ? remote.payload : null;
@@ -311,7 +317,8 @@ const Storage = {
         return this._cached;
       } catch (e) {
         console.error('Storage.getAppData failed', e);
-        return null;
+        this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
+        throw e;
       }
     }
     try {
@@ -325,7 +332,11 @@ const Storage = {
   async syncRemoteInBackground(userId, cachedUpdatedAt, onRemoteSync) {
     try {
       const res = await apiRequest('/app-data');
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.error('Storage.syncRemoteInBackground API error', res.data);
+        this._setSyncStatus('failed', 'Account data could not be refreshed. Local changes are retained.');
+        return;
+      }
       const data = res.data || null;
 
       const remoteUpdatedAt = data && data.updated_at ? String(data.updated_at) : '';
@@ -340,7 +351,10 @@ const Storage = {
       this._writeUserCache(userId, remotePayload || {}, remoteUpdatedAt);
 
       if (changed && onRemoteSync) onRemoteSync(remotePayload);
-    } catch (_) {}
+    } catch (e) {
+      console.error('Storage.syncRemoteInBackground failed', e);
+      this._setSyncStatus('failed', 'Account data could not be refreshed. Local changes are retained.');
+    }
   },
 
   setAppData(data) {
@@ -589,15 +603,21 @@ const App = {
         this.applyLogoStyle(localStorage.getItem('logoStyle') || 'color');
 
         let dataMutatedDuringInit = false;
-        const stored = await Storage.getAppData({
-          onRemoteSync: (remoteData) => {
-            if (!this._isReady) {
-              this._pendingRemoteData = remoteData || null;
-              return;
+        let stored;
+        try {
+          stored = await Storage.getAppData({
+            onRemoteSync: (remoteData) => {
+              if (!this._isReady) {
+                this._pendingRemoteData = remoteData || null;
+                return;
+              }
+              this.applyRemoteSyncData(remoteData);
             }
-            this.applyRemoteSyncData(remoteData);
-          }
-        });
+          });
+        } catch (error) {
+          this.showAccountLoadError(error);
+          return;
+        }
         const isFirstRun = !stored || (Object.keys(stored.categories || {}).length === 0 && Object.keys(stored.entityTypes || {}).length === 0);
         const onboardingDone = !!(stored && stored.onboardingDone);
 
@@ -1325,7 +1345,20 @@ const App = {
         if (!status) return;
         const sync = Storage.getSyncStatus();
         status.dataset.state = sync.state;
-        status.textContent = sync.message;
+        const isQuiet = sync.state === 'idle' || sync.state === 'synced';
+        status.hidden = isQuiet;
+        status.textContent = isQuiet ? '' : sync.message;
+      },
+
+      showAccountLoadError(error) {
+        const main = document.getElementById('mainContent');
+        if (!main) return;
+        main.innerHTML = `
+          <div class="card account-load-error" role="alert">
+            <div class="card-header"><h2><span class="material-icons">sync_problem</span> Account data unavailable</h2></div>
+            <p>Your account data could not be loaded. Elistly has not created or saved any replacement data.</p>
+            <p class="account-load-error-detail">Check your connection and reload. Any local changes remain on this device.</p>
+          </div>`;
       },
 
       applyRemoteSyncData(remoteData) {

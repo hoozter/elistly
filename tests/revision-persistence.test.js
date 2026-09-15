@@ -342,6 +342,88 @@ async function testMalformedOutboxFailsSafely() {
   });
 }
 
+async function testFailedAccountHydrationDoesNotStartAnEmptyAccount() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      backendClient = {
+        auth: {
+          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } })
+        }
+      };
+      window.ELISTLY_API_URL = '/mock';
+      let writes = 0;
+      window.fetch = async (_url, options = {}) => {
+        if ((options.method || 'GET') === 'PUT') writes += 1;
+        return new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 });
+      };
+      Storage._cached = null;
+      Storage._cachedUserId = null;
+      Storage._isDirty = false;
+      let error = null;
+      try { await Storage.getAppData(); } catch (caught) { error = caught.message; }
+      return {
+        error,
+        writes,
+        cache: localStorage.getItem('elistlyData:user:user-1'),
+        outbox: localStorage.getItem('elistlyData:outbox:user-1'),
+        status: Storage.getSyncStatus()
+      };
+    });
+
+    assert.match(observed.error || '', /Service unavailable/, 'a failed account read must reject instead of looking like an empty account');
+    assert.equal(observed.writes, 0, 'failed hydration must never issue an empty-account write');
+    assert.equal(observed.cache, null, 'failed hydration must not create an empty account cache');
+    assert.equal(observed.outbox, null, 'failed hydration must not create an empty-account outbox entry');
+    assert.equal(observed.status.state, 'failed', 'failed hydration must be visible instead of being reported as synced');
+  });
+}
+
+async function testFailedBackgroundHydrationPreservesCachedData() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const cached = { version: 'test', entities: { retained: true } };
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(cached));
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: cached }]));
+      window.ELISTLY_API_URL = '/mock';
+      window.fetch = async () => new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 });
+      Storage._cached = structuredClone(cached);
+      Storage._cachedUserId = 'user-1';
+      Storage._isDirty = false;
+      await Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z');
+      return {
+        cache: JSON.parse(localStorage.getItem('elistlyData:user:user-1')),
+        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
+        status: Storage.getSyncStatus()
+      };
+    });
+
+    assert.deepEqual(observed.cache, { version: 'test', entities: { retained: true } }, 'failed background hydration must preserve the account cache');
+    assert.deepEqual(observed.outbox, [{ id: 'pending', payload: { version: 'test', entities: { retained: true } } }], 'failed background hydration must preserve the durable outbox');
+    assert.equal(observed.status.state, 'failed', 'failed background hydration must be visible rather than silently ignored');
+  });
+}
+
+async function testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible() {
+  await withPage(async page => {
+    const observed = await page.evaluate(() => {
+      Storage._setSyncStatus('synced', 'Changes are synced.');
+      const status = document.getElementById('syncStatus');
+      const healthy = { hidden: status.hidden, text: status.textContent, state: status.dataset.state };
+      Storage._setSyncStatus('failed', 'Changes could not be synced. Local changes are retained.');
+      return { healthy, failed: { hidden: status.hidden, text: status.textContent, state: status.dataset.state, live: status.getAttribute('aria-live') } };
+    });
+
+    assert.deepEqual(observed.healthy, { hidden: true, text: '', state: 'synced' }, 'healthy sync must be quiet rather than permanently claiming success');
+    assert.deepEqual(observed.failed, {
+      hidden: false,
+      text: 'Changes could not be synced. Local changes are retained.',
+      state: 'failed',
+      live: 'polite'
+    }, 'sync failures must remain compact, visible, and announced accessibly');
+  });
+}
+
 async function testSyncStatusIsAccessibleInTheApplication() {
   await withPage(async page => {
     const observed = await page.evaluate(() => {
@@ -403,6 +485,9 @@ async function run() {
   await testConcurrentReconnectsSerializeOnePendingReplay();
   await testOnlineReconnectRetriesPendingSave();
   await testMalformedOutboxFailsSafely();
+  await testFailedAccountHydrationDoesNotStartAnEmptyAccount();
+  await testFailedBackgroundHydrationPreservesCachedData();
+  await testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible();
   await testSyncStatusIsAccessibleInTheApplication();
   await testRemoteHydrationRetainsUnknownTopLevelAccountData();
   await testImportAcknowledgementAcceptsEquivalentJsonObjectOrder();

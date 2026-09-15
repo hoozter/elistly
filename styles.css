@@ -143,6 +143,30 @@ header {
   align-items: center;
   gap: 0.25rem;
 }
+.sync-status {
+  max-width: min(18rem, 36vw);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+.sync-status[data-state="pending"] {
+  background: rgba(255, 193, 7, 0.18);
+  color: #fff3cd;
+}
+.sync-status[data-state="failed"],
+.sync-status[data-state="conflict"] {
+  background: rgba(220, 53, 69, 0.2);
+  color: #ffe5e8;
+}
+.account-load-error {
+  max-width: 42rem;
+  margin: 2rem auto;
+}
+.account-load-error-detail {
+  color: var(--text-secondary);
+}
 .header-icon-btn {
   background: none;
   border: none;
