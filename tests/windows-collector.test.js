@@ -63,11 +63,11 @@ assert.doesNotMatch(app, /right-click Collect-ElistlyDevice\.ps1/i, 'in-app inst
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
 assert.match(appHtml, /styles\.css\?v=19/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
-assert.match(appHtml, /app\.js\?v=25/, 'app shell must request the current collector-download bundle');
-assert.match(serviceWorker, /elistly-shell-v17/);
+assert.match(appHtml, /app\.js\?v=26/, 'app shell must request the current collector-download bundle');
+assert.match(serviceWorker, /elistly-shell-v18/);
 assert.match(serviceWorker, /styles\.css\?v=19/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
-assert.match(serviceWorker, /app\.js\?v=25/);
+assert.match(serviceWorker, /app\.js\?v=26/);
 for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript], ['app download', app]]) {
   assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.3|Collector 1\.0\.2/i, `${name} must reference collector package 1.0.3 or collector 1.0.2`);
 }

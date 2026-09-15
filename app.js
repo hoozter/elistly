@@ -618,10 +618,18 @@ const App = {
           this.showAccountLoadError(error);
           return;
         }
-        const isFirstRun = !stored || (Object.keys(stored.categories || {}).length === 0 && Object.keys(stored.entityTypes || {}).length === 0);
+        const storedWorkspace = stored && stored.workspaces && typeof stored.currentWorkspaceId === 'string'
+          ? stored.workspaces[stored.currentWorkspaceId]
+          : null;
+        const hasInventoryData = data => !!data && ['categories', 'entityTypes', 'entities'].some(domain =>
+          data[domain] && typeof data[domain] === 'object' && Object.keys(data[domain]).length > 0
+        );
+        const isFirstRun = !stored || (!hasInventoryData(stored) && !hasInventoryData(storedWorkspace));
         const onboardingDone = !!(stored && stored.onboardingDone);
 
-        if (stored && !isFirstRun) {
+        // Hydration and onboarding are independent: an existing blank active
+        // workspace can still carry account settings or populated inactive workspaces.
+        if (stored) {
           try {
             const userData = stored;
             const storedVersion = userData.version || '1.0.0';
