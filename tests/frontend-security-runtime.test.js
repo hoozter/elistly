@@ -595,7 +595,7 @@ async function testCustomTitleSeparatorParity() {
       App.showSettingsModal();
     });
     await page.locator('#settingsModal button', { hasText: 'Entity types' }).click();
-    await page.locator('#entityTypeManagerModal button[title="Edit"]').click();
+    await page.locator('#entityTypeManagerModal .entity-type-row').filter({ has: page.locator('.category-info > span:last-child', { hasText: /^Device$/ }) }).locator('button[title="Edit"]').click();
     const customInput = page.locator('#customSeparatorInput');
     await customInput.fill(' / ');
     await page.locator('#entityTypeForm button', { hasText: 'Insert' }).click();
@@ -610,7 +610,7 @@ async function testCustomTitleSeparatorParity() {
     });
     await page.evaluate(() => App.showSettingsModal());
     await page.locator('#settingsModal button', { hasText: 'Entity types' }).click();
-    await page.locator('#entityTypeManagerModal button[title="Edit"]').click();
+    await page.locator('#entityTypeManagerModal .entity-type-row').filter({ has: page.locator('.category-info > span:last-child', { hasText: /^Device$/ }) }).locator('button[title="Edit"]').click();
     await page.locator('.name-separator-item .btn-secondary', { hasText: 'Remove' }).click();
     await page.locator('#entityTypeFormModal .modal-actions button[type="submit"]', { hasText: 'Save Changes' }).click();
     const savedAfterRemove = await page.evaluate(() => structuredClone(App.data.entityTypes.device.nameGen.componentsOrder));
@@ -661,6 +661,7 @@ async function testImportCollisionChoices() {
     assert.equal(skipped.category, 'New', 'non-conflicting selections must still import');
 
     await importFixtureThroughFileInput(page, {}, rawJson, null, false);
+    await page.locator('#importPreviewArea').getByText('Duplicate JSON members').waitFor();
     const overwriteConflicts = page.locator('[data-import-conflict]');
     for (let i = 0, count = await overwriteConflicts.count(); i < count; i++) {
       await page.locator('[data-import-conflict]').nth(i).getByRole('radio', { name: 'Overwrite' }).check();
@@ -714,7 +715,7 @@ async function testImportCollisionHardening() {
       Storage._cached = structuredClone(original);
       Storage._cachedUserId = 'user-1';
       backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
-      window.fetch = async () => new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 });
+      window.fetch = async (_, options) => new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 });
       window.__originalWriteUserCache = Storage._writeUserCache;
       Storage._writeUserCache = () => { throw new Error('simulated cache access failure'); };
     }, original);
@@ -741,7 +742,7 @@ async function testImportCollisionHardening() {
       Storage._cachedUserId = 'user-1';
       backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTIifQ.' } } }) } };
       window.__putCalls = 0;
-      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+      window.fetch = async (_, options) => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 }); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
@@ -768,7 +769,7 @@ async function testImportCollisionHardening() {
       } };
       window.__switchImportIdentity = () => { userId = 'user-2'; };
       window.__putCalls = 0;
-      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+      window.fetch = async (_, options) => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 }); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
@@ -797,7 +798,7 @@ async function testImportCollisionHardening() {
       } };
       window.__swapImportToken = () => { token = tokenB; };
       window.__putCalls = 0;
-      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+      window.fetch = async (_, options) => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 }); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
@@ -822,7 +823,7 @@ async function testImportCollisionHardening() {
         getSession: async () => ({ data: { session: { access_token: expired, expires_at: 1 } } })
       } };
       window.__putCalls = 0;
-      window.fetch = async () => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+      window.fetch = async (_, options) => { window.__putCalls += 1; return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 }); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
@@ -851,10 +852,10 @@ async function testImportCollisionHardening() {
       window.__switchDuringImportPut = () => { userId = 'user-2'; };
       window.__releaseImportPut = () => releasePut();
       window.__putStarted = false;
-      window.fetch = async () => {
+      window.fetch = async (_, options) => {
         window.__putStarted = true;
         await new Promise(resolve => { releasePut = resolve; });
-        return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 });
+        return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 });
       };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
@@ -877,7 +878,7 @@ async function testImportCollisionHardening() {
       Storage._cachedUserId = 'user-1';
       backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEifQ.' } } }) } };
       window.__authorizations = [];
-      window.fetch = async (_, options) => { window.__authorizations.push(options.headers.Authorization); return new Response(JSON.stringify({ updated_at: 'after' }), { status: 200 }); };
+      window.fetch = async (_, options) => { window.__authorizations.push(options.headers.Authorization); return new Response(JSON.stringify({ updated_at: 'after', payload: JSON.parse(options.body).payload }), { status: 200 }); };
     }, original);
     await importFixtureThroughFileInput(page, incoming, null, original, false);
     await page.getByRole('radio', { name: 'Overwrite' }).check();
@@ -927,10 +928,117 @@ async function testImportCollisionHardening() {
   });
 }
 
-const tests = { import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, importHardening: testImportCollisionHardening, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, prospectiveNames: testComputerNamesAreProspectiveOnly, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
-const selected = process.argv[2] || 'import';
-if (!tests[selected]) throw new Error(`Unknown test: ${selected}`);
-tests[selected]().then(() => console.log(`PASS ${selected}`)).catch(error => {
+async function testStoredWorkspaceRendering() {
+  await withPage(async page => {
+    const payload = `"><img src="/missing-${marker}-workspace" onerror="window.__storedXss++">&quot; 東京`;
+    await page.evaluate(payload => {
+      const workspace = { name: payload, categories: {}, entityTypes: {}, entities: {} };
+      localStorage.setItem('elistlyData', JSON.stringify({ settings: {}, ...workspace, workspaces: { [payload]: workspace }, currentWorkspaceId: payload }));
+    }, payload);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const result = await page.evaluate(async () => {
+      window.__storedXss = 0;
+      App.data = JSON.parse(localStorage.getItem('elistlyData'));
+      App.renderSidebar();
+      const root = document.getElementById('workspaceSwitcherWrap');
+      const option = root.querySelector('[data-workspace-id]');
+      let selected;
+      App.switchWorkspace = id => { selected = id; };
+      option.click();
+      App.showRenameWorkspaceModal();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      return { active: root.querySelectorAll('img,svg,script').length, hits: window.__storedXss,
+        selected, label: option.textContent.trim(), name: document.getElementById('renameWorkspaceInput').value };
+    });
+    assert.equal(result.active, 0, 'stored workspace ID must not create HTML nodes');
+    assert.equal(result.hits, 0, 'stored workspace payload must not execute');
+    assert.equal(result.selected, payload, 'ordinary workspace click must preserve the exact ID');
+    assert.equal(result.label, payload, 'workspace label must preserve literal entities');
+    assert.equal(result.name, payload, 'rename must preserve the exact stored value');
+  });
+}
+
+async function testStoredAppearanceRendering() {
+  await withPage(async page => {
+    const payload = `"><img src="/missing-${marker}-appearance" onerror="window.__storedXss++">&quot;`;
+    const result = await page.evaluate(async payload => {
+      window.__storedXss = 0;
+      App.data = { settings: {}, categories: {}, entityTypes: {}, entities: {} };
+      localStorage.setItem('accentColor', payload);
+      localStorage.setItem('headerColor', payload);
+      document.documentElement.setAttribute('data-theme', payload);
+      App.showSettingsModal();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const root = document.getElementById('settingsModal');
+      return { active: root.querySelectorAll('img,svg,script').length, hits: window.__storedXss };
+    }, payload);
+    assert.equal(result.active, 0, 'stored appearance values must not create HTML nodes');
+    assert.equal(result.hits, 0, 'stored appearance payload must not execute');
+  });
+}
+
+async function testTitlePreviewRendering() {
+  await withPage(async page => {
+    const payload = `<img src="/missing-${marker}-title" onerror="window.__storedXss++">&quot; 東京`;
+    const result = await page.evaluate(async payload => {
+      window.__storedXss = 0;
+      App.data = { settings: {}, categories: {}, entities: {}, entityTypes: {
+        device: { id: 'device', label: 'Device', enableNameGen: true,
+          fields: [{ name: 'title', label: payload, type: 'text', partOfName: true }],
+          associations: [{ name: 'owner', label: payload, partOfName: true, association: { kind: 'belongs_to', targetType: 'device' } }] }
+      } };
+      App.editEntityType('device');
+      // Exercise the drag callback's reconstruction branch, not just its text update branch.
+      document.getElementById('nameComponentsList').replaceChildren();
+      App.updateNamePreview();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const root = document.getElementById('nameComponentsList');
+      return { active: root.querySelectorAll('img,svg,script').length, hits: window.__storedXss,
+        labels: [...root.querySelectorAll('.name-component-label')].map(node => node.textContent) };
+    }, payload);
+    assert.equal(result.active, 0, 'title component reconstruction must not create HTML nodes');
+    assert.equal(result.hits, 0, 'title component labels must not execute');
+    assert.deepEqual(result.labels, [payload, payload]);
+  });
+}
+
+async function testAdminRenderingBoundary() {
+  await withPage(async page => {
+    const payload = `<svg/onload="window.__storedXss++">&quot; 東京`;
+    for (const mode of ['users', 'error', 'exception']) {
+      const result = await page.evaluate(async ({ payload, mode }) => {
+        window.__storedXss = 0;
+        window.ELISTLY_API_URL = '/synthetic-api';
+        backendClient = { auth: { getSession: async () => ({ data: { session: { access_token: 'synthetic' } } }) } };
+        window.fetch = async () => {
+          if (mode === 'exception') throw new Error(payload);
+          return new Response(JSON.stringify(mode === 'users' ? { users: [{ id: payload, email: payload }] } : { error: payload }), { status: mode === 'error' ? 400 : 200 });
+        };
+        await App.renderAdminPage();
+        const root = document.getElementById('adminUsersList');
+        let selected;
+        App.confirmAdminDeleteUser = id => { selected = id; };
+        root.querySelector('[data-admin-delete]')?.click();
+        await new Promise(resolve => setTimeout(resolve, 30));
+        return { active: root.querySelectorAll('img,svg,script').length, hits: window.__storedXss, text: root.textContent, selected };
+      }, { payload, mode });
+      assert.equal(result.active, 0, `${mode}: account/API values must not create HTML nodes`);
+      assert.equal(result.hits, 0, `${mode}: account/API payload must not execute`);
+      assert.ok(result.text.includes(payload), `${mode}: literal content must survive rendering`);
+      if (mode === 'users') assert.equal(result.selected, payload, 'delete callback must receive the exact account ID');
+    }
+  });
+}
+
+const tests = { titleRendering: testTitlePreviewRendering, storedWorkspace: testStoredWorkspaceRendering, storedAppearance: testStoredAppearanceRendering, adminRendering: testAdminRenderingBoundary, import: testImportPreviewIsInert, importCollisions: testImportCollisionChoices, importHardening: testImportCollisionHardening, qr: testQrRenderingIsLocalOnly, boundary: testCompleteImportedDataBoundary, managerExport: testManagerAndExportBoundary, editorParity: testEntityTypeEditorParity, prospectiveNames: testComputerNamesAreProspectiveOnly, settings: testImportedSettingsBoundary, customSeparator: testCustomTitleSeparatorParity };
+const selected = process.argv[2] || 'all';
+if (selected !== 'all' && !tests[selected]) throw new Error(`Unknown test: ${selected}`);
+(async () => {
+  for (const [name, run] of selected === 'all' ? Object.entries(tests) : [[selected, tests[selected]]]) {
+    await run();
+    console.log(`PASS ${name}`);
+  }
+})().catch(error => {
   console.error(`FAIL ${selected}: ${error.stack || error.message}`);
   process.exitCode = 1;
 });

@@ -1078,7 +1078,7 @@ const App = {
         wrap.style.display = '';
         const fromProfile = await this.getDisplayName(user.id);
         var rawDisplay = fromProfile || (user.user_metadata && user.user_metadata.user_name) || user.email || 'Signed in';
-        var displayName = (rawDisplay || '').replace(/</g, '&lt;').replace(/"/g, '&quot;') || 'Signed in';
+        var displayName = this.escapeHtmlText(rawDisplay) || 'Signed in';
         const adminLink = this.data.isAdmin ? `
             <a href="#" id="profileAdminLink"><span class="material-icons">admin_panel_settings</span>Admin</a>
           ` : '';
@@ -2553,7 +2553,7 @@ const App = {
               <div class="modal-body">
                 <div class="form-group">
                   <label for="renameWorkspaceInput">Name</label>
-                  <input type="text" id="renameWorkspaceInput" class="profile-input" value="${(currentName || '').replace(/"/g, '&quot;')}" placeholder="e.g. Business A">
+                  <input type="text" id="renameWorkspaceInput" class="profile-input" value="${this.escapeHtmlText(currentName)}" placeholder="e.g. Business A">
                 </div>
               </div>
               <div class="modal-actions">
@@ -2596,13 +2596,13 @@ const App = {
             <div class="workspace-switcher" role="group" aria-label="Inventory">
               <button type="button" class="workspace-switcher-btn" id="workspaceSwitcherBtn" aria-haspopup="true" aria-expanded="false">
                 <span class="material-icons">inventory_2</span>
-                <span class="workspace-switcher-label">${(currentName || '').replace(/</g, '&lt;')}</span>
+                <span class="workspace-switcher-label">${this.escapeHtmlText(currentName)}</span>
                 <span class="material-icons workspace-switcher-chevron">expand_more</span>
               </button>
               <div class="workspace-switcher-dropdown" id="workspaceSwitcherDropdown" hidden>
                 ${workspaces.map(w => `
-                  <button type="button" class="workspace-switcher-option ${w.id === this.data.currentWorkspaceId ? 'active' : ''}" data-workspace-id="${w.id}">
-                    ${(w.name || w.id).replace(/</g, '&lt;')}
+                  <button type="button" class="workspace-switcher-option ${w.id === this.data.currentWorkspaceId ? 'active' : ''}" data-workspace-id="${this.escapeHtmlText(w.id)}">
+                    ${this.escapeHtmlText(w.name || w.id)}
                   </button>
                 `).join('')}
                 <button type="button" class="workspace-switcher-option workspace-switcher-add" id="workspaceAddBtn">
@@ -2845,7 +2845,7 @@ const App = {
           const listEl = document.getElementById('adminUsersList');
           if (!listEl) return;
           if (!r.ok) {
-            listEl.innerHTML = `<p class="empty-state text-danger">${body.error || 'Failed to load users'}</p>`;
+            listEl.innerHTML = `<p class="empty-state text-danger">${this.escapeHtmlText(body.error || 'Failed to load users')}</p>`;
             return;
           }
           const users = body.users || [];
@@ -2863,11 +2863,11 @@ const App = {
                 <tbody>
                   ${users.map(u => `
                     <tr>
-                      <td>${(u.email || '').replace(/</g, '&lt;') || '—'}</td>
-                      <td><code class="admin-user-id">${(u.id || '').slice(0, 8)}…</code></td>
+                      <td>${this.escapeHtmlText(u.email || '—')}</td>
+                      <td><code class="admin-user-id">${this.escapeHtmlText((u.id || '').slice(0, 8))}…</code></td>
                       <td>${formatDate(u.created_at)}</td>
                       <td>
-                        <button type="button" class="btn btn-danger btn-sm" data-user-id="${(u.id || '').replace(/"/g, '&quot;')}" data-admin-delete>Delete</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-user-id="${this.escapeHtmlText(u.id)}" data-admin-delete>Delete</button>
                       </td>
                     </tr>
                   `).join('')}
@@ -2879,7 +2879,7 @@ const App = {
           });
         } catch (e) {
           const listEl = document.getElementById('adminUsersList');
-          if (listEl) listEl.innerHTML = `<p class="empty-state text-danger">${e.message || 'Request failed'}</p>`;
+          if (listEl) listEl.innerHTML = `<p class="empty-state text-danger">${this.escapeHtmlText(e.message || 'Request failed')}</p>`;
         }
       },
 
@@ -3385,7 +3385,7 @@ const App = {
                     <div class="section-content">
                       <div class="form-group">
                         <label>Theme</label>
-                        <div class="theme-toggle" data-theme="${currentTheme}">
+                        <div class="theme-toggle" data-theme="${this.escapeHtmlText(currentTheme)}">
                           <div class="theme-toggle-slider"></div>
                           <button type="button" class="theme-toggle-option" onclick="App.setTheme('light')" aria-pressed="${currentTheme === 'light'}" aria-label="Light">
                             <span class="material-icons">light_mode</span>
@@ -3401,7 +3401,7 @@ const App = {
                           <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('accent')">
                             <span class="color-swatch accent-color-swatch accent-color-swatch-inline"></span>
                           </button>
-                          <span class="color-hex accent-color-hex">${localStorage.getItem('accentColor') || '#2a7ebf'}</span>
+                          <span class="color-hex accent-color-hex">${this.escapeHtmlText(localStorage.getItem('accentColor') || '#2a7ebf')}</span>
                         </div>
                       </div>
                       <div class="form-group">
@@ -3410,7 +3410,7 @@ const App = {
                           <button type="button" class="color-swatch-btn" onclick="App.openColorPicker('header')">
                             <span class="color-swatch header-color-swatch header-color-swatch-inline"></span>
                           </button>
-                          <span class="color-hex header-color-hex">${localStorage.getItem('headerColor') || '#1a1b1e'}</span>
+                          <span class="color-hex header-color-hex">${this.escapeHtmlText(localStorage.getItem('headerColor') || '#1a1b1e')}</span>
                         </div>
                       </div>
                       <div class="form-group">
@@ -3564,7 +3564,7 @@ const App = {
                         ${this.data.workspaces && Object.keys(this.data.workspaces).length ? `
                         <button class="btn btn-secondary" onclick="App.showRenameWorkspaceModal()">
                           <span class="material-icons">inventory_2</span>
-                          Inventory: ${(this.getCurrentWorkspaceName() || 'Default').replace(/</g, '&lt;')}
+                          Inventory: ${this.escapeHtmlText(this.getCurrentWorkspaceName() || 'Default')}
                         </button>
                         ` : ''}
                       </div>
@@ -3659,7 +3659,7 @@ const App = {
                 <section class="profile-section">
                   <h4 class="profile-section-heading">Display name</h4>
                   <div class="profile-section-content">
-                    <input type="text" id="profileUserName" class="profile-input" value="${(userName || '').replace(/"/g, '&quot;')}" placeholder="Name shown in the app">
+                    <input type="text" id="profileUserName" class="profile-input" value="${this.escapeHtmlText(userName)}" placeholder="Name shown in the app">
                     <p class="profile-help">Shown in the header and when your account is referenced.</p>
                   </div>
                 </section>
@@ -3727,7 +3727,7 @@ const App = {
         const menu = document.getElementById('profileMenu');
         const userLine = menu && menu.querySelector('.profile-dropdown-user');
         if (userLine) {
-          userLine.innerHTML = '<span class="material-icons">person</span>' + (display || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          userLine.innerHTML = '<span class="material-icons">person</span>' + this.escapeHtmlText(display);
         }
       },
 
@@ -4361,7 +4361,7 @@ const App = {
         this.closeModal('categoryManagerModal');
       },
 
-      showSafeCategoryForm(categoryId = '') {
+      showCategoryForm(categoryId = '') {
         const category = categoryId ? this.data.categories[categoryId] : null;
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const modal = make('div', 'modal'); modal.id = 'categoryFormModal';
@@ -4379,87 +4379,6 @@ const App = {
           form.appendChild(types);
         }
         const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeCategoryForm()); const save = make('button', 'btn btn-primary', category ? 'Save' : 'Create'); save.type = 'submit'; actions.append(cancel, save); form.appendChild(actions); content.append(close, header, form); modal.appendChild(content); document.body.appendChild(modal); this.showModal('categoryFormModal');
-      },
-
-      showSafeCategoryDelete(categoryId) {
-        const category = this.data.categories[categoryId]; if (!category) return;
-        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
-        const modal = make('div', 'modal'); modal.id = 'confirmDeleteCategoryModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal'));
-        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Confirm Delete Category')); const message = make('p', '', `Are you sure you want to delete the category "${category.label || category.id || ''}"?`);
-        const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal')); const remove = make('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDeleteCategory(categoryId)); actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('confirmDeleteCategoryModal');
-      },
-      
-      showCategoryForm(categoryId = '') {
-        return this.showSafeCategoryForm(categoryId);
-        const category = categoryId ? this.data.categories[categoryId] : null;
-        const isEdit = !!category;
-        const entityTypes = Object.values(this.data.entityTypes || {});
-        const entityTypesSection = isEdit && entityTypes.length ? `
-                <div class="form-group modal-group carded-section">
-                  <h4>Entity types in this category</h4>
-                  <p class="profile-help u-mt-0">Select which entity types appear under this category. You can also assign categories from each entity type's settings.</p>
-                  <div class="category-entity-types-checkboxes">
-                    ${entityTypes.map(t => {
-                      const checked = this.getEntityTypeCategoryIds(t).includes(categoryId);
-                      return `<label class="checkbox-label category-entity-type-option">
-                        <input type="checkbox" class="elistly-checkbox" name="entityType_${t.id}" value="1" ${checked ? 'checked' : ''}>
-                        <span>${(t.label || t.id).replace(/</g, '&lt;')}</span>
-                      </label>`;
-                    }).join('')}
-                  </div>
-                </div>
-                ` : '';
-        
-        const modalHtml = `
-          <div class="modal" id="categoryFormModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('categoryFormModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>${isEdit ? 'Edit' : 'New'} Category</h3>
-              </div>
-              <form id="categoryForm" onsubmit="App.saveCategory(event, '${categoryId}')">
-                      <div class="form-group">
-                  <label for="label">Category Name *</label>
-                  <input type="text" name="label" value="${category?.label || ''}" required>
-                          </div>
-                
-                      <div class="form-group">
-                  <label for="icon">Icon</label>
-                  <div class="icon-select" onclick="App.showIconPicker('categoryIcon')">
-                    <span class="material-icons">${category?.icon || 'folder'}</span>
-                    <input type="hidden" name="icon" id="categoryIcon" value="${category?.icon || 'folder'}">
-                    <span class="icon-select-text">Click to change icon</span>
-                    </div>
-                  </div>
-
-                      <div class="form-group">
-                        <label class="checkbox-label">
-                    <input type="checkbox" class="elistly-checkbox" name="visibleInDashboard" 
-                           ${category?.visibleInDashboard !== false ? 'checked' : ''}>
-                    <span>Show in Dashboard</span>
-                        </label>
-                </div>
-                ${entityTypesSection}
-                <div class="modal-actions">
-                  <button type="button" class="btn btn-secondary" onclick="App.closeCategoryForm()">
-                    Cancel
-                    </button>
-                  <button type="submit" class="btn btn-primary">
-                    <span class="material-icons">${isEdit ? 'save' : 'add'}</span>
-                    ${isEdit ? 'Save' : 'Create'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('categoryFormModal');
       },
       
       closeCategoryForm() {
@@ -4509,38 +4428,11 @@ const App = {
         if (Array.isArray(currentCategory?.presetIds) && currentCategory.presetIds.length) {
           return this.setCategoryEnabled(categoryId, false);
         }
-        return this.showSafeCategoryDelete(categoryId);
-        const category = this.data.categories[categoryId];
-        if (!category) return;
-        
-        const hasEntities = Object.values(this.data.entities)
-          .some(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId));
-        
-        const confirmModal = `
-          <div class="modal" id="confirmDeleteCategoryModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('confirmDeleteCategoryModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Confirm Delete Category</h3>
-              </div>
-              ${hasEntities ? `
-                <p class="text-danger">Warning: This category contains entities. Deleting it will also delete all associated entities.</p>
-              ` : ''}
-              <p>Are you sure you want to delete the category "${category.label}"?</p>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('confirmDeleteCategoryModal')">Cancel</button>
-                <button class="btn btn-danger" onclick="App.confirmDeleteCategory('${categoryId}')">Delete</button>
-              </div>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = confirmModal;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('confirmDeleteCategoryModal');
+        const category = this.data.categories[categoryId]; if (!category) return;
+        const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
+        const modal = make('div', 'modal'); modal.id = 'confirmDeleteCategoryModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal'));
+        const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Confirm Delete Category')); const message = make('p', '', `Are you sure you want to delete the category "${category.label || category.id || ''}"?`);
+        const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('confirmDeleteCategoryModal')); const remove = make('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDeleteCategory(categoryId)); actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('confirmDeleteCategoryModal');
       },
       
       confirmDeleteCategory(categoryId) {
@@ -4926,17 +4818,6 @@ const App = {
         this.showModal('entityTypeManagerModal');
       },
 
-      _getTemplateTypeOptions() {
-        const out = [];
-        ['it', 'library', 'staff', 'property'].forEach(presetKey => {
-          const preset = this._presets[presetKey];
-          if (!preset || !preset.entityTypes) return;
-          Object.entries(preset.entityTypes).forEach(([typeId, type]) => {
-            out.push(`<a href="#" class="template-type-link" data-preset="${presetKey}" data-type="${typeId}">${type.label}</a>`);
-          });
-        });
-        return out.length ? out.join('') : '<span class="template-empty-state">No templates</span>';
-      },
       
       showEntityTypeForm() {
         const categoryIds = Object.keys(this.data.categories);
@@ -4996,395 +4877,6 @@ const App = {
           const changed = this.normalizeNameComponents();
           if (changed) this.saveData();
         }
-        return this.showSafeEntityTypeEditor(typeId, type);
-        const nameComponentsHtml = (() => {
-          const fields = Array.isArray(type.fields) ? type.fields.filter(f => f.partOfName) : [];
-          const associations = Array.isArray(type.associations) ? type.associations.filter(a => a.partOfName) : [];
-          const fieldMap = new Map(fields.map(f => [f.name, f]));
-          const associationMap = new Map(associations.map(a => [a.name, a]));
-          const order = Array.isArray(type.nameGen?.componentsOrder) ? type.nameGen.componentsOrder : [];
-          const hasFirstLast = fieldMap.has('firstName') && fieldMap.has('lastName');
-          const used = new Set();
-          const parts = [];
-          const renderField = (field) => {
-            used.add(field.name);
-            return `
-              <div class="name-component-item sortable-item" data-component-type="field" data-field-name="${field.name}">
-                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                <span class="name-component-label">${field.label}</span>
-              </div>
-            `;
-          };
-          const renderAssociation = (association) => {
-            used.add(association.name);
-            return `
-              <div class="name-component-item sortable-item" data-component-type="association" data-association-name="${association.name}">
-                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                <span class="name-component-label">Link: ${association.label}</span>
-              </div>
-            `;
-          };
-          const renderSeparator = (value) => {
-            const raw = value == null ? '' : String(value);
-            if (!raw) return '';
-            const label = raw === ' ' ? 'Space' : raw === '-' ? 'Dash' : raw === '_' ? 'Underscore' : raw === '.' ? 'Dot' : raw;
-            return `
-              <div class="name-component-item name-separator-item sortable-item" data-component-type="separator" data-separator-value="${encodeURIComponent(raw).replace(/"/g, '&quot;')}">
-                <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                <span class="separator-pill">${label}</span>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.name-component-item').remove(); App.updateNamePreview();">Remove</button>
-              </div>
-            `;
-          };
-          if (order.length) {
-            const normalizedOrder = [];
-            let lastWasComponent = false;
-            let sawSeparator = false;
-            const hasComponentAhead = (startIdx) => {
-              for (let i = startIdx + 1; i < order.length; i += 1) {
-                const next = order[i];
-                const nextName = typeof next === 'string' ? next : next?.name;
-                if (next && next.type === 'field' && fieldMap.has(next.name)) return true;
-                if (typeof next === 'string' && fieldMap.has(nextName)) return true;
-                if (next && next.type === 'association' && associationMap.has(next.name)) return true;
-              }
-              return false;
-            };
-            order.forEach((item, idx) => {
-              if (typeof item === 'string') {
-                const field = fieldMap.get(item);
-                if (field) {
-                  normalizedOrder.push({ type: 'field', name: field.name });
-                  lastWasComponent = true;
-                }
-                return;
-              }
-              if (item && item.type === 'field') {
-                const field = fieldMap.get(item.name);
-                if (field) {
-                  normalizedOrder.push({ type: 'field', name: field.name });
-                  lastWasComponent = true;
-                }
-              } else if (item && item.type === 'association') {
-                const association = associationMap.get(item.name);
-                if (association) {
-                  normalizedOrder.push({ type: 'association', name: association.name });
-                  lastWasComponent = true;
-                }
-              } else if (item && item.type === 'separator') {
-                sawSeparator = true;
-                if (!lastWasComponent) return;
-                if (!hasComponentAhead(idx)) return;
-                normalizedOrder.push({ type: 'separator', value: item.value });
-                lastWasComponent = false;
-              }
-            });
-            if (sawSeparator && !normalizedOrder.some(i => i.type === 'separator')) {
-              const componentItems = normalizedOrder.filter(i => i.type === 'field' || i.type === 'association');
-              if (componentItems.length >= 2) {
-                const insertAt = normalizedOrder.findIndex(i => i.type === 'field' || i.type === 'association');
-                normalizedOrder.splice(insertAt + 1, 0, { type: 'separator', value: ' ' });
-              }
-            }
-            normalizedOrder.forEach((item) => {
-              if (item.type === 'field') {
-                const field = fieldMap.get(item.name);
-                if (field) parts.push(renderField(field));
-                return;
-              }
-              if (item.type === 'association') {
-                const association = associationMap.get(item.name);
-                if (association) parts.push(renderAssociation(association));
-                return;
-              }
-              if (item.type === 'separator') {
-                const sep = renderSeparator(item.value);
-                if (sep) parts.push(sep);
-              }
-            });
-          }
-          if (!order.length && hasFirstLast) {
-            parts.push(renderField(fieldMap.get('firstName')));
-            parts.push(renderSeparator(' '));
-            parts.push(renderField(fieldMap.get('lastName')));
-          }
-          fields.forEach(field => {
-            if (!used.has(field.name)) parts.push(renderField(field));
-          });
-          associations.forEach(association => {
-            if (!used.has(association.name)) parts.push(renderAssociation(association));
-          });
-          return parts.join('');
-        })();
-
-        const modalHtml = `
-          <div class="modal" id="entityTypeFormModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeEntityTypeForm()">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>${typeId ? type.label : 'New entity type'}</h3>
-              </div>
-              <div class="modal-body">
-                <form id="entityTypeForm" data-type-id="${typeId || ''}" onsubmit="App.saveEntityType(event, '${typeId || ''}')">
-                  <div class="entity-type-editor">
-                    <div class="carded-section modal-group">
-                      <div class="entity-type-header">
-                        <div class="form-group">
-                          <label for="label">Label *</label>
-                          <input type="text" name="label" value="${type.label}" required>
-                        </div>
-                        <div class="form-group">
-                          <label>Categories</label>
-                          <p class="profile-help u-mt-0">Choose one or more categories where this entity type appears. You can also assign entity types from each category's settings.</p>
-                          <div class="category-entity-types-checkboxes">
-                            ${Object.values(this.data.categories).map(cat => {
-                              const typeCatIds = this.getEntityTypeCategoryIds(type);
-                              const checked = typeCatIds.includes(cat.id);
-                              return `<label class="checkbox-label category-entity-type-option">
-                                <input type="checkbox" class="elistly-checkbox" name="category_${cat.id}" value="1" ${checked ? 'checked' : ''}>
-                                <span>${(cat.label || cat.id).replace(/</g, '&lt;')}</span>
-                              </label>`;
-                            }).join('')}
-                          </div>
-                        </div>
-                        <div class="form-group">
-                          <label for="icon">Icon</label>
-                          <div class="icon-select" onclick="App.showIconPicker('entityTypeIcon')">
-                            <span class="material-icons">${type.icon}</span>
-                            <input type="hidden" name="icon" id="entityTypeIcon" value="${type.icon}">
-                            <span class="icon-select-text">Click to change icon</span>
-                          </div>
-                        </div>
-                        <div class="form-group name-gen-header">
-                          <div class="name-gen-title">Title generator</div>
-                          <label class="ui-switch">
-                            <input type="checkbox" name="enableNameGen" role="switch" aria-checked="${type.enableNameGen ? 'true' : 'false'}" ${type.enableNameGen ? 'checked' : ''} onchange="App.toggleNameGenSection(this)">
-                            <span class="ui-switch-slider" aria-hidden="true"></span>
-                            <span class="ui-switch-label">Enable title generator</span>
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="modal-group carded-section name-generation-settings${type.enableNameGen ? '' : ' hidden'}">
-                      <h4>Title Generator</h4>
-                      <div class="name-generation-grid">
-                        <div class="form-group">
-                          <label class="ui-switch">
-                            <input type="checkbox" name="prefixEnabled" role="switch" aria-checked="${type.nameGen?.prefixEnabled ? 'true' : 'false'}" ${type.nameGen?.prefixEnabled ? 'checked' : ''} onchange="App.togglePrefixInput(this)">
-                            <span class="ui-switch-slider" aria-hidden="true"></span>
-                            <span class="ui-switch-label">Use prefix</span>
-                          </label>
-                          <input type="text" name="namePrefix" value="${type.nameGen?.prefix || ''}" ${type.nameGen?.prefixEnabled ? '' : 'disabled'} onchange="App.updateNamePreview()">
-                        </div>
-                        <div class="form-group">
-                          <label for="suffixType">Suffix Type</label>
-                          <select name="suffixType" onchange="App.updateNamePreview()">
-                            <option value="number" ${type.nameGen?.suffixType === 'number' ? 'selected' : ''}>Numbers (1, 2, 3...)</option>
-                            <option value="letter" ${type.nameGen?.suffixType === 'letter' ? 'selected' : ''}>Letters (A, B, C...)</option>
-                          </select>
-                          <div class="help-text">Only added for duplicate names</div>
-                        </div>
-                      </div>
-                      <div class="name-components-section">
-                        <label>Name Components Order</label>
-                        <div class="name-components-container">
-                          <div id="nameComponentsList" class="sortable-list">
-                            ${nameComponentsHtml}
-                          </div>
-                        </div>
-                      </div>
-                      <div class="name-separator-actions">
-                        <label>Add separator</label>
-                        <div class="separator-buttons">
-                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator(' ')">Space</button>
-                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('-')">Dash</button>
-                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('_')">Underscore</button>
-                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator('.')">Dot</button>
-                        </div>
-                        <div class="custom-separator">
-                          <input type="text" id="customSeparatorInput" placeholder="Custom separator">
-                          <button type="button" class="btn btn-secondary btn-sm" onclick="App.addNameSeparator(document.getElementById('customSeparatorInput').value)">Insert</button>
-                        </div>
-                        <p class="help-text">Separators appear where they sit in the list. Drag to place between name parts.</p>
-                      </div>
-                      <div class="name-preview">
-                        <label>Preview</label>
-                        <div class="preview-box">
-                          <div class="preview-label">Example name</div>
-                          <div id="namePreview" class="preview-value"></div>
-                        </div>
-                        <div class="preview-box preview-secondary">
-                          <div class="preview-label">If duplicate (adds suffix)</div>
-                          <div id="suffixPreview" class="preview-value"></div>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="modal-group carded-section">
-                      <h4>Fields</h4>
-                      <div class="sortable-list" id="fieldsContainer">
-                        ${type.fields.map((field, index) => `
-                            <div class="field-card sortable-item" data-index="${index}" data-field-name="${field.name}">
-                              <div class="field-label-row field-label-row-inline">
-                                <span class="material-icons drag-handle drag-handle-tight" title="Drag to reorder">drag_indicator</span>
-                                <strong class="field-label-strong">${field.label}</strong>
-                                <button type="button" class="collapse-btn" title="Expand/collapse field" onclick="this.closest('.field-card').classList.toggle('collapsed');event.stopPropagation();">
-                                    <span class="material-icons">unfold_less</span>
-                                </button>
-                              </div>
-                              <div class="field-details">
-                                <div class="form-group">
-                                  <label>Label *</label>
-                                  <input type="text" name="fields[${index}].label" value="${field.label}" required>
-                                  <input type="hidden" name="fields[${index}].name" value="${field.label?.toLowerCase().replace(/\\s+/g, '_') || ''}">
-                                </div>
-                                <div class="form-group">
-                                  <label>Type *</label>
-                                  <select name="fields[${index}].type" onchange="App.handleFieldTypeChange(this)">
-                                    <option value="text" ${field.type === 'text' ? 'selected' : ''}>Text</option>
-                                    <option value="number" ${field.type === 'number' ? 'selected' : ''}>Number</option>
-                                    <option value="dropdown" ${field.type === 'dropdown' ? 'selected' : ''}>Dropdown</option>
-                                    <option value="textarea" ${field.type === 'textarea' ? 'selected' : ''}>Textarea</option>
-                                    <option value="date" ${field.type === 'date' ? 'selected' : ''}>Date</option>
-                                    <option value="checkbox" ${field.type === 'checkbox' ? 'selected' : ''}>Checkbox</option>
-                                    <option value="qr" ${field.type === 'qr' ? 'selected' : ''}>QR Code</option>
-                                  </select>
-                                </div>
-                                ${field.type === 'dropdown' ? `
-                                  <div class="option-row option-header">
-                                    <span>Display Value</span>
-                                    <span>Name Value</span>
-                                    <span></span>
-                                  </div>
-                                  <div class="option-rows-container" data-field-index="${index}">
-                                  ${(field.options || []).map((opt, oIdx) => `
-                                    <div class="option-row" data-option-index="${oIdx}">
-                                      <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                                      <input type="text" name="fields[${index}].options[${oIdx}].value" value="${opt.value}">
-                                      <input type="text" name="fields[${index}].options[${oIdx}].nameValue" value="${opt.nameValue || ''}">
-                                      <button type="button" class="btn btn-danger" onclick="App.removeOption(${index}, ${oIdx})">
-                                        <span class="material-icons">remove</span>
-                                      </button>
-                                    </div>
-                                  `).join('')}
-                                  </div>
-                                  <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${index})">Add Option</button>
-                                ` : ''}
-                                <div class="checkbox-group checkbox-group-inline">
-                                  <label class="checkbox-label">
-                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].required" ${field.required ? 'checked' : ''}>
-                                    <span>Required</span>
-                                  </label>
-                                  <label class="checkbox-label">
-                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" ${field.visibleInCard ? 'checked' : ''}>
-                                    <span>Visible in card</span>
-                                  </label>
-                                  <label class="checkbox-label">
-                                    <input type="checkbox" class="elistly-checkbox" name="fields[${index}].partOfName" ${field.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
-                                    <span>In title</span>
-                                  </label>
-                                </div>
-                                <button type="button" class="btn btn-danger" onclick="App.removeField(${index})">
-                                  <span class="material-icons">delete</span> Remove Field
-                                </button>
-                              </div>
-                            </div>
-                        `).join('')}
-                        <button type="button" class="btn btn-add-field" onclick="App.addField()">
-                          <span class="material-icons">add</span> Add Field
-                        </button>
-                      </div>
-                    </div>
-                    <div class="modal-group carded-section">
-                      <h4>Links</h4>
-                      <div class="sortable-list" id="associationsContainer">
-                        ${type.associations?.map((assoc, idx) => `
-                            <div class="assoc-card sortable-item" data-index="${idx}">
-                              <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                              <div class="form-group">
-                                <label>Label *</label>
-                                <input type="text" name="associations[${idx}].label" value="${assoc?.label || ''}" required
-                                  onchange="this.form.querySelector('[name=\'associations[${idx}].name\']').value = this.value?.toLowerCase().replace(/[^a-z0-9]+/g, '_') || ''">
-                                <input type="hidden" name="associations[${idx}].name" value="${assoc?.name || ''}">
-                              </div>
-                              <div class="form-group">
-                                <label>Link type *</label>
-                                <select name="associations[${idx}].association.kind" class="association-kind-select" required onchange="App.updateAssociationKindHelp(this)">
-                                  <option value="belongs_to" ${assoc?.association?.kind === 'belongs_to' ? 'selected' : ''}>Links to one</option>
-                                  <option value="has_many" ${assoc?.association?.kind === 'has_many' ? 'selected' : ''}>Can have many</option>
-                                  <option value="hierarchy" ${assoc?.association?.kind === 'hierarchy' ? 'selected' : ''}>Parent/child (same type)</option>
-                                </select>
-                                <div class="association-kind-help">
-                                  <p class="help-text" data-kind="belongs_to">This item links to a single item of the target type (e.g. a Book is lent to one Borrower).</p>
-                                  <p class="help-text" data-kind="has_many">This item can link to several items of the target type (e.g. one Person has many Devices).</p>
-                                  <p class="help-text" data-kind="hierarchy">This item can have a parent or children of the same type (e.g. a folder inside a folder).</p>
-                                </div>
-                              </div>
-                              <div class="form-group">
-                                <label>Links to *</label>
-                                <select name="associations[${idx}].association.targetType" required>
-                                  ${Object.values(this.data.entityTypes).map(type => `
-                                    <option value="${type.id}" ${assoc?.association?.targetType === type.id ? 'selected' : ''}>
-                                      ${type.label}
-                                    </option>
-                                  `).join('')}
-                                </select>
-                              </div>
-                              <div class="checkbox-group checkbox-group-inline">
-                                <label class="checkbox-label">
-                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].required" ${assoc?.required ? 'checked' : ''}>
-                                  <span>Required</span>
-                                </label>
-                                <label class="checkbox-label">
-                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].visibleInCard" ${assoc?.visibleInCard ? 'checked' : ''}>
-                                  <span>Visible in card</span>
-                                </label>
-                                <label class="checkbox-label">
-                                  <input type="checkbox" class="elistly-checkbox" name="associations[${idx}].partOfName" ${assoc?.partOfName ? 'checked' : ''} ${!type.enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
-                                  <span>In title</span>
-                                </label>
-                              </div>
-                              <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${idx})">
-                                <span class="material-icons">delete</span> Remove link
-                              </button>
-                            </div>
-                        `).join('')}
-                        <button type="button" class="btn btn-add-field" onclick="App.addAssociation()">
-                          <span class="material-icons">add</span> Add link
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </form>
-              </div>
-
-              <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" onclick="App.closeModal('entityTypeFormModal')">
-                  Cancel
-                </button>
-                <button type="submit" form="entityTypeForm" class="btn btn-primary">
-                  <span class="material-icons">save</span>
-                  Save Changes
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-        
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('entityTypeFormModal');
-        this.updateNamePreview();
-        this.initNameComponentsDragDrop();
-        document.querySelectorAll('#entityTypeFormModal .association-kind-select').forEach(s => this.updateAssociationKindHelp(s));
-        
-        // Initialize option containers sortable
-        this.initAllOptionSortables();
-      },
-
-      showSafeEntityTypeEditor(typeId, type) {
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const input = (name, value, typeName = 'text') => { const el = document.createElement('input'); el.type = typeName; el.name = name; el.value = value == null ? '' : String(value); return el; };
         const checkbox = (name, checked, text, disabled = false) => { const label = make('label', 'checkbox-label'); const el = input(name, 'on', 'checkbox'); el.className = 'elistly-checkbox'; el.checked = !!checked; el.disabled = disabled; label.append(el, make('span', '', text)); return label; };
@@ -5432,91 +4924,7 @@ const App = {
         const fieldSection = make('div', 'modal-group carded-section'); fieldSection.append(make('h4', '', 'Fields'), fields); const addFieldButton = button('Add Field', 'btn btn-add-field'); addFieldButton.addEventListener('click', () => addField({ type: 'text', visibleInCard: true })); fieldSection.appendChild(addFieldButton); const assocSection = make('div', 'modal-group carded-section'); assocSection.append(make('h4', '', 'Links'), associations); const addAssociationButton = button('Add link', 'btn btn-add-field'); addAssociationButton.addEventListener('click', () => addAssociation({ association: { kind: 'belongs_to', targetType: Object.keys(this.data.entityTypes || {})[0] || '' } })); assocSection.appendChild(addAssociationButton);
         (type.fields || []).forEach(addField); (type.associations || []).forEach(addAssociation); (type.nameGen?.componentsOrder || []).forEach(component => { const row = make('div', 'name-component-item sortable-item'); row.dataset.componentType = component.type || 'field'; if (component.type === 'separator') row.dataset.separatorValue = encodeURIComponent(component.value || ''); else if (component.type === 'association') row.dataset.associationName = component.name || ''; else row.dataset.fieldName = component.name || component || ''; components.appendChild(row); }); basics.append(nameEnabled, nameSection); form.append(basics, fieldSection, assocSection); const footer = make('div', 'modal-actions'); const cancel = button('Cancel'); cancel.addEventListener('click', () => this.closeEntityTypeForm()); const save = button('Save Changes', 'btn btn-primary'); save.type = 'submit'; save.setAttribute('form', form.id); footer.append(cancel, save); content.append(close, header, body); body.append(form, footer); modal.appendChild(content); document.body.appendChild(modal); syncComponents(); this.showModal('entityTypeFormModal'); if (window.Sortable) this.initNameComponentsDragDrop();
       },
-      
-      initAllOptionSortables() {
-        // Initialize all option sortables
-        document.querySelectorAll('.option-rows-container').forEach(container => {
-          this.initOptionsSortable(container);
-        });
-      },
-      
-      renderFieldEditor(field, index, enableNameGen) {
-        const partOfNameDisabled = enableNameGen === false;
-        return `
-          <div class="field-editor" data-index="${index}" data-field-name="${field.name || ''}">
-            <div class="form-group">
-              <label>Label *</label>
-              <input type="text" name="fields[${index}].label" value="${field.label}" required>
-              <input type="hidden" name="fields[${index}].name" value="${field.name || ''}">
-            </div>
-            
-            <div class="form-group">
-              <label>Type *</label>
-              <select name="fields[${index}].type" onchange="App.handleFieldTypeChange(this)">
-                <option value="text" ${field.type === 'text' ? 'selected' : ''}>Text</option>
-                <option value="number" ${field.type === 'number' ? 'selected' : ''}>Number</option>
-                <option value="dropdown" ${field.type === 'dropdown' ? 'selected' : ''}>Dropdown</option>
-                <option value="textarea" ${field.type === 'textarea' ? 'selected' : ''}>Textarea</option>
-                <option value="date" ${field.type === 'date' ? 'selected' : ''}>Date</option>
-                <option value="checkbox" ${field.type === 'checkbox' ? 'selected' : ''}>Checkbox</option>
-                <option value="qr" ${field.type === 'qr' ? 'selected' : ''}>QR Code</option>
-              </select>
-            </div>
-            
-            ${field.type === 'dropdown' ? `
-              <div class="form-group field-options">
-                <label>Options</label>
-                <div class="option-row option-header">
-                  <span>Display Value</span>
-                  <span>Name Value</span>
-                  <span></span>
-                </div>
-                <div class="option-rows-container" data-field-index="${index}">
-                  ${(field.options && field.options.length ? field.options : [{ value: '', nameValue: '' }]).map((opt, optIndex) => `
-                    <div class="option-row" data-option-index="${optIndex}">
-                      <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                      <input type="text" name="fields[${index}].options[${optIndex}].value" placeholder="Value" value="${(opt.value || '').replace(/"/g, '&quot;')}">
-                      <input type="text" name="fields[${index}].options[${optIndex}].nameValue" placeholder="Name Value" value="${(opt.nameValue || '').replace(/"/g, '&quot;')}" title="Value used in generated names">
-                      <button type="button" class="btn btn-danger" onclick="App.removeOption(${index}, ${optIndex})">
-                        <span class="material-icons">remove</span>
-                      </button>
-                    </div>
-                  `).join('')}
-                </div>
-                <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${index})">Add Option</button>
-              </div>
-            ` : ''}
-            
-            <div class="checkbox-group">
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].required" 
-                       ${field.required ? 'checked' : ''}>
-                <span>Required</span>
-              </label>
-              
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].visibleInCard" 
-                       ${field.visibleInCard ? 'checked' : ''}>
-                <span>Visible in card</span>
-              </label>
-              
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="fields[${index}].partOfName" 
-                       ${field.partOfName ? 'checked' : ''} 
-                       ${partOfNameDisabled ? 'disabled' : ''}
-                       onchange="App.updateNamePreview()">
-                <span>In title</span>
-              </label>
-            </div>
-            
-            <button type="button" class="btn btn-danger" onclick="App.removeField(${index})">
-              <span class="material-icons">delete</span>
-              Remove Field
-            </button>
-          </div>
-        `;
-      },
-      
+
       saveEntityType(event, typeId) {
         event.preventDefault();
         const form = event.target;
@@ -5730,14 +5138,6 @@ const App = {
         this.closeModal('entityTypeFormModal');
       },
 
-      updateAssociationKindHelp(selectEl) {
-        const help = selectEl.closest('.form-group')?.querySelector('.association-kind-help');
-        if (!help) return;
-        help.querySelectorAll('.help-text').forEach(p => {
-          p.classList.toggle('visible', p.dataset.kind === selectEl.value);
-        });
-      },
-      
       closeEntityTypeManager() {
         this.closeModal('entityTypeManagerModal');
       },
@@ -5749,17 +5149,13 @@ const App = {
           this.closeEntityTypeManager();
           return;
         }
-        return this.showSafeEntityTypeDelete(typeId);
-      },
-
-      showSafeEntityTypeDelete(typeId) {
-        const type = this.data.entityTypes[typeId]; if (!type) return;
+        if (!type) return;
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const modal = make('div', 'modal'); modal.id = 'confirmDeleteTypeModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('confirmDeleteTypeModal'));
         const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Confirm Delete Type')); const message = make('p', '', `Are you sure you want to delete the entity type "${type.label || type.id || ''}"?`);
         const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('confirmDeleteTypeModal')); const remove = make('button', 'btn btn-danger', 'Delete'); remove.type = 'button'; remove.addEventListener('click', () => this.confirmDeleteEntityType(typeId)); actions.append(cancel, remove); content.append(close, header, message, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('confirmDeleteTypeModal');
       },
-      
+
       confirmDeleteEntityType(typeId) {
         const type = this.data.entityTypes[typeId];
         if (Array.isArray(type?.presetIds) && type.presetIds.length) {
@@ -5795,34 +5191,6 @@ const App = {
         }
       },
 
-      addNameSeparator(value) {
-        const separator = value == null ? '' : String(value);
-        if (!separator) return;
-        const list = document.getElementById('nameComponentsList');
-        if (!list) return;
-        const label = separator === ' ' ? 'Space' : separator === '-' ? 'Dash' : separator === '_' ? 'Underscore' : separator === '.' ? 'Dot' : separator;
-        const div = document.createElement('div');
-        div.className = 'name-component-item name-separator-item sortable-item';
-        div.dataset.componentType = 'separator';
-        div.dataset.separatorValue = encodeURIComponent(separator);
-        div.innerHTML = `
-          <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-          <span class="separator-pill">${label}</span>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="this.closest('.name-component-item').remove(); App.updateNamePreview();">Remove</button>
-        `;
-        const fields = list.querySelectorAll('[data-component-type="field"]');
-        if (fields.length >= 2) {
-          list.insertBefore(div, fields[1]);
-        } else if (fields.length === 1) {
-          list.insertBefore(div, fields[0].nextSibling);
-        } else {
-          list.appendChild(div);
-        }
-        const customInput = document.getElementById('customSeparatorInput');
-        if (customInput) customInput.value = '';
-        this.updateNamePreview();
-      },
-      
       updateNamePreview() {
         const preview = document.getElementById('namePreview');
         const suffixPreview = document.getElementById('suffixPreview');
@@ -5893,7 +5261,7 @@ const App = {
             div.dataset.fieldName = fieldName;
             div.innerHTML = `
               <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-              <span class="name-component-label">${field.label}</span>
+              <span class="name-component-label">${this.escapeHtmlText(field.label)}</span>
             `;
             list.appendChild(div);
           } else {
@@ -5913,7 +5281,7 @@ const App = {
             div.dataset.associationName = assocName;
             div.innerHTML = `
               <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-              <span class="name-component-label">${assoc.label}</span>
+              <span class="name-component-label">${this.escapeHtmlText(assoc.label)}</span>
             `;
             list.appendChild(div);
           } else {
@@ -6021,325 +5389,6 @@ const App = {
         return this.data.entityTypes[typeId];
       },
 
-      toggleNameGenSection(enableNameGenCheckbox) {
-        const form = enableNameGenCheckbox?.closest('form');
-        if (!form) return;
-        const section = form.querySelector('.name-generation-settings');
-        if (section) section.classList.toggle('hidden', !enableNameGenCheckbox.checked);
-        form.querySelectorAll('input[name$=".partOfName"]').forEach(input => {
-          input.disabled = !enableNameGenCheckbox.checked;
-        });
-        enableNameGenCheckbox.setAttribute('aria-checked', enableNameGenCheckbox.checked ? 'true' : 'false');
-        this.updateNamePreview();
-      },
-
-      togglePrefixInput(checkbox) {
-        const form = checkbox?.closest('form');
-        if (!form) return;
-        const prefixInput = form.querySelector('input[name="namePrefix"]');
-        if (prefixInput) prefixInput.disabled = !checkbox.checked;
-        checkbox.setAttribute('aria-checked', checkbox.checked ? 'true' : 'false');
-        this.updateNamePreview();
-      },
-      
-      addField() {
-        const fieldsContainer = document.getElementById('fieldsContainer');
-        if (!fieldsContainer) return;
-        
-        const newIndex = fieldsContainer.querySelectorAll('.field-card, .field-editor').length;
-        
-        const newField = {
-          name: '',
-          label: '',
-          type: 'text',
-          required: false,
-          visibleInCard: true,
-          partOfName: false
-        };
-        
-        const form = document.getElementById('entityTypeForm');
-        const enableNameGen = form?.querySelector('input[name=enableNameGen]')?.checked ?? false;
-        const fieldHtml = this.renderFieldEditor(newField, newIndex, enableNameGen);
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = fieldHtml;
-        const newFieldElement = tempDiv.firstElementChild;
-        fieldsContainer.appendChild(newFieldElement);
-        
-        // Scroll the new field into view if it exists
-        if (newFieldElement) {
-          newFieldElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      },
-      
-      handleFieldTypeChange(select) {
-        const fieldEditor = select.closest('.field-editor') || select.closest('.field-card');
-        const fieldIndex = fieldEditor.dataset.index;
-        const existingBlock = fieldEditor.querySelector('.field-options');
-        
-        if (select.value === 'dropdown') {
-          if (!existingBlock) {
-            const div = document.createElement('div');
-            div.className = 'form-group field-options';
-            div.innerHTML = `
-              <label>Options</label>
-              <div class="option-row option-header">
-                <span>Display Value</span>
-                <span>Name Value</span>
-                <span></span>
-              </div>
-              <div class="option-rows-container" data-field-index="${fieldIndex}">
-                <div class="option-row" data-option-index="0">
-                  <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-                  <input type="text" name="fields[${fieldIndex}].options[0].value" placeholder="Value">
-                  <input type="text" name="fields[${fieldIndex}].options[0].nameValue" placeholder="Name Value" title="Value used in generated names">
-                  <button type="button" class="btn btn-danger" onclick="App.removeOption(${fieldIndex}, 0)">
-                    <span class="material-icons">remove</span>
-                  </button>
-                </div>
-              </div>
-              <button type="button" class="btn btn-secondary btn-add-field" onclick="App.addOption(${fieldIndex})">Add Option</button>
-            `;
-            select.closest('.form-group').insertAdjacentElement('afterend', div);
-            const container = div.querySelector('.option-rows-container');
-            if (container) this.initOptionsSortable(container);
-          }
-        } else if (existingBlock) {
-          existingBlock.remove();
-        }
-      },
-      
-      addOption(fieldIndex) {
-        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
-          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
-        if (!fieldEl) {
-          console.error(`Could not find field with index: ${fieldIndex}`);
-          return;
-        }
-        const optionsContainer = fieldEl.querySelector('.option-rows-container');
-        if (!optionsContainer) {
-          console.error(`Could not find options container in field with index: ${fieldIndex}`);
-          return;
-        }
-        
-        // Get all existing option rows to determine the next index
-        const existingOptions = optionsContainer.querySelectorAll('.option-row');
-        const newOptionIndex = existingOptions.length;
-        
-        // Create the new option row
-        const optionRow = document.createElement('div');
-        optionRow.className = 'option-row';
-        optionRow.dataset.optionIndex = newOptionIndex;
-        optionRow.innerHTML = `
-          <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-          <input type="text" name="fields[${fieldIndex}].options[${newOptionIndex}].value" placeholder="Value">
-          <input type="text" name="fields[${fieldIndex}].options[${newOptionIndex}].nameValue" placeholder="Name Value" title="Value used in generated names">
-          <button type="button" class="btn btn-danger" onclick="App.removeOption(${fieldIndex}, ${newOptionIndex})">
-            <span class="material-icons">remove</span>
-          </button>
-        `;
-        
-        // Add the new row to the container
-        optionsContainer.appendChild(optionRow);
-        
-        // Initialize or refresh sortable on this container
-        this.initOptionsSortable(optionsContainer);
-      },
-      
-      removeOption(fieldIndex, optionIndex) {
-        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
-          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
-        if (!fieldEl) return;
-        const optionsContainer = fieldEl.querySelector('.option-rows-container');
-        if (!optionsContainer) {
-          return;
-        }
-        
-        const optionRows = optionsContainer.querySelectorAll('.option-row');
-        // Find the option with matching data-option-index
-        const optionToRemove = Array.from(optionRows).find(row => 
-          row.dataset.optionIndex === optionIndex.toString());
-          
-        if (optionToRemove) {
-          optionToRemove.remove();
-          // Update indices
-          this.updateOptionIndices(fieldIndex);
-        }
-      },
-      
-      initOptionsSortable(container) {
-        if (!container || !window.Sortable) return;
-        
-        // Check if sortable is already initialized
-        if (container._sortable) {
-          // Refresh sortable instance
-          container._sortable.option('onEnd', (evt) => this.handleOptionReorder(evt));
-          return;
-        }
-        
-        // Initialize sortable
-        container._sortable = new Sortable(container, {
-          animation: 150,
-          handle: '.drag-handle',
-          onEnd: (evt) => this.handleOptionReorder(evt)
-        });
-      },
-      
-      handleOptionReorder(evt) {
-        const container = evt.to;
-        const fieldIndex = container.dataset.fieldIndex;
-        
-        if (fieldIndex) {
-          this.updateOptionIndices(fieldIndex);
-        }
-      },
-      
-      updateOptionIndices(fieldIndex) {
-        const fieldEl = document.querySelector(`.field-card[data-index="${fieldIndex}"]`) ||
-          document.querySelector(`.field-editor[data-index="${fieldIndex}"]`);
-        if (!fieldEl) return;
-        const optionsContainer = fieldEl.querySelector('.option-rows-container');
-        if (!optionsContainer) return;
-        
-        // Update all input name attributes to match their new positions
-        const optionRows = optionsContainer.querySelectorAll('.option-row');
-        optionRows.forEach((row, idx) => {
-          row.dataset.optionIndex = idx;
-          
-          // Update input names
-          const inputs = row.querySelectorAll('input');
-          inputs.forEach(input => {
-            // Replace the option index in the name attribute
-            const newName = input.name.replace(/options\[\d+\]/, `options[${idx}]`);
-            input.name = newName;
-          });
-          
-          // Update remove button onclick
-          const removeBtn = row.querySelector('.btn-danger');
-          if (removeBtn) {
-            removeBtn.setAttribute('onclick', `App.removeOption(${fieldIndex}, ${idx})`);
-          }
-        });
-      },
-      
-      renderAssociationEditor(assoc, index, enableNameGen = false) {
-        return `
-          <div class="assoc-card association-editor sortable-item" data-index="${index}">
-            <span class="material-icons drag-handle" title="Drag to reorder">drag_indicator</span>
-            <div class="form-group">
-              <label>Label *</label>
-              <input type="text" name="associations[${index}].label" value="${assoc?.label || ''}" required
-                     onchange="this.form.querySelector('[name=\'associations[${index}].name\']').value = this.value?.toLowerCase().replace(/[^a-z0-9]+/g, '_') || ''">
-              <input type="hidden" name="associations[${index}].name" value="${assoc?.name || ''}">
-            </div>
-            
-            <div class="form-group">
-              <label>Link type *</label>
-              <select name="associations[${index}].association.kind" class="association-kind-select" required onchange="App.updateAssociationKindHelp(this)">
-                <option value="belongs_to" ${assoc?.association?.kind === 'belongs_to' ? 'selected' : ''}>Links to one</option>
-                <option value="has_many" ${assoc?.association?.kind === 'has_many' ? 'selected' : ''}>Can have many</option>
-                <option value="hierarchy" ${assoc?.association?.kind === 'hierarchy' ? 'selected' : ''}>Parent/child (same type)</option>
-              </select>
-              <div class="association-kind-help">
-                <p class="help-text" data-kind="belongs_to">This item links to a single item of the target type (e.g. a Book is lent to one Borrower).</p>
-                <p class="help-text" data-kind="has_many">This item can link to several items of the target type (e.g. one Person has many Devices).</p>
-                <p class="help-text" data-kind="hierarchy">This item can have a parent or children of the same type (e.g. a folder inside a folder).</p>
-              </div>
-            </div>
-            
-            <div class="form-group">
-              <label>Links to *</label>
-              <select name="associations[${index}].association.targetType" required>
-                ${Object.values(this.data.entityTypes).map(type => `
-                  <option value="${type.id}" ${assoc?.association?.targetType === type.id ? 'selected' : ''}>
-                    ${type.label}
-                  </option>
-                `).join('')}
-              </select>
-            </div>
-            <div class="checkbox-group checkbox-group-inline">
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].required" ${assoc?.required ? 'checked' : ''}>
-                <span>Required</span>
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].visibleInCard" ${assoc?.visibleInCard ? 'checked' : ''}>
-                <span>Visible in card</span>
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" class="elistly-checkbox" name="associations[${index}].partOfName" ${assoc?.partOfName ? 'checked' : ''} ${!enableNameGen ? 'disabled' : ''} onchange="App.updateNamePreview()">
-                <span>In title</span>
-              </label>
-            </div>
-            
-            <button type="button" class="btn btn-danger" onclick="App.removeAssociation(${index})">
-              <span class="material-icons">delete</span>
-              Remove link
-            </button>
-          </div>
-        `;
-      },
-      
-      addAssociation() {
-        const container = document.getElementById('associationsContainer');
-        if (!container) return;
-        
-        const newIndex = container.querySelectorAll('.assoc-card, .association-editor').length;
-        const form = document.getElementById('entityTypeForm');
-        const enableNameGen = form?.querySelector('input[name=enableNameGen]')?.checked ?? false;
-        
-        const newAssoc = {
-          name: '',
-          label: '',
-          type: 'association',
-          required: false,
-          visibleInCard: false,
-          partOfName: false,
-          association: {
-            kind: 'belongs_to',
-            targetType: Object.keys(this.data.entityTypes)[0] || ''
-          }
-        };
-        
-        const assocHtml = this.renderAssociationEditor(newAssoc, newIndex, enableNameGen);
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = assocHtml;
-        const newAssocElement = tempDiv.firstElementChild;
-        const addBtn = container.querySelector('.btn-add-field');
-        if (addBtn) {
-          container.insertBefore(newAssocElement, addBtn);
-        } else {
-          container.appendChild(newAssocElement);
-        }
-        this.updateAssociationKindHelp(newAssocElement.querySelector('.association-kind-select'));
-        
-        // Scroll the new association into view if it exists
-        if (newAssocElement) {
-          newAssocElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        this.updateNamePreview();
-      },
-      
-      removeAssociation(index) {
-        const editor = document.querySelector(`#associationsContainer .assoc-card[data-index="${index}"], #associationsContainer .association-editor[data-index="${index}"], #associationsContainer .field-editor[data-index="${index}"]`);
-        if (!editor) return;
-        editor.remove();
-        
-        // Update indices for remaining associations
-        document.querySelectorAll('#associationsContainer .assoc-card, #associationsContainer .association-editor, #associationsContainer .field-editor').forEach((assocEditor, newIndex) => {
-          assocEditor.dataset.index = newIndex;
-          assocEditor.querySelectorAll('[name^="associations["]').forEach(input => {
-            input.name = input.name.replace(/associations\[\d+\]/, `associations[${newIndex}]`);
-          });
-          assocEditor.querySelectorAll('[onchange]').forEach(el => {
-            const attr = el.getAttribute('onchange');
-            if (attr) el.setAttribute('onchange', attr.replace(/associations\[\d+\]/g, `associations[${newIndex}]`));
-          });
-          const removeBtn = assocEditor.querySelector('button[onclick*="App.removeAssociation("]');
-          if (removeBtn) removeBtn.setAttribute('onclick', `App.removeAssociation(${newIndex})`);
-        });
-        this.updateNamePreview();
-      },
-      
       toggleDropdown(event, button) {
         event.stopPropagation();
         const dropdown = button.nextElementSibling;
@@ -6659,21 +5708,7 @@ const App = {
           }
         });
       },
-      removeField(index) {
-        const fieldEditor = document.querySelector(`.field-editor[data-index="${index}"]`) ||
-                            document.querySelector(`.field-card[data-index="${index}"]`);
-        if (!fieldEditor) return;
-        
-        fieldEditor.remove();
-        
-        // Update indices for remaining fields
-        document.querySelectorAll('.field-editor, .field-card').forEach((editor, newIndex) => {
-          editor.dataset.index = newIndex;
-          editor.querySelectorAll('[name^="fields["]').forEach(input => {
-            input.name = input.name.replace(/fields\[\d+\]/, `fields[${newIndex}]`);
-          });
-        });
-      },
+
       createFullBackupEnvelope() {
         if (!this.data || typeof this.data !== 'object' || Array.isArray(this.data)) {
           throw new Error('Current app data cannot be backed up safely.');
@@ -7597,204 +6632,27 @@ const App = {
           });
         });
       },
-      showSafeExportModal() {
+
+      showExportModal() {
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const checkbox = (name, value, className, checked = false) => { const input = document.createElement('input'); input.type = 'checkbox'; input.name = name; input.value = value; input.className = `elistly-checkbox ${className}`; input.checked = checked; return input; };
         const modal = make('div', 'modal'); modal.id = 'exportModal'; const content = make('div', 'modal-content'); const close = make('button', 'modal-close', '×'); close.type = 'button'; close.addEventListener('click', () => this.closeModal('exportModal'));
         const header = make('div', 'modal-header'); header.appendChild(make('h3', '', 'Export Data')); const body = make('div', 'modal-body modal-body-scroll'); body.appendChild(make('p', '', 'Select the elements you want to export. Only selected items will be included in the export file.')); const form = make('form'); form.id = 'exportForm';
         const section = title => { const el = make('div', 'restore-defaults-section'); el.appendChild(make('h4', '', title)); return el; };
         const typeSection = section('Entity Types'); const typeGrid = make('div', 'restore-defaults-grid');
-        Object.entries(this.data.entityTypes || {}).forEach(([typeId, type]) => { const item = make('div', 'restore-item entity-type-card u-pos-relative'); const top = make('div', 'entity-type-header u-flex-between-center'); const details = make('div', 'u-flex-center-gap-07'); details.append(make('span', 'material-icons', type.icon || 'folder')); const label = make('label', 'checkbox-label u-mb-0'); label.append(checkbox('exportEntityTypes', typeId, 'export-entity-type-checkbox'), make('span', '', type.label || typeId || '')); details.appendChild(label); const expand = make('button', 'expand-entity-type expand-toggle material-icons', 'expand_more'); expand.type = 'button'; const fields = make('div', 'entity-fields-list hidden u-mt-050'); expand.addEventListener('click', () => { if (!fields.childNodes.length) this.renderSafeExportFieldsList(typeId, fields); const visible = fields.style.display === 'block'; fields.style.display = visible ? 'none' : 'block'; expand.textContent = visible ? 'expand_more' : 'expand_less'; }); top.append(details, expand); item.append(top, fields); typeGrid.appendChild(item); }); typeSection.appendChild(typeGrid);
+        Object.entries(this.data.entityTypes || {}).forEach(([typeId, type]) => { const item = make('div', 'restore-item entity-type-card u-pos-relative'); const top = make('div', 'entity-type-header u-flex-between-center'); const details = make('div', 'u-flex-center-gap-07'); details.append(make('span', 'material-icons', type.icon || 'folder')); const label = make('label', 'checkbox-label u-mb-0'); label.append(checkbox('exportEntityTypes', typeId, 'export-entity-type-checkbox'), make('span', '', type.label || typeId || '')); details.appendChild(label); const expand = make('button', 'expand-entity-type expand-toggle material-icons', 'expand_more'); expand.type = 'button'; const fields = make('div', 'entity-fields-list hidden u-mt-050'); expand.addEventListener('click', () => { if (!fields.childNodes.length) this.renderExportFieldsList(typeId, fields); const visible = fields.style.display === 'block'; fields.style.display = visible ? 'none' : 'block'; expand.textContent = visible ? 'expand_more' : 'expand_less'; }); top.append(details, expand); item.append(top, fields); typeGrid.appendChild(item); }); typeSection.appendChild(typeGrid);
         const categorySection = section('Categories'); const categoryGrid = make('div', 'restore-defaults-grid'); Object.entries(this.data.categories || {}).forEach(([categoryId, category]) => { const item = make('div', 'restore-item'); const label = make('label', 'checkbox-label'); label.append(checkbox('exportCategories', categoryId, 'export-category-checkbox'), make('span', '', category.label || categoryId || '')); item.appendChild(label); categoryGrid.appendChild(item); }); categorySection.appendChild(categoryGrid);
         const entitySection = section('Entities'); const entityGrid = make('div', 'restore-defaults-grid'); Object.entries(this.data.entities || {}).forEach(([entityId, entity]) => { const item = make('div', 'restore-item'); const label = make('label', 'checkbox-label'); label.append(checkbox('exportEntities', entityId, 'export-entity-checkbox'), make('span', '', this.getEntityCardTitle(entity))); item.appendChild(label); entityGrid.appendChild(item); }); entitySection.appendChild(entityGrid);
         const settingsSection = section('Settings'); const settingsItem = make('div', 'restore-item'); const settingsLabel = make('label', 'checkbox-label'); settingsLabel.append(checkbox('exportSettings', 'settings', 'export-settings-checkbox', true), make('span', '', 'Settings')); settingsItem.appendChild(settingsLabel); settingsSection.appendChild(settingsItem);
         form.append(typeSection, categorySection, entitySection, settingsSection); body.appendChild(form); const actions = make('div', 'modal-actions'); const cancel = make('button', 'btn btn-secondary', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', () => this.closeModal('exportModal')); const exportButton = make('button', 'btn btn-primary', 'Export Selected'); exportButton.type = 'button'; exportButton.addEventListener('click', () => this.processExport()); actions.append(cancel, exportButton); content.append(close, header, body, actions); modal.appendChild(content); document.body.appendChild(modal); this.showModal('exportModal');
       },
 
-      renderSafeExportFieldsList(typeId, container) {
+      renderExportFieldsList(typeId, container) {
         const type = this.data.entityTypes[typeId]; if (!type) return;
         container.replaceChildren();
         const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text != null) el.textContent = text; return el; };
         const checkbox = (name, value, className) => { const input = document.createElement('input'); input.type = 'checkbox'; input.name = name; input.value = value; input.checked = true; input.className = `elistly-checkbox ${className}`; input.dataset.typeId = typeId; return input; };
         (type.fields || []).forEach(field => { const item = make('div', 'restore-field-item restore-field-item-card'); const label = make('label', 'checkbox-label u-mb-0'); label.append(checkbox('exportField', field.name || '', 'export-field-checkbox'), make('span', '', field.label || field.name || '')); item.appendChild(label); if (field.type === 'dropdown') { const options = make('div', 'restore-options-list'); (field.options || []).forEach((option, index) => { const row = make('label', 'checkbox-label restore-option-item u-ml-150'); const input = checkbox('exportOption', String(index), 'export-option-checkbox'); input.dataset.fieldName = field.name || ''; row.append(input, make('span', '', `${option.value || ''} (${option.nameValue || ''})`)); options.appendChild(row); }); item.appendChild(options); } container.appendChild(item); });
-      },
-      showExportModal() {
-        return this.showSafeExportModal();
-        // Build export selection modal
-        const defaultEntityTypes = Object.keys(this.data.entityTypes);
-        const modalHtml = `
-          <div class="modal" id="exportModal">
-            <div class="modal-content">
-              <button class="modal-close" onclick="App.closeModal('exportModal')">
-                <span class="material-icons">close</span>
-              </button>
-              <div class="modal-header">
-                <h3>Export Data</h3>
-              </div>
-              <div class="modal-body modal-body-scroll">
-                <p>Select the elements you want to export. Only selected items will be included in the export file.</p>
-                <form id="exportForm">
-                  <div class="restore-defaults-section">
-                    <h4>Entity Types</h4>
-                    <div class="u-pb-8">
-                      <label class="checkbox-label">
-                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntityTypes" onclick="App.toggleAllCheckboxes('export-entity-type-checkbox', this.checked)">
-                        <span>Select All Entity Types</span>
-                      </label>
-                    </div>
-                    <div class="restore-defaults-grid">
-                      ${defaultEntityTypes.map(typeId => {
-                        const type = this.data.entityTypes[typeId];
-                        return `<div class="restore-item entity-type-card u-pos-relative" data-entity-type="${typeId}">
-                          <div class="entity-type-header u-flex-between-center">
-                            <div class="u-flex-center-gap-07">
-                        <span class="material-icons">${type.icon}</span>
-                              <label class="checkbox-label u-mb-0">
-                                <input type="checkbox" class="elistly-checkbox export-entity-type-checkbox" name="exportEntityTypes" value="${typeId}">
-                        <span>${type.label}</span>
-                              </label>
-                      </div>
-                            <span class="material-icons expand-entity-type expand-toggle" data-entity-type="${typeId}">expand_more</span>
-                      </div>
-                          <div class="entity-fields-list hidden u-mt-050" data-entity-type-fields="${typeId}"></div>
-                        </div>`;
-                      }).join('')}
-                    </div>
-                </div>
-                  <div class="restore-defaults-section">
-                    <h4>Categories</h4>
-                    <div class="u-pb-8">
-                      <label class="checkbox-label">
-                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportCategories" onclick="App.toggleAllCheckboxes('export-category-checkbox', this.checked)">
-                        <span>Select All Categories</span>
-                      </label>
-              </div>
-                    <div class="restore-defaults-grid">
-                      ${Object.keys(this.data.categories).map(catId => {
-                        const cat = this.data.categories[catId];
-                        return `<div class="restore-item">
-                          <label class="checkbox-label">
-                            <input type="checkbox" class="elistly-checkbox export-category-checkbox" name="exportCategories" value="${catId}">
-                            <span>${cat.label}</span>
-                          </label>
-                        </div>`;
-                      }).join('')}
-                        </div>
-                      </div>
-                  <div class="restore-defaults-section">
-                    <h4>Entities</h4>
-                    <div class="u-pb-8">
-                                  <label class="checkbox-label">
-                        <input type="checkbox" class="elistly-checkbox" id="selectAllExportEntities" onclick="App.toggleAllCheckboxes('export-entity-checkbox', this.checked)">
-                        <span>Select All Entities</span>
-                                  </label>
-                    </div>
-                    <div class="restore-defaults-grid">
-                      ${Object.keys(this.data.entities).map(entityId => {
-                        const entity = this.data.entities[entityId];
-                        return `<div class="restore-item">
-                                  <label class="checkbox-label">
-                            <input type="checkbox" class="elistly-checkbox export-entity-checkbox" name="exportEntities" value="${entityId}">
-                            <span>${this.getEntityCardTitle(entity)}</span>
-                                  </label>
-                        </div>`;
-                      }).join('')}
-                    </div>
-                  </div>
-                  <div class="restore-defaults-section">
-                    <h4>Settings</h4>
-                    <div class="restore-item">
-                                  <label class="checkbox-label">
-                        <input type="checkbox" class="elistly-checkbox export-settings-checkbox" name="exportSettings" value="settings" checked>
-                        <span>Settings</span>
-                                  </label>
-                    </div>
-                  </div>
-                </form>
-              </div>
-              <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="App.closeModal('exportModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="App.processExport()">
-                  <span class="material-icons">download</span>Export Selected
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-        const div = document.createElement('div');
-        div.innerHTML = modalHtml;
-        document.body.appendChild(div.firstElementChild);
-        this.showModal('exportModal');
-
-        // Add expand/collapse logic for entity type cards
-        document.querySelectorAll('.expand-entity-type').forEach(icon => {
-          icon.addEventListener('click', function(e) {
-            const typeId = this.dataset.entityType;
-            const fieldsList = document.querySelector(`.entity-fields-list[data-entity-type-fields="${typeId}"]`);
-            if (!fieldsList) return;
-            if (fieldsList.style.display === 'none' || !fieldsList.style.display) {
-              if (!fieldsList.innerHTML) {
-                App.renderExportFieldsList(typeId, fieldsList);
-              }
-              fieldsList.style.display = 'block';
-              this.textContent = 'expand_less';
-            } else {
-              fieldsList.style.display = 'none';
-              this.textContent = 'expand_more';
-            }
-          });
-        });
-      },
-
-      renderExportFieldsList(typeId, container) {
-        return this.renderSafeExportFieldsList(typeId, container);
-        const type = this.data.entityTypes[typeId];
-        if (!type) return;
-        container.innerHTML = (type.fields || []).map((field, fIdx) => {
-          let optionHtml = '';
-          if (field.type === 'dropdown') {
-            optionHtml = `<div class='restore-dropdown-options u-ml-150 u-mt-030'>
-              <div class='expand-dropdown-options u-flex-center-gap-05 expand-toggle' data-field-name='${field.name}'>
-                <span class='material-icons'>expand_more</span>
-                <span class='u-fs-095'>Dropdown Options</span>
-              </div>
-              <div class='restore-options-list' data-options-list='${field.name}' class='hidden'>
-                ${(field.options || []).map((opt, oIdx) => {
-                  return `<div class='restore-option-item u-ml-150'>
-                    <label class='checkbox-label'>
-                      <input type='checkbox' name='exportOption_${typeId}_${field.name}' value='${oIdx}' class='elistly-checkbox export-option-checkbox' checked>
-                      <span>${opt.value} (${opt.nameValue})</span>
-                    </label>
-                  </div>`;
-                }).join('')}
-              </div>
-            </div>`;
-          }
-          return `<div class='restore-field-item restore-field-item-card'>
-            <div class='u-flex-center-gap-07'>
-              <label class='checkbox-label u-mb-0'>
-                <input type='checkbox' name='exportField_${typeId}' value='${field.name}' class='elistly-checkbox export-field-checkbox' checked>
-                <span>${field.label}</span>
-              </label>
-            </div>
-            ${optionHtml}
-          </div>`;
-        }).join('');
-        // Add expand/collapse for dropdown options
-        container.querySelectorAll('.expand-dropdown-options').forEach(expand => {
-          expand.addEventListener('click', function() {
-            const fieldName = this.dataset.fieldName;
-            const optionsList = container.querySelector(`[data-options-list='${fieldName}']`);
-            const icon = this.querySelector('.material-icons');
-            if (optionsList.style.display === 'none' || !optionsList.style.display) {
-              optionsList.style.display = 'block';
-              icon.textContent = 'expand_less';
-            } else {
-              optionsList.style.display = 'none';
-              icon.textContent = 'expand_more';
-            }
-          });
-        });
       },
 
       processExport() {
