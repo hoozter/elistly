@@ -16,6 +16,7 @@ import { neon } from "@neondatabase/serverless";
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const jwksCache = { keys: null, expiresAt: 0 };
+const REGISTRATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 class RequestBodyError extends Error {
   constructor(status, message) {
@@ -66,6 +67,63 @@ async function readJsonBody(req) {
   }
   if (!isJsonObject(body)) throw new RequestBodyError(400, "JSON object required");
   return body;
+}
+
+async function sha256Hex(value) {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function randomBase64url(bytes = 32) {
+  const value = new Uint8Array(bytes);
+  crypto.getRandomValues(value);
+  return btoa(String.fromCharCode(...value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function validateRegistrationFacts(body) {
+  if (!isJsonObject(body) || typeof body.hardwareIdentity !== "string" || !/^[a-f0-9]{64}$/.test(body.hardwareIdentity)) {
+    throw new RequestBodyError(400, "hardwareIdentity must be a SHA-256 hex digest");
+  }
+  if (typeof body.hostname !== "string" || !body.hostname.trim() || body.hostname.trim().length > 255) {
+    throw new RequestBodyError(400, "hostname is required");
+  }
+  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) {
+    if (body[field] != null && (typeof body[field] !== "string" || body[field].length > 500)) {
+      throw new RequestBodyError(400, `${field} must be a short string`);
+    }
+  }
+  return body;
+}
+
+export function addRegisteredDevice(payload, workspaceId, facts) {
+  const workspace = payload?.workspaces?.[workspaceId];
+  if (!workspace || !isJsonObject(workspace.entities) || !isJsonObject(workspace.entityTypes?.computer)) {
+    throw new RequestBodyError(422, "The selected workspace needs a Computer entity type before registration");
+  }
+  const existing = Object.values(workspace.entities).find(entity =>
+    isJsonObject(entity) && entity.type === "computer" && entity._elistlyRegistration?.hardwareIdentity === facts.hardwareIdentity
+  );
+  if (existing) return { payload, entity: existing, created: false };
+  const normalizedSerial = typeof facts.serialNumber === "string" ? facts.serialNumber.trim().toLowerCase() : "";
+  if (normalizedSerial && Object.values(workspace.entities).some(entity =>
+    isJsonObject(entity) && entity.type === "computer" &&
+    !entity._elistlyRegistration && typeof entity.serialNumber === "string" &&
+    entity.serialNumber.trim().toLowerCase() === normalizedSerial
+  )) {
+    throw new RequestBodyError(409, "A manual Computer already has this serial number");
+  }
+  const id = `device_${randomBase64url(12)}`;
+  const entity = {
+    id, type: "computer", name: facts.hostname.trim(), hostname: facts.hostname.trim(),
+    _elistlyRegistration: { hardwareIdentity: facts.hardwareIdentity, registeredAt: new Date().toISOString() }
+  };
+  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) {
+    if (typeof facts[field] === "string" && facts[field].trim()) entity[field] = facts[field].trim();
+  }
+  const nextPayload = structuredClone(payload);
+  nextPayload.workspaces[workspaceId].entities[id] = entity;
+  if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
+  return { payload: nextPayload, entity, created: true };
 }
 
 function configuredCorsOrigin(env, requestOrigin) {
@@ -386,8 +444,6 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
 
       if (path === "/debug-env") return jsonResponse({ error: "Not found" }, 404, origin);
 
-      if (!sql) sql = createSql(env.NEON_DATABASE_URL);
-
       if (path === "/auth/signup" && req.method === "POST") return handleAuthStart(req, env, origin, "signup");
       if (path === "/auth/login" && req.method === "POST") return handleAuthStart(req, env, origin, "login");
       if (path === "/auth/refresh" && req.method === "POST") return handleRefresh(req, env, origin);
@@ -402,11 +458,93 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         return jsonResponse({ error: "MFA is not implemented for Neon Auth yet" }, 501, origin);
       }
 
+      // This is intentionally the only route that accepts a device-registration
+      // secret. It is checked before Neon Auth and never creates a user session.
+      if (path === "/device-registration/register") {
+        if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405, origin);
+        const token = getBearerToken(req);
+        if (!token || !/^dr_[A-Za-z0-9_-]{32,}$/.test(token)) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        const facts = validateRegistrationFacts(await readJsonBody(req));
+        if (!sql) sql = createSql(env.NEON_DATABASE_URL);
+        const tokenRows = await sql`
+          SELECT id, owner_user_id, workspace_id
+          FROM device_registration_tokens
+          WHERE token_hash = ${await sha256Hex(token)}
+            AND revoked_at IS NULL AND expires_at > NOW()
+          LIMIT 1
+        `;
+        const registrationToken = tokenRows[0];
+        if (!registrationToken) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        const currentRows = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${registrationToken.owner_user_id}`;
+        const current = normalizeAppDataRow(currentRows[0]);
+        if (!current.payload || !current.updated_at) return jsonResponse({ error: "Account data is unavailable" }, 409, origin);
+        const registration = addRegisteredDevice(current.payload, registrationToken.workspace_id, facts);
+        if (!registration.created) {
+          await sql`UPDATE device_registration_tokens SET last_used_at = NOW() WHERE id = ${registrationToken.id}`;
+          return jsonResponse({ ok: true, created: false, deviceId: registration.entity.id }, 200, origin);
+        }
+        const updated = await sql`
+          UPDATE app_data SET payload = ${JSON.stringify(registration.payload)}::jsonb, updated_at = NOW()
+          WHERE user_id = ${registrationToken.owner_user_id} AND updated_at = ${current.updated_at}::timestamptz
+          RETURNING updated_at::text AS updated_at
+        `;
+        if (!updated[0]) return jsonResponse({ error: "App data changed since registration started; create a fresh script" }, 409, origin);
+        await sql`UPDATE device_registration_tokens SET last_used_at = NOW() WHERE id = ${registrationToken.id}`;
+        return jsonResponse({ ok: true, created: true, deviceId: registration.entity.id, updatedAt: updated[0].updated_at }, 201, origin);
+      }
+
       const user = await authenticate(req, env);
       if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+      if (!sql) sql = createSql(env.NEON_DATABASE_URL);
 
       if (path === "/me" && req.method === "GET") {
         return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
+      }
+
+      if (path === "/device-registration/tokens") {
+        if (req.method === "GET") {
+          const rows = await sql`
+            SELECT id, workspace_id, label, expires_at::text AS expires_at,
+                   revoked_at::text AS revoked_at, created_at::text AS created_at, last_used_at::text AS last_used_at
+            FROM device_registration_tokens WHERE owner_user_id = ${user.id}
+            ORDER BY created_at DESC LIMIT 100
+          `;
+          return jsonResponse({ tokens: rows }, 200, origin);
+        }
+        if (req.method === "POST") {
+          const body = await readJsonBody(req);
+          if (typeof body.workspaceId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(body.workspaceId)) {
+            throw new RequestBodyError(400, "workspaceId is required");
+          }
+          if (body.label != null && (typeof body.label !== "string" || body.label.length > 100)) {
+            throw new RequestBodyError(400, "label must be a short string");
+          }
+          const account = await sql`SELECT payload FROM app_data WHERE user_id = ${user.id}`;
+          if (!account[0]?.payload?.workspaces?.[body.workspaceId]) {
+            return jsonResponse({ error: "Workspace not found" }, 404, origin);
+          }
+          const token = `dr_${randomBase64url(32)}`;
+          const id = `drt_${randomBase64url(12)}`;
+          const expiresAt = new Date(Date.now() + REGISTRATION_TOKEN_TTL_MS).toISOString();
+          await sql`
+            INSERT INTO device_registration_tokens (id, owner_user_id, workspace_id, token_hash, label, expires_at)
+            VALUES (${id}, ${user.id}, ${body.workspaceId}, ${await sha256Hex(token)}, ${body.label?.trim() || null}, ${expiresAt}::timestamptz)
+          `;
+          // The secret is deliberately only returned from this creation response.
+          return jsonResponse({ token, tokenId: id, expiresAt }, 201, origin);
+        }
+        return jsonResponse({ error: "Method not allowed" }, 405, origin);
+      }
+
+      const revokeTokenMatch = path.match(/^\/device-registration\/tokens\/(drt_[A-Za-z0-9_-]+)$/);
+      if (revokeTokenMatch && req.method === "DELETE") {
+        const rows = await sql`
+          UPDATE device_registration_tokens SET revoked_at = COALESCE(revoked_at, NOW())
+          WHERE id = ${revokeTokenMatch[1]} AND owner_user_id = ${user.id}
+          RETURNING id
+        `;
+        if (!rows[0]) return jsonResponse({ error: "Not found" }, 404, origin);
+        return jsonResponse({ ok: true }, 200, origin);
       }
 
       if (path === "/app-data") {
@@ -477,7 +615,9 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
 
       if (path === "/users/me" && req.method === "DELETE") {
         await sql`
-          WITH deleted_app_data AS (
+          WITH deleted_registration_tokens AS (
+            DELETE FROM device_registration_tokens WHERE owner_user_id = ${user.id}
+          ), deleted_app_data AS (
             DELETE FROM app_data WHERE user_id = ${user.id}
           ), deleted_profiles AS (
             DELETE FROM profiles WHERE user_id = ${user.id}
@@ -507,7 +647,9 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         if (!await checkAdmin(sql, user, env)) return jsonResponse({ error: "Forbidden" }, 403, origin);
         const targetId = deleteUserMatch[1];
         await sql`
-          WITH deleted_app_data AS (
+          WITH deleted_registration_tokens AS (
+            DELETE FROM device_registration_tokens WHERE owner_user_id = ${targetId}
+          ), deleted_app_data AS (
             DELETE FROM app_data WHERE user_id = ${targetId}
           ), deleted_profiles AS (
             DELETE FROM profiles WHERE user_id = ${targetId}

@@ -70,8 +70,14 @@ const initial = {
 
     await page.evaluate(() => App.showSettingsModal());
     const settings = page.locator('#settingsModal');
-    assert.equal(await settings.locator('#deviceCollectorDownload').getAttribute('download'), 'Elistly-Windows-Device-Intake-v1.0.3.zip');
-    assert.match(await settings.textContent(), /Device Collector.*local-only.*administrator/is);
+    assert.equal(await settings.locator('#deviceCollectorDownload').count(), 0, 'Settings must not offer the retired manual collector download');
+    assert.match(await settings.textContent(), /Windows device registration.*24-hour.*workspace-bound/is);
+    assert.equal(await settings.getByRole('button', { name: 'Create registration script' }).count(), 1);
+    const registrationScript = await page.evaluate(() => App.buildDeviceRegistrationScript('https://api.example.test', 'dr_' + 'A'.repeat(43)));
+    assert.match(registrationScript, /Win32_BIOS.*Win32_ComputerSystemProduct.*SHA256/is);
+    assert.match(registrationScript, /device-registration\/register/);
+    assert.match(registrationScript, /param\(\[string\]\$RegistrationToken/);
+    assert.doesNotMatch(registrationScript, /app-data|profile|admin/i, 'registration script must expose only the registration endpoint');
     assert.equal(await settings.locator('#deviceIntakeFile').count(), 0, 'Settings must not contain report selection');
     assert.doesNotMatch(await settings.textContent(), /Confirm import|Upload the report/i);
     const beforeFieldUpgrade = await page.evaluate(() => JSON.stringify(App.data));

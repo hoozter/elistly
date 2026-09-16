@@ -58,17 +58,17 @@ assert.match(readme, /does not change.*machine.*user.*policy/i);
 assert.match(packageScript, /build-windows-shortcut\.js/);
 assert.match(packageScript, /Elistly Device Collector\.lnk/);
 assert.match(packageScript, /bin\/Elistly\.ico/);
-assert.match(app, /Double-click.*Elistly Device Collector.*shortcut/i, 'in-app instructions must name the branded shortcut');
-assert.doesNotMatch(app, /right-click Collect-ElistlyDevice\.ps1/i, 'in-app instructions must not direct users to the policy-blocked path');
+assert.match(app, /Windows device registration.*24-hour.*workspace-bound/is, 'in-app deployment must use scoped device registration');
+assert.doesNotMatch(app, /deviceCollectorDownload/, 'the retired collector download must not remain in Settings');
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
 assert.match(appHtml, /styles\.css\?v=19/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
-assert.match(appHtml, /app\.js\?v=27/, 'app shell must request the current application bundle (including collector download)');
-assert.match(serviceWorker, /elistly-shell-v19/);
+assert.match(appHtml, /app\.js\?v=28/, 'app shell must request the device registration bundle');
+assert.match(serviceWorker, /elistly-shell-v20/);
 assert.match(serviceWorker, /styles\.css\?v=19/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
-assert.match(serviceWorker, /app\.js\?v=27/);
-for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript], ['app download', app]]) {
+assert.match(serviceWorker, /app\.js\?v=28/);
+for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript]]) {
   assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.3|Collector 1\.0\.2/i, `${name} must reference collector package 1.0.3 or collector 1.0.2`);
 }
 const archive = fs.readFileSync(archivePath);

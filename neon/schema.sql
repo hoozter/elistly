@@ -50,6 +50,23 @@ $$;
 alter table public.app_data
   add column if not exists updated_at timestamptz not null default now();
 
+-- Opaque one-purpose secrets for unattended device registration. The secret
+-- itself is never stored; token_hash is SHA-256 of the value shown once.
+create table if not exists public.device_registration_tokens (
+  id text primary key,
+  owner_user_id text not null,
+  workspace_id text not null,
+  token_hash text not null unique,
+  label text,
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  constraint device_registration_tokens_hash_length check (char_length(token_hash) = 64)
+);
+create index if not exists device_registration_tokens_owner_workspace_idx
+  on public.device_registration_tokens (owner_user_id, workspace_id);
+
 -- ---------------------------------------------------------------------------
 -- profiles
 -- ---------------------------------------------------------------------------

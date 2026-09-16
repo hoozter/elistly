@@ -2455,6 +2455,64 @@ const App = {
         return (w && w.name) || (this.data.currentWorkspaceId === 'default' ? 'Default' : 'Inventory');
       },
 
+      async showDeviceRegistrationModal() {
+        const workspaceId = this.data.currentWorkspaceId;
+        if (!workspaceId) return this.showNotification('Choose a workspace first.', 'error');
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        const card = document.createElement('div'); card.className = 'modal';
+        const heading = document.createElement('h3'); heading.textContent = 'Windows device registration';
+        const note = document.createElement('p'); note.textContent = `Create a script for “${this.getCurrentWorkspaceName()}”, then run it on the target computer. Active and revoked scripts remain listed here.`;
+        const tokens = document.createElement('div'); tokens.className = 'device-registration-tokens'; tokens.setAttribute('aria-live', 'polite');
+        const create = document.createElement('button'); create.className = 'btn btn-primary'; create.type = 'button'; create.textContent = 'Create 24-hour registration script';
+        const close = document.createElement('button'); close.className = 'btn btn-secondary'; close.type = 'button'; close.textContent = 'Done'; close.onclick = () => modal.remove();
+        const refresh = async () => {
+          tokens.replaceChildren(document.createTextNode('Loading scripts…'));
+          const result = await apiRequest('/device-registration/tokens');
+          if (!result.ok) return tokens.replaceChildren(Object.assign(document.createElement('p'), { className: 'error-message', textContent: result.data.error || 'Could not load registration scripts.' }));
+          this.renderDeviceRegistrationTokens(tokens, result.data.tokens || [], refresh);
+        };
+        create.onclick = async () => {
+          const label = window.prompt(`Optional label for the script for “${this.getCurrentWorkspaceName()}”:`, '');
+          if (label === null) return;
+          const result = await apiRequest('/device-registration/tokens', { method: 'POST', body: { workspaceId, label } });
+          if (!result.ok) return this.showNotification(result.data.error || 'Could not create registration script.', 'error');
+          const script = this.buildDeviceRegistrationScript(getApiUrl().replace(/\/$/, ''), result.data.token);
+          const blob = new Blob([script], { type: 'text/plain;charset=utf-8' });
+          const download = document.createElement('a');
+          download.href = URL.createObjectURL(blob); download.download = 'Register-ElistlyDevice.ps1'; download.click();
+          setTimeout(() => URL.revokeObjectURL(download.href), 0);
+          const secret = document.createElement('code'); secret.className = 'registration-token'; secret.textContent = result.data.token;
+          tokens.replaceChildren(Object.assign(document.createElement('p'), { textContent: `Script downloaded. This token is shown once and expires ${new Date(result.data.expiresAt).toLocaleString()}.` }), secret);
+          await refresh();
+        };
+        card.append(heading, note, create, tokens, close); modal.appendChild(card); document.body.appendChild(modal); await refresh();
+      },
+
+      buildDeviceRegistrationScript(apiUrl, token) {
+        const ps = value => `'${String(value).replace(/'/g, "''")}'`;
+        return `# Elistly device registration. This secret expires in 24 hours; store it only in your deployment secret store.\nparam([string]$RegistrationToken = ${ps(token)})\n$ErrorActionPreference = 'Stop'\nif (-not $RegistrationToken) { throw 'RegistrationToken is required.' }\nfunction Test-ElistlyStableIdentifier([string]$Value) {\n  $normalized = $Value.Trim()\n  if (-not $normalized -or $normalized -match '^(?i:(to be filled by o\\.?e\\.?m\\.?|default string|none|unknown|system serial number|0+|f+))$') { return $false }\n  return $true\n}\n$bios = Get-CimInstance Win32_BIOS\n$product = Get-CimInstance Win32_ComputerSystemProduct\n$computer = Get-CimInstance Win32_ComputerSystem\n$os = Get-CimInstance Win32_OperatingSystem\n$serialNumber = [string]$bios.SerialNumber\n$biosUuid = [string]$product.UUID\nif (-not (Test-ElistlyStableIdentifier $serialNumber) -or -not (Test-ElistlyStableIdentifier $biosUuid)) { throw 'A non-generic BIOS serial number and BIOS UUID are required for stable registration.' }\n$identityMaterial = "$biosUuid|$serialNumber"\n$hardwareIdentity = ([System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create()).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($identityMaterial)))).Replace('-', '').ToLowerInvariant()\n$body = @{ hardwareIdentity = $hardwareIdentity; hostname = $env:COMPUTERNAME; serialNumber = $serialNumber; manufacturer = [string]$computer.Manufacturer; model = [string]$computer.Model; windowsEdition = [string]$os.Caption } | ConvertTo-Json -Compress\n$response = Invoke-RestMethod -Method Post -Uri ${ps(`${apiUrl}/device-registration/register`)} -Headers @{ Authorization = "Bearer $RegistrationToken"; 'Content-Type' = 'application/json' } -Body $body\nif ($response.created) {\n  Write-Host "Registered Elistly device $($response.deviceId)"\n} else {\n  Write-Host "Elistly device already registered: $($response.deviceId)"\n}\n`;
+      },
+
+      renderDeviceRegistrationTokens(container, records, refresh) {
+        container.replaceChildren();
+        if (!records.length) return container.appendChild(Object.assign(document.createElement('p'), { className: 'help-text', textContent: 'No registration scripts have been created for this account.' }));
+        const list = document.createElement('ul'); list.className = 'device-registration-token-list';
+        records.forEach(record => {
+          const item = document.createElement('li');
+          const status = record.revoked_at ? 'Revoked' : new Date(record.expires_at) <= new Date() ? 'Expired' : 'Active';
+          const summary = document.createElement('span'); summary.textContent = `${record.label || record.workspace_id} — ${status}; expires ${new Date(record.expires_at).toLocaleString()}${record.last_used_at ? `; last used ${new Date(record.last_used_at).toLocaleString()}` : ''}`;
+          item.appendChild(summary);
+          if (!record.revoked_at && status === 'Active') {
+            const revoke = document.createElement('button'); revoke.className = 'btn btn-danger btn-sm'; revoke.type = 'button'; revoke.textContent = 'Revoke';
+            revoke.onclick = async () => { const result = await apiRequest(`/device-registration/tokens/${encodeURIComponent(record.id)}`, { method: 'DELETE' }); if (!result.ok) return this.showNotification(result.data.error || 'Could not revoke script.', 'error'); await refresh(); };
+            item.appendChild(revoke);
+          }
+          list.appendChild(item);
+        });
+        container.appendChild(list);
+      },
+
       switchWorkspace(workspaceId) {
         if (workspaceId === this.data.currentWorkspaceId) return;
         this.saveData();
@@ -3542,19 +3600,19 @@ const App = {
                           Import CSV
                         </button>
                         <div class="device-collector-card">
-                          <strong>Windows Device Collector</strong>
-                          <p class="help-text">Collects a disclosed, local-only device report without administrator access or network lookup.</p>
-                          <a class="btn btn-secondary" id="deviceCollectorDownload" href="downloads/Elistly-Windows-Device-Intake-v1.0.3.zip" download="Elistly-Windows-Device-Intake-v1.0.3.zip">
+                          <strong>Windows device registration</strong>
+                          <p class="help-text">Creates a 24-hour, workspace-bound PowerShell registration script. It can only register the computer that runs it; it cannot read or edit inventory, profiles, or admin settings.</p>
+                          <button type="button" class="btn btn-secondary" onclick="App.showDeviceRegistrationModal()">
                             <span class="material-icons">laptop_windows</span>
-                            Download collector package 1.0.3
-                          </a>
+                            Create registration script
+                          </button>
                           <button type="button" class="btn btn-secondary" onclick="App.showRecommendedWindowsFieldsConfirm()">
                             <span class="material-icons">playlist_add</span>
                             Add recommended Windows fields
                           </button>
                           <details class="device-collector-details">
-                            <summary>Collection and launch details</summary>
-                            <p class="help-text">Extract the ZIP, review README.txt, then double-click the Elistly Device Collector shortcut. The documented fallback applies an execution-policy option only to that collector process and never changes machine or user policy. Import the saved JSON from a new Computer form.</p>
+                            <summary>Deployment and safety details</summary>
+                            <p class="help-text">Run the downloaded script on the target computer, or pass <code>-RegistrationToken</code> from your deployment secret store. The secret is displayed once, expires in 24 hours, and may be revoked after creation. A repeat uses the same hardware identity and does not overwrite manual records or assign a person.</p>
                           </details>
                         </div>
                         <button class="btn btn-secondary" onclick="App.showAddPresetModal()">

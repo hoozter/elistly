@@ -238,11 +238,12 @@ describe("Elistly Worker route seams", () => {
 
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
+    expect(calls[0].query).toContain("DELETE FROM device_registration_tokens");
     expect(calls[0].query).toContain("DELETE FROM app_data");
     expect(calls[0].query).toContain("DELETE FROM profiles");
     expect(calls[0].query).toContain("DELETE FROM admin_users");
     expect(calls[0].query).toContain('DELETE FROM neon_auth."user"');
-    expect(calls[0].values).toEqual([user.id, user.id, user.id, user.id]);
+    expect(calls[0].values).toEqual([user.id, user.id, user.id, user.id, user.id]);
   });
 
   it("forbids non-admin account deletion before SQL mutation", async () => {

@@ -10,6 +10,16 @@ Elistly now uses Neon:
 
 Run or verify `neon/schema.sql` against the Neon database before production deploy.
 
+## Windows device registration
+
+In the active inventory, open **Settings → Windows device registration → Create registration script**. The resulting PowerShell script is bound to that inventory, and registers only the computer on which it runs.
+
+For PSD or other deployment tooling, create the script/token once and store its one-time secret in the deployment system’s secret store. Invoke the downloaded script with `-RegistrationToken <secret>`; do not put that value in a public script, image, repository, or command history. Tokens expire after 24 hours and can be revoked from the same screen.
+
+The registration endpoint accepts no inventory-reading, editing, profile, or administrative operations. It creates a Computer record only, uses BIOS UUID plus BIOS serial to detect a repeat install, and rejects a collision with an existing manually-created Computer rather than changing it. Person assignment is never inferred.
+
+Before first use, apply the current `neon/schema.sql`, deploy the Worker and Pages together, then create a fresh registration script from the deployed app. Test the PSD step against a non-production computer first.
+
 ## Frontend Config
 
 For local development, copy `config.example.js` to `config.js` and set:
