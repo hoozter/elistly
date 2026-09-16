@@ -99,6 +99,7 @@ async function testSelectionComposesWithVisibleFiltersAndResetsWithoutSaving() {
       App.renderCategoryView('devices');
       document.getElementById('authSignInModal')?.remove();
     });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-sort-field]').selectOption('rank');
     await page.locator('[data-sort-direction]').selectOption('desc');
@@ -124,6 +125,7 @@ async function testSelectedDeletionRequiresExplicitConfirmation() {
       App.renderCategoryView('devices');
       document.getElementById('authSignInModal')?.remove();
     });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-select-all-visible]').check();
     assert.equal(await page.locator('[data-selected-delete]').count(), 1, 'selection toolbar provides deletion action');
@@ -151,6 +153,7 @@ async function testSelectedDeletionRemovesOnlyTheConfirmedSetAndPersists() {
       App.renderCategoryView('devices');
       document.getElementById('authSignInModal')?.remove();
     });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-entity-selection][value="alpha"]').check();
     await page.locator('[data-selected-delete]').click();
@@ -176,6 +179,7 @@ async function testSelectedDeletionKeepsLocalStateCoherentWhenPersistenceFails()
       App.renderCategoryView('devices');
       document.getElementById('authSignInModal')?.remove();
     });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-entity-selection][value="alpha"]').check();
     await page.locator('[data-selected-delete]').click();

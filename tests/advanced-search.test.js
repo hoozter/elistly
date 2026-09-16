@@ -154,6 +154,7 @@ async function testCategorySortControlsComposeWithFiltersSearchAndStayReadOnly()
       };
     });
     assert.deepEqual(result, { sortControls: true, options: ['Generated name'], saves: 0 });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-sort-field]').selectOption('rank');
     await page.locator('[data-sort-direction]').selectOption('desc');
@@ -192,6 +193,7 @@ async function testCategoryAdvancedFiltersCombineWithHeaderSearchAndClearWithout
       };
     });
     assert.deepEqual(result, { controls: true, typePicker: true, initialCount: '2 items' });
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
     await page.locator('[data-filter-type]').selectOption('computer');
     await page.locator('[data-filter-name="status"]').selectOption('active');
     await page.evaluate(() => {

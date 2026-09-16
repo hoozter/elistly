@@ -3286,6 +3286,7 @@ const App = {
                   ${this.escapeHtmlText(category.label)}
                 </h2>
                 <div class="button-group button-group-row">
+                  <button type="button" class="btn btn-secondary" data-toggle-filters aria-label="Filters" title="Filters" aria-expanded="false" aria-controls="inventoryFilters"><span class="material-icons" aria-hidden="true">filter_list</span></button>
                   ${categoryEntityTypes.length > 0 ? (
                     categoryEntityTypes.length === 1
                       ? `
@@ -3329,7 +3330,7 @@ const App = {
                 </div>
               </div>
               <div class="entity-list">
-                ${this.renderAdvancedFilterControls(categoryId)}
+                <div id="inventoryFilters" class="hidden">${this.renderAdvancedFilterControls(categoryId)}</div>
                 ${this.renderBulkSelectionToolbar('', [])}
                 <div data-filter-results></div>
               </div>
@@ -3339,6 +3340,12 @@ const App = {
         
         mainContent.innerHTML = html;
         this._advancedFilterCategoryId = categoryId;
+        const filterToggle = mainContent.querySelector('[data-toggle-filters]');
+        const filterPanel = mainContent.querySelector('#inventoryFilters');
+        filterToggle.addEventListener('click', () => {
+          const collapsed = filterPanel.classList.toggle('hidden');
+          filterToggle.setAttribute('aria-expanded', String(!collapsed));
+        });
         const typeControl = mainContent.querySelector('[data-filter-type]');
         const sortField = mainContent.querySelector('[data-sort-field]');
         const sortDirection = mainContent.querySelector('[data-sort-direction]');
@@ -4341,7 +4348,7 @@ const App = {
         delete this.data.entities[entityId];
         this.saveData();
         
-        document.getElementById('confirmDeleteModal').remove();
+        this.closeModal('confirmDeleteModal');
         this.closeEntityModal();
         this.loadView(category || 'dashboard');
         this.showNotification('Entity deleted successfully', 'success');
