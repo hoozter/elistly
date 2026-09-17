@@ -8,6 +8,8 @@
 
 Elistly is a modular inventory app for tracking things: devices, books, people, locations, and the like. You define categories and entity types with custom fields, then add and edit items. It started as an IT inventory tool and grew into a flexible system that can model different kinds of “things.” **It requires an account:** you sign in and your data is stored in the database. The installable web app caches its application shell and preserves pending account edits locally for reconnect replay. Concurrent account edits use whole-document revisions: one stale write is retained locally and reported as a conflict rather than merged automatically.
 
+The product direction is a trustworthy managed service with useful free and paid subscriptions while preserving an open-source, self-hostable edition. Hosted plans must earn their value through dependable operation, security, automation and reduced maintenance—not artificial insecurity or lock-in. Subscription packaging is not implemented yet.
+
 ## What it’s for
 
 You need a simple way to keep lists of tangible stuff—inventory, assets, contacts, equipment—without a heavy app or database. Elistly lets you shape the data yourself: categories, custom fields, and how items appear on the dashboard. Good fits include IT inventory, books and media, people or teams, properties or locations, or anything else you want to track as a list with your own structure.
@@ -20,7 +22,9 @@ You need a simple way to keep lists of tangible stuff—inventory, assets, conta
 - **Account and database** — You always sign in; your data is stored through the Elistly Worker in Neon Postgres. Pending account edits survive reload in a local outbox and replay after reconnect. Concurrent edits use whole-document revisions, so a stale write remains local and is reported as a conflict rather than automatically merged.
 - **Theming** — Light/dark, accent and header colors, logo style, text size.
 - **Profile** — Export a versioned full-account backup, preview and explicitly replace account data from a compatible backup, reset data (clear app data, keep account), or delete the account. Optional **Admin** controls can list and delete user accounts; see [DOCS.md](DOCS.md) and `CLOUDFLARE_DEPLOY.md`.
-- **Windows Device Intake** — Settings provides the disclosed local-only collector download. In a new Computer form, **Import collected information** validates a saved report and fills only compatible existing draft fields; the ordinary Save action creates the Computer. The collector needs no administrator access and performs no network or directory lookup.
+- **Windows device collector** — Settings → Windows device collector → Create provides one form and one **Save and download** action. Leave **Keep updated automatically** unchecked to collect/register once, or check it to register and install reporting with a weekly day/time and optional sign-in trigger. [Collector instructions](docs/windows-device-collector.md) explain credentials, removal and verification. This unified flow is locally verified source, not deployed.
+- **Collected information import** — In a new Computer form, **Import collected information** validates an existing saved report and fills compatible draft fields; ordinary Save creates the Computer.
+- **Installed Windows reporting** — Existing per-device credentials and installed tasks retain their reporting contract. The collector’s management disclosure provides collected-fact inspection and confirmed revocation in the app.
 
 ## Quick install
 

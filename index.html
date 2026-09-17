@@ -67,7 +67,6 @@
     </main>
 
     <footer class="app-footer landing-footer">
-      <a href="THIRD_PARTY_NOTICES.html">Third-party notices</a>
       <span class="app-footer-copy">© <span id="copyright-year"></span> <a href="https://hoozter.com" target="_blank" rel="noopener noreferrer">hoozter</a>. Built with care in Sweden.</span>
       <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer" class="app-footer-link app-footer-github" aria-label="Source code on GitHub"><svg aria-hidden="true" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
       <a href="#" class="app-footer-legal" id="landingLegalLink">Legal</a>
@@ -84,29 +83,49 @@
       <div class="modal-header">
         <h3>Legal &amp; policies</h3>
       </div>
+      <div class="legal-tabs" role="tablist" aria-label="Legal information">
+        <button type="button" role="tab" id="landingPrivacyTab" aria-selected="true" aria-controls="landingPrivacyPanel">Privacy</button>
+        <button type="button" role="tab" id="landingTermsTab" aria-selected="false" aria-controls="landingTermsPanel" tabindex="-1">Terms</button>
+        <button type="button" role="tab" id="landingNoticesTab" aria-selected="false" aria-controls="landingNoticesPanel" tabindex="-1">Third-party notices</button>
+      </div>
       <div class="legal-modal-body">
+        <div role="tabpanel" id="landingPrivacyPanel" aria-labelledby="landingPrivacyTab">
         <section class="legal-section">
-          <h4>Disclaimer</h4>
-          <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. We do not guarantee availability, correctness, or fitness for any purpose.</p>
-          <p>You use the service and store data at your own risk. We are not responsible for any data you store, any loss of data, or how you use the application. Do not rely on it as the only copy of important information.</p>
+          <h4>What the app handles</h4>
+          <p>Account details include your email and display name. Inventory data includes the categories, types, items, settings, and other content you enter. The browser also keeps an account cache and unsent edits locally to support reloads and reconnecting.</p>
         </section>
         <section class="legal-section">
-          <h4>Data &amp; privacy</h4>
-          <p><strong>What we store</strong></p>
-          <p>When you use an account, we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app.</p>
-          <p><strong>Why</strong></p>
-          <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
-          <p><strong>Your rights</strong></p>
-          <ul class="legal-list">
-            <li><strong>Export</strong> your data: Profile → Export all data.</li>
-            <li><strong>Delete your account</strong>: Profile → Delete account. This removes your account and associated data.</li>
-          </ul>
-          <p>If you use a third-party auth or database provider, their terms also apply.</p>
+          <h4>Where your information is stored</h4>
+          <p>Elistly uses Cloudflare to run the service and Neon to manage accounts and store your inventory. Your information is not end-to-end encrypted. This means authorised Elistly administrators and service providers may be able to access it when needed to operate, support, protect, or maintain the service.</p>
+          <p>When you create an account or sign in, your password is sent to Neon to verify your identity. Your password is not stored with your inventory. Neon stores password credentials as a one-way hash rather than as readable plain text.</p>
+        </section>
+        <section class="legal-section">
+          <h4>Your choices</h4>
+          <p>You can export account data in Profile. The Profile menu provides account deletion. Browser-held cache or queued changes are controlled by the browser and device you use.</p>
+          <p>Deleting your account removes it from the service. Any information still stored in your browser is managed by you through your browser or device settings.</p>
+        </section>
+        </div>
+        <div role="tabpanel" id="landingTermsPanel" aria-labelledby="landingTermsTab" hidden>
+        <section class="legal-section">
+          <h4>Using Elistly</h4>
+          <p>Elistly is provided free to use in its current form and is in <strong>beta</strong>. Features and behaviour may change. Do not use it as the only copy of important information.</p>
+          <p>Use the service lawfully and do not attempt to interfere with it or access another account. You are responsible for the content you enter and for keeping access to your account and devices secure.</p>
+        </section>
+        <section class="legal-section">
+          <h4>No warranty</h4>
+          <p>We do not guarantee availability, correctness, security, or fitness for a particular purpose. Use the service and store data at your own risk.</p>
         </section>
         <section class="legal-section">
           <h4>Source code</h4>
-          <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
+          <p>The source code is available for review on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
         </section>
+        </div>
+        <div role="tabpanel" id="landingNoticesPanel" aria-labelledby="landingNoticesTab" hidden>
+        <section class="legal-section">
+          <p>Full third-party copyright and license notices for the shipped browser assets and production Worker dependencies.</p>
+          <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=9ec1f915882700b3d1d9bb9a0f9a9231e298d1fb7f55ee08da04dce3845b63a7" title="Full third-party notices"></iframe>
+        </section>
+        </div>
       </div>
     </div>
   </div>
@@ -120,6 +139,29 @@
     if (link) link.addEventListener('click', function(e) { e.preventDefault(); openLegal(); });
     if (close1) close1.addEventListener('click', closeLegal);
     if (modal) modal.addEventListener('click', function(e) { if (e.target === modal) closeLegal(); });
+    if (modal) {
+      var tabs = Array.prototype.slice.call(modal.querySelectorAll('[role="tab"]'));
+      function activateTab(tab, focus) {
+        tabs.forEach(function(candidate) {
+          var selected = candidate === tab;
+          candidate.setAttribute('aria-selected', String(selected));
+          candidate.tabIndex = selected ? 0 : -1;
+          document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
+        });
+        if (focus) tab.focus();
+      }
+      tabs.forEach(function(tab, index) {
+        tab.addEventListener('click', function() { activateTab(tab, false); });
+        tab.addEventListener('keydown', function(e) {
+          var next = null;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (index + 1) % tabs.length;
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (index + tabs.length - 1) % tabs.length;
+          if (e.key === 'Home') next = 0;
+          if (e.key === 'End') next = tabs.length - 1;
+          if (next !== null) { e.preventDefault(); activateTab(tabs[next], true); }
+        });
+      });
+    }
   })();
   </script>
   <script>

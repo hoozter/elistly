@@ -16,7 +16,7 @@ import { neon } from "@neondatabase/serverless";
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const jwksCache = { keys: null, expiresAt: 0 };
-const REGISTRATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+
 
 class RequestBodyError extends Error {
   constructor(status, message) {
@@ -80,50 +80,122 @@ function randomBase64url(bytes = 32) {
   return btoa(String.fromCharCode(...value)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+const MAX_REGISTRATION_PAYLOAD_BYTES = 64 * 1024;
+const registrationFields = new Set(["hardwareIdentity", "hostname", "serialNumber", "manufacturer", "model", "windowsEdition", "inventorySnapshot"]);
+const snapshotFields = new Set(["schemaVersion", "collectedAt", "device", "windows", "cpu", "ramBytes", "fixedDisks", "networkAdapters", "biosVersion", "tpm", "secureBoot", "bitLockerProtectionStatus", "battery", "lastBootAt", "uptimeSeconds", "lastInteractiveUser", "availability"]);
+
+function requireExactKeys(value, allowed, label) {
+  if (!isJsonObject(value)) throw new RequestBodyError(400, `${label} must be an object`);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new RequestBodyError(400, `Unknown ${label} field: ${key}`);
+}
+function nullableString(value, label, max = 500) {
+  if (value !== null && (typeof value !== "string" || value.length > max)) throw new RequestBodyError(400, `${label} must be null or a short string`);
+}
+function nullableInteger(value, label) {
+  if (value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new RequestBodyError(400, `${label} must be null or a non-negative integer`);
+}
+function nullableBoolean(value, label) {
+  if (value !== null && typeof value !== "boolean") throw new RequestBodyError(400, `${label} must be null or boolean`);
+}
+function nullableTimestamp(value, label) {
+  if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) throw new RequestBodyError(400, `${label} must be null or an ISO timestamp`);
+}
+
 export function validateRegistrationFacts(body) {
-  if (!isJsonObject(body) || typeof body.hardwareIdentity !== "string" || !/^[a-f0-9]{64}$/.test(body.hardwareIdentity)) {
-    throw new RequestBodyError(400, "hardwareIdentity must be a SHA-256 hex digest");
-  }
-  if (typeof body.hostname !== "string" || !body.hostname.trim() || body.hostname.trim().length > 255) {
-    throw new RequestBodyError(400, "hostname is required");
-  }
-  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) {
-    if (body[field] != null && (typeof body[field] !== "string" || body[field].length > 500)) {
-      throw new RequestBodyError(400, `${field} must be a short string`);
+  if (!isJsonObject(body)) throw new RequestBodyError(400, "JSON object required");
+  requireExactKeys(body, registrationFields, "registration");
+  if (new TextEncoder().encode(JSON.stringify(body)).byteLength > MAX_REGISTRATION_PAYLOAD_BYTES) throw new RequestBodyError(413, "Registration payload too large");
+  if (typeof body.hardwareIdentity !== "string" || !/^[a-f0-9]{64}$/.test(body.hardwareIdentity)) throw new RequestBodyError(400, "hardwareIdentity must be a SHA-256 hex digest");
+  if (typeof body.hostname !== "string" || !body.hostname.trim() || body.hostname.trim().length > 255) throw new RequestBodyError(400, "hostname is required");
+  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) nullableString(body[field], field);
+  const snapshot = body.inventorySnapshot;
+  requireExactKeys(snapshot, snapshotFields, "inventorySnapshot");
+  if (snapshot.schemaVersion !== "elistly.windows-device-registration.v1") throw new RequestBodyError(400, "Unsupported inventory snapshot schema");
+  nullableTimestamp(snapshot.collectedAt, "collectedAt");
+  if (snapshot.collectedAt === null) throw new RequestBodyError(400, "collectedAt is required");
+  requireExactKeys(snapshot.device, new Set(["manufacturer", "model", "serialNumber", "uuid"]), "device");
+  requireExactKeys(snapshot.windows, new Set(["edition", "version", "build", "displayRelease", "installDate"]), "windows");
+  requireExactKeys(snapshot.cpu, new Set(["model", "cores", "logicalProcessors"]), "cpu");
+  for (const [label, value] of Object.entries({ ...snapshot.device, ...snapshot.windows, "cpu.model": snapshot.cpu.model, biosVersion: snapshot.biosVersion, bitLockerProtectionStatus: snapshot.bitLockerProtectionStatus })) nullableString(value, label);
+  nullableTimestamp(snapshot.windows.installDate, "windows.installDate");
+  nullableInteger(snapshot.cpu.cores, "cpu.cores"); nullableInteger(snapshot.cpu.logicalProcessors, "cpu.logicalProcessors"); nullableInteger(snapshot.ramBytes, "ramBytes");
+  if (!Array.isArray(snapshot.fixedDisks) || snapshot.fixedDisks.length > 32) throw new RequestBodyError(400, "fixedDisks must contain at most 32 disks");
+  for (const disk of snapshot.fixedDisks) { requireExactKeys(disk, new Set(["capacityBytes", "freeBytes"]), "fixedDisks item"); nullableInteger(disk.capacityBytes, "fixedDisks.capacityBytes"); nullableInteger(disk.freeBytes, "fixedDisks.freeBytes"); }
+  if (!Array.isArray(snapshot.networkAdapters) || snapshot.networkAdapters.length > 32) throw new RequestBodyError(400, "networkAdapters must contain at most 32 adapters");
+  for (const adapter of snapshot.networkAdapters) {
+    requireExactKeys(adapter, new Set(["name", "macAddress", "ipv4Addresses", "ipv6Addresses"]), "networkAdapters item");
+    nullableString(adapter.name, "networkAdapters.name", 255); nullableString(adapter.macAddress, "networkAdapters.macAddress", 64);
+    for (const [label, addresses] of [["networkAdapters.ipv4Addresses", adapter.ipv4Addresses], ["networkAdapters.ipv6Addresses", adapter.ipv6Addresses]]) {
+      if (!Array.isArray(addresses) || addresses.length > 8) throw new RequestBodyError(400, `${label} must contain at most 8 addresses`);
+      for (const address of addresses) nullableString(address, label, 64);
     }
   }
+  requireExactKeys(snapshot.tpm, new Set(["present", "version", "ready"]), "tpm"); nullableBoolean(snapshot.tpm.present, "tpm.present"); nullableString(snapshot.tpm.version, "tpm.version"); nullableBoolean(snapshot.tpm.ready, "tpm.ready");
+  nullableBoolean(snapshot.secureBoot, "secureBoot");
+  requireExactKeys(snapshot.battery, new Set(["designCapacityMWh", "fullChargeCapacityMWh", "healthPercent"]), "battery");
+  nullableInteger(snapshot.battery.designCapacityMWh, "battery.designCapacityMWh"); nullableInteger(snapshot.battery.fullChargeCapacityMWh, "battery.fullChargeCapacityMWh"); nullableInteger(snapshot.battery.healthPercent, "battery.healthPercent");
+  nullableTimestamp(snapshot.lastBootAt, "lastBootAt"); nullableInteger(snapshot.uptimeSeconds, "uptimeSeconds");
+  requireExactKeys(snapshot.lastInteractiveUser, new Set(["username", "time", "source", "observation"]), "lastInteractiveUser"); nullableString(snapshot.lastInteractiveUser.username, "lastInteractiveUser.username"); nullableTimestamp(snapshot.lastInteractiveUser.time, "lastInteractiveUser.time");
+  nullableString(snapshot.lastInteractiveUser.source, "lastInteractiveUser.source", 200); nullableString(snapshot.lastInteractiveUser.observation, "lastInteractiveUser.observation", 200);
+  const availabilityKeys = new Set(["tpm", "secureBoot", "bitLocker", "battery", "networkAdapters", "lastInteractiveUser"]);
+  requireExactKeys(snapshot.availability, availabilityKeys, "availability");
+  for (const key of availabilityKeys) nullableString(snapshot.availability[key], `availability.${key}`, 200);
   return body;
 }
 
 export function addRegisteredDevice(payload, workspaceId, facts) {
   const workspace = payload?.workspaces?.[workspaceId];
-  if (!workspace || !isJsonObject(workspace.entities) || !isJsonObject(workspace.entityTypes?.computer)) {
-    throw new RequestBodyError(422, "The selected workspace needs a Computer entity type before registration");
-  }
-  const existing = Object.values(workspace.entities).find(entity =>
-    isJsonObject(entity) && entity.type === "computer" && entity._elistlyRegistration?.hardwareIdentity === facts.hardwareIdentity
-  );
+  if (!workspace || !isJsonObject(workspace.entities) || !isJsonObject(workspace.entityTypes?.computer)) throw new RequestBodyError(422, "The selected workspace needs a Computer entity type before registration");
+  const existing = Object.values(workspace.entities).find(entity => isJsonObject(entity) && entity.type === "computer" && entity._elistlyRegistration?.hardwareIdentity === facts.hardwareIdentity);
+  // Registration is creation-only: retries report the original device and never replace its snapshot.
   if (existing) return { payload, entity: existing, created: false };
   const normalizedSerial = typeof facts.serialNumber === "string" ? facts.serialNumber.trim().toLowerCase() : "";
-  if (normalizedSerial && Object.values(workspace.entities).some(entity =>
-    isJsonObject(entity) && entity.type === "computer" &&
-    !entity._elistlyRegistration && typeof entity.serialNumber === "string" &&
-    entity.serialNumber.trim().toLowerCase() === normalizedSerial
-  )) {
-    throw new RequestBodyError(409, "A manual Computer already has this serial number");
-  }
+  if (normalizedSerial && Object.values(workspace.entities).some(entity => isJsonObject(entity) && entity.type === "computer" && !entity._elistlyRegistration && typeof entity.serialNumber === "string" && entity.serialNumber.trim().toLowerCase() === normalizedSerial)) throw new RequestBodyError(409, "A manual Computer already has this serial number");
   const id = `device_${randomBase64url(12)}`;
-  const entity = {
-    id, type: "computer", name: facts.hostname.trim(), hostname: facts.hostname.trim(),
-    _elistlyRegistration: { hardwareIdentity: facts.hardwareIdentity, registeredAt: new Date().toISOString() }
-  };
-  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) {
-    if (typeof facts[field] === "string" && facts[field].trim()) entity[field] = facts[field].trim();
-  }
+  const entity = { id, type: "computer", name: facts.hostname.trim(), hostname: facts.hostname.trim(), _elistlyRegistration: { hardwareIdentity: facts.hardwareIdentity, registeredAt: new Date().toISOString(), inventorySnapshot: structuredClone(facts.inventorySnapshot) } };
+  for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) if (typeof facts[field] === "string" && facts[field].trim()) entity[field] = facts[field].trim();
   const nextPayload = structuredClone(payload);
   nextPayload.workspaces[workspaceId].entities[id] = entity;
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
   return { payload: nextPayload, entity, created: true };
+}
+
+function registeredDeviceInWorkspace(payload, workspaceId, deviceId) {
+  const workspace = payload?.workspaces?.[workspaceId];
+  const entity = workspace?.entities?.[deviceId];
+  return isJsonObject(entity) && entity.type === "computer" && isJsonObject(entity._elistlyRegistration)
+    ? { workspace, entity }
+    : null;
+}
+
+function registeredDeviceById(payload, deviceId) {
+  for (const [workspaceId] of Object.entries(payload?.workspaces || {})) {
+    const found = registeredDeviceInWorkspace(payload, workspaceId, deviceId);
+    if (found) return { workspaceId, ...found };
+  }
+  return null;
+}
+
+export function updateReportedDevice(payload, workspaceId, deviceId, facts) {
+  const found = registeredDeviceInWorkspace(payload, workspaceId, deviceId);
+  if (!found) throw new RequestBodyError(404, "Registered device not found");
+  if (found.entity._elistlyRegistration.hardwareIdentity !== facts.hardwareIdentity) {
+    throw new RequestBodyError(403, "Device identity does not match this reporting credential");
+  }
+  const previousCollectedAt = found.entity._elistlyRegistration.inventorySnapshot?.collectedAt;
+  if (typeof previousCollectedAt === "string" && Date.parse(facts.inventorySnapshot.collectedAt) < Date.parse(previousCollectedAt)) {
+    throw new RequestBodyError(409, "Report is older than the current device snapshot");
+  }
+
+  const nextPayload = structuredClone(payload);
+  const registration = nextPayload.workspaces[workspaceId].entities[deviceId]._elistlyRegistration;
+  const username = facts.inventorySnapshot.lastInteractiveUser.username;
+  registration.inventorySnapshot = structuredClone(facts.inventorySnapshot);
+  registration.lastReportedAt = new Date().toISOString();
+  registration.lastObservedAt = facts.inventorySnapshot.collectedAt;
+  if (typeof username === "string" && username.trim()) registration.lastObservedUsername = username.trim();
+  if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
+  return nextPayload;
 }
 
 function configuredCorsOrigin(env, requestOrigin) {
@@ -224,8 +296,15 @@ async function verifyNeonJwt(token, env) {
   } catch {
     return null;
   }
-  if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
-  if (!payload.sub) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const issuer = typeof env.NEON_AUTH_JWT_ISSUER === "string" ? env.NEON_AUTH_JWT_ISSUER.trim() : "";
+  const audience = typeof env.NEON_AUTH_JWT_AUDIENCE === "string" ? env.NEON_AUTH_JWT_AUDIENCE.trim() : "";
+  const tokenAudiences = typeof payload.aud === "string" ? [payload.aud] : Array.isArray(payload.aud) ? payload.aud : [];
+  // A trusted signature identifies its signer, not the application the token
+  // was minted for. API authentication therefore binds every token to a
+  // current expiry and this deployment's exact issuer and audience.
+  if (header.alg !== "EdDSA" || !Number.isSafeInteger(payload.exp) || payload.exp <= now || !payload.sub
+    || !issuer || payload.iss !== issuer || !audience || !tokenAudiences.includes(audience)) return null;
 
   const keys = await getJwks(env);
   const jwk = keys.find(key => key.kid === header.kid);
@@ -414,8 +493,6 @@ function normalizeAppDataRow(row) {
 }
 
 export function createWorker({ createSql = neon, authenticate = getAuthenticatedUser, checkAdmin = isAdmin } = {}) {
-  let sql;
-
   return {
   async fetch(req, env) {
     let origin;
@@ -458,44 +535,132 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         return jsonResponse({ error: "MFA is not implemented for Neon Auth yet" }, 501, origin);
       }
 
+      // Reporting secrets are device-specific and can only refresh their own
+      // registered inventory snapshot; they are never account session tokens.
+      if (path === "/device-reporting/report") {
+        if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405, origin);
+        const token = getBearerToken(req);
+        if (!token || !/^dp_[A-Za-z0-9_-]{32,}$/.test(token)) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        const facts = validateRegistrationFacts(await readJsonBody(req));
+        const tokenHash = await sha256Hex(token);
+        let sql = createSql(env.NEON_DATABASE_URL);
+        const tokenRows = await sql`
+          SELECT id, owner_user_id, workspace_id, device_id
+          FROM device_reporting_tokens
+          WHERE token_hash = ${tokenHash} AND revoked_at IS NULL
+          LIMIT 1
+        `;
+        const reportingToken = tokenRows[0];
+        if (!reportingToken) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        sql = createSql(env.NEON_DATABASE_URL);
+        const currentRows = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${reportingToken.owner_user_id}`;
+        const current = normalizeAppDataRow(currentRows[0]);
+        if (!current.payload || !current.updated_at) return jsonResponse({ error: "Account data is unavailable" }, 409, origin);
+        const nextPayload = updateReportedDevice(current.payload, reportingToken.workspace_id, reportingToken.device_id, facts);
+        // Recheck revocation in the write predicate so a concurrent revoke cannot
+        // be followed by a stale credential mutating app_data.
+        const updated = await sql`
+          WITH active_token AS (
+            SELECT id FROM device_reporting_tokens
+            WHERE id = ${reportingToken.id} AND token_hash = ${tokenHash} AND revoked_at IS NULL
+            FOR UPDATE
+          )
+          UPDATE app_data SET payload = ${JSON.stringify(nextPayload)}::jsonb, updated_at = NOW()
+          WHERE user_id = ${reportingToken.owner_user_id}
+            AND updated_at = ${current.updated_at}::timestamptz
+            AND EXISTS (SELECT 1 FROM active_token)
+          RETURNING updated_at::text AS updated_at
+        `;
+        if (!updated[0]) return jsonResponse({ error: "Report rejected because device data changed or the credential was revoked" }, 409, origin);
+        await sql`UPDATE device_reporting_tokens SET last_used_at = NOW() WHERE id = ${reportingToken.id} AND revoked_at IS NULL`;
+        return jsonResponse({ ok: true, deviceId: reportingToken.device_id, updatedAt: updated[0].updated_at }, 200, origin);
+      }
+
       // This is intentionally the only route that accepts a device-registration
       // secret. It is checked before Neon Auth and never creates a user session.
       if (path === "/device-registration/register") {
         if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405, origin);
         const token = getBearerToken(req);
-        if (!token || !/^dr_[A-Za-z0-9_-]{32,}$/.test(token)) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        if (!token || !/^d[rc]_[A-Za-z0-9_-]{32,}$/.test(token)) return jsonResponse({ error: "Unauthorized" }, 401, origin);
         const facts = validateRegistrationFacts(await readJsonBody(req));
-        if (!sql) sql = createSql(env.NEON_DATABASE_URL);
+        const tokenHash = await sha256Hex(token);
+        let sql = createSql(env.NEON_DATABASE_URL);
         const tokenRows = await sql`
           SELECT id, owner_user_id, workspace_id
           FROM device_registration_tokens
-          WHERE token_hash = ${await sha256Hex(token)}
-            AND revoked_at IS NULL AND expires_at > NOW()
+          WHERE token_hash = ${tokenHash}
+            AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
           LIMIT 1
         `;
         const registrationToken = tokenRows[0];
         if (!registrationToken) return jsonResponse({ error: "Unauthorized" }, 401, origin);
+        sql = createSql(env.NEON_DATABASE_URL);
         const currentRows = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${registrationToken.owner_user_id}`;
         const current = normalizeAppDataRow(currentRows[0]);
         if (!current.payload || !current.updated_at) return jsonResponse({ error: "Account data is unavailable" }, 409, origin);
         const registration = addRegisteredDevice(current.payload, registrationToken.workspace_id, facts);
+        // dc_ is explicitly issued for automatic enrollment. Existing dr_ secrets
+        // retain their registration-only authority. The token lock, revision check,
+        // registration and device credential issuance form one atomic statement.
+        if (token.startsWith("dc_")) {
+          const reportingToken = `dp_${randomBase64url(32)}`;
+          const reportingTokenId = `dpt_${randomBase64url(12)}`;
+          const enrolled = await sql`
+            WITH active_token AS MATERIALIZED (
+              SELECT id FROM device_registration_tokens
+              WHERE id = ${registrationToken.id} AND token_hash = ${tokenHash}
+                AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+              FOR UPDATE
+            ), saved AS (
+              UPDATE app_data SET payload = ${JSON.stringify(registration.payload)}::jsonb, updated_at = NOW()
+              WHERE user_id = ${registrationToken.owner_user_id} AND updated_at = ${current.updated_at}::timestamptz
+                AND EXISTS (SELECT 1 FROM active_token)
+              RETURNING updated_at
+            ), issued AS (
+              INSERT INTO device_reporting_tokens (id, owner_user_id, workspace_id, device_id, token_hash)
+              SELECT ${reportingTokenId}, ${registrationToken.owner_user_id}, ${registrationToken.workspace_id},
+                     ${registration.entity.id}, ${await sha256Hex(reportingToken)} FROM saved
+              RETURNING id
+            ), used AS (
+              UPDATE device_registration_tokens SET last_used_at = NOW()
+              WHERE id IN (SELECT id FROM active_token) AND EXISTS (SELECT 1 FROM issued)
+            )
+            SELECT updated_at::text AS updated_at FROM saved
+          `;
+          if (!enrolled[0]) return jsonResponse({ error: "Collector authorization or account data changed. Retry with an active collector." }, 409, origin);
+          return jsonResponse({ ok: true, created: registration.created, deviceId: registration.entity.id,
+            updatedAt: enrolled[0].updated_at, reportingToken, reportingTokenId }, registration.created ? 201 : 200, origin);
+        }
         if (!registration.created) {
           await sql`UPDATE device_registration_tokens SET last_used_at = NOW() WHERE id = ${registrationToken.id}`;
           return jsonResponse({ ok: true, created: false, deviceId: registration.entity.id }, 200, origin);
         }
+        // Serialize one-time registration with owner revocation and recheck
+        // expiry at the write boundary, just as automatic enrollment does.
         const updated = await sql`
-          UPDATE app_data SET payload = ${JSON.stringify(registration.payload)}::jsonb, updated_at = NOW()
-          WHERE user_id = ${registrationToken.owner_user_id} AND updated_at = ${current.updated_at}::timestamptz
-          RETURNING updated_at::text AS updated_at
+          WITH active_token AS MATERIALIZED (
+            SELECT id FROM device_registration_tokens
+            WHERE id = ${registrationToken.id} AND token_hash = ${tokenHash}
+              AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+            FOR UPDATE
+          ), saved AS (
+            UPDATE app_data SET payload = ${JSON.stringify(registration.payload)}::jsonb, updated_at = NOW()
+            WHERE user_id = ${registrationToken.owner_user_id} AND updated_at = ${current.updated_at}::timestamptz
+              AND EXISTS (SELECT 1 FROM active_token)
+            RETURNING updated_at
+          ), used AS (
+            UPDATE device_registration_tokens SET last_used_at = NOW()
+            WHERE id IN (SELECT id FROM active_token) AND EXISTS (SELECT 1 FROM saved)
+          )
+          SELECT updated_at::text AS updated_at FROM saved
         `;
         if (!updated[0]) return jsonResponse({ error: "App data changed since registration started; create a fresh script" }, 409, origin);
-        await sql`UPDATE device_registration_tokens SET last_used_at = NOW() WHERE id = ${registrationToken.id}`;
         return jsonResponse({ ok: true, created: true, deviceId: registration.entity.id, updatedAt: updated[0].updated_at }, 201, origin);
       }
 
       const user = await authenticate(req, env);
       if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
-      if (!sql) sql = createSql(env.NEON_DATABASE_URL);
+      const sql = createSql(env.NEON_DATABASE_URL);
 
       if (path === "/me" && req.method === "GET") {
         return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
@@ -523,9 +688,18 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
           if (!account[0]?.payload?.workspaces?.[body.workspaceId]) {
             return jsonResponse({ error: "Workspace not found" }, 404, origin);
           }
-          const token = `dr_${randomBase64url(32)}`;
+          if (body.automaticReporting != null && typeof body.automaticReporting !== "boolean") {
+            throw new RequestBodyError(400, "automaticReporting must be a boolean");
+          }
+          const token = `${body.automaticReporting === true ? 'dc' : 'dr'}_${randomBase64url(32)}`;
           const id = `drt_${randomBase64url(12)}`;
-          const expiresAt = new Date(Date.now() + REGISTRATION_TOKEN_TTL_MS).toISOString();
+          let expiresAt = null;
+          if (body.expiresAt != null) {
+            if (typeof body.expiresAt !== 'string' || !/T.*(Z|[+-]\d{2}:\d{2})$/.test(body.expiresAt) || !Number.isFinite(Date.parse(body.expiresAt)) || Date.parse(body.expiresAt) <= Date.now()) {
+              throw new RequestBodyError(400, "expiresAt must be a future timestamp with a timezone, or null");
+            }
+            expiresAt = new Date(body.expiresAt).toISOString();
+          }
           await sql`
             INSERT INTO device_registration_tokens (id, owner_user_id, workspace_id, token_hash, label, expires_at)
             VALUES (${id}, ${user.id}, ${body.workspaceId}, ${await sha256Hex(token)}, ${body.label?.trim() || null}, ${expiresAt}::timestamptz)
@@ -541,6 +715,46 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         const rows = await sql`
           UPDATE device_registration_tokens SET revoked_at = COALESCE(revoked_at, NOW())
           WHERE id = ${revokeTokenMatch[1]} AND owner_user_id = ${user.id}
+          RETURNING id
+        `;
+        if (!rows[0]) return jsonResponse({ error: "Not found" }, 404, origin);
+        return jsonResponse({ ok: true }, 200, origin);
+      }
+
+      if (path === "/device-reporting/tokens") {
+        if (req.method === "GET") {
+          const rows = await sql`
+            SELECT id, workspace_id, device_id, revoked_at::text AS revoked_at,
+                   created_at::text AS created_at, last_used_at::text AS last_used_at
+            FROM device_reporting_tokens WHERE owner_user_id = ${user.id}
+            ORDER BY created_at DESC LIMIT 100
+          `;
+          return jsonResponse({ tokens: rows }, 200, origin);
+        }
+        if (req.method === "POST") {
+          const body = await readJsonBody(req);
+          if (!Object.hasOwn(body, "deviceId") || typeof body.deviceId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(body.deviceId) || Object.keys(body).length !== 1) {
+            throw new RequestBodyError(400, "deviceId is required");
+          }
+          const account = await sql`SELECT payload FROM app_data WHERE user_id = ${user.id}`;
+          const target = registeredDeviceById(account[0]?.payload, body.deviceId);
+          if (!target) return jsonResponse({ error: "Registered device not found" }, 404, origin);
+          const secret = `dp_${randomBase64url(32)}`;
+          const id = `dpt_${randomBase64url(12)}`;
+          await sql`
+            INSERT INTO device_reporting_tokens (id, owner_user_id, workspace_id, device_id, token_hash)
+            VALUES (${id}, ${user.id}, ${target.workspaceId}, ${body.deviceId}, ${await sha256Hex(secret)})
+          `;
+          return jsonResponse({ token: secret, tokenId: id, deviceId: body.deviceId }, 201, origin);
+        }
+        return jsonResponse({ error: "Method not allowed" }, 405, origin);
+      }
+
+      const revokeReportingTokenMatch = path.match(/^\/device-reporting\/tokens\/(dpt_[A-Za-z0-9_-]+)$/);
+      if (revokeReportingTokenMatch && req.method === "DELETE") {
+        const rows = await sql`
+          UPDATE device_reporting_tokens SET revoked_at = COALESCE(revoked_at, NOW())
+          WHERE id = ${revokeReportingTokenMatch[1]} AND owner_user_id = ${user.id}
           RETURNING id
         `;
         if (!rows[0]) return jsonResponse({ error: "Not found" }, 404, origin);
@@ -617,6 +831,8 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         await sql`
           WITH deleted_registration_tokens AS (
             DELETE FROM device_registration_tokens WHERE owner_user_id = ${user.id}
+          ), deleted_reporting_tokens AS (
+            DELETE FROM device_reporting_tokens WHERE owner_user_id = ${user.id}
           ), deleted_app_data AS (
             DELETE FROM app_data WHERE user_id = ${user.id}
           ), deleted_profiles AS (
@@ -649,6 +865,8 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
         await sql`
           WITH deleted_registration_tokens AS (
             DELETE FROM device_registration_tokens WHERE owner_user_id = ${targetId}
+          ), deleted_reporting_tokens AS (
+            DELETE FROM device_reporting_tokens WHERE owner_user_id = ${targetId}
           ), deleted_app_data AS (
             DELETE FROM app_data WHERE user_id = ${targetId}
           ), deleted_profiles AS (

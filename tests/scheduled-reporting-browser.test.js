@@ -1,0 +1,114 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const http = require('node:http');
+const path = require('node:path');
+const { chromium } = require('playwright');
+const root = path.resolve(__dirname, '..');
+const server = http.createServer((req, res) => {
+  const name = new URL(req.url, 'http://local').pathname.slice(1) || 'app.html';
+  if (name === 'config.js') return res.writeHead(200, {'Content-Type':'application/javascript'}).end('');
+  const file = path.resolve(root, name);
+  if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return res.writeHead(404).end();
+  res.setHeader('Content-Type', file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html');
+  res.end(fs.readFileSync(file));
+});
+(async () => {
+ await new Promise(resolve => server.listen(0,'127.0.0.1',resolve)); let browser;
+ try {
+  browser=await chromium.launch({executablePath:'/usr/bin/google-chrome',headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage({serviceWorkers:'block'}); page.setDefaultTimeout(3000);
+  let revoked=false; let posted; let fail=false; let creates=0; let dialogs=0;
+  page.on('dialog', async dialog => { dialogs++; await dialog.dismiss(); });
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+  await page.route('**/device-registration/tokens**', async route => {
+   const req=route.request(); let body;
+   if(req.method()==='POST') { posted=req.postDataJSON(); creates++; body=fail?{error:'Synthetic creation failure'}:{token:posted.automaticReporting?'dc_TEST_ONLY':'dr_TEST_ONLY'}; }
+   else if(req.method()==='DELETE'){revoked=true;body={ok:true};}
+   else body={tokens:[{id:'drt_test',label:'Office',workspace_id:'main',revoked_at:revoked?'2026-01-01T00:00:00Z':null}]};
+   await route.fulfill({status:fail&&req.method()==='POST'?500:200,contentType:'application/json',body:JSON.stringify(body)});
+  });
+  await page.route('**/device-reporting/tokens**', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tokens:[]})}));
+  await page.goto(`http://127.0.0.1:${server.address().port}/app.html`);
+  await page.evaluate(async () => {document.getElementById('authSignInModal')?.remove(); window.ELISTLY_API_URL='https://api.example.test'; App.data.currentWorkspaceId='main'; App.data.workspaces={main:{name:'Office'}}; await App.showDeviceRegistrationModal();});
+  const modal=page.locator('#deviceRegistrationModal');
+  assert.match(await modal.textContent(),/Windows device collector/);
+  assert.equal(await page.getByLabel('Keep updated automatically',{exact:true}).isChecked(),false);
+  assert.equal(await page.locator('#collectorSchedule').isVisible(),false);
+  await page.getByLabel('Collector name').fill('Office PCs');
+  const downloadPromise=page.waitForEvent('download');
+  await modal.getByRole('button',{name:'Save and download',exact:true}).click();
+  const download=await downloadPromise;
+  assert.equal(download.suggestedFilename(),'Collect-ElistlyDevice.ps1');
+  assert.deepEqual(posted,{workspaceId:'main',label:'Office PCs',expiresAt:null,automaticReporting:false});
+  const script=fs.readFileSync(await download.path(),'utf8');
+  assert.match(script,/dr_TEST_ONLY/); assert.doesNotMatch(script,/ScheduledTask/);
+  assert.doesNotMatch(await page.locator('body').textContent(),/dr_TEST_ONLY/);
+  await page.getByLabel('Keep updated automatically',{exact:true}).check();
+  assert.equal(await page.locator('#collectorSchedule').isVisible(),true);
+  await page.getByLabel('Day of week').selectOption('Friday');
+  await page.getByLabel('Time on the Windows computer').fill('14:30');
+  await page.getByLabel('Also after sign-in').uncheck();
+  const automaticDownload=page.waitForEvent('download');
+  await modal.getByRole('button',{name:'Save and download',exact:true}).click();
+  const combined=fs.readFileSync(await (await automaticDownload).path(),'utf8');
+  assert.equal(posted.automaticReporting,true);
+  assert.match(combined,/dc_TEST_ONLY/); assert.match(combined,/-DaysOfWeek Friday -At '14:30'/);
+  assert.match(combined,/device-registration\/register/); assert.match(combined,/Register-ScheduledTask/);
+  assert.doesNotMatch(combined,/New-ScheduledTaskTrigger -AtLogOn/);
+  assert.doesNotMatch(await page.locator('body').textContent(),/dc_TEST_ONLY/);
+  await page.getByLabel('Optional expiry',{exact:false}).fill('2020-01-01T00:00');
+  await modal.getByRole('button',{name:'Save and download',exact:true}).click();
+  assert.match(await modal.textContent(),/future expiry/); assert.equal(creates,2);
+  await page.getByLabel('Optional expiry',{exact:false}).fill('');
+  fail=true;
+  await modal.getByRole('button',{name:'Save and download',exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('collectorStatus').textContent.includes('Synthetic creation failure'));
+  assert.equal(await modal.getByRole('button',{name:'Save and download',exact:true}).isEnabled(),true);
+  await modal.locator('summary').click();
+  await modal.getByRole('button',{name:'Revoke',exact:true}).click();
+  assert.equal(revoked,false);
+  await page.locator('#confirmModal').getByRole('button',{name:'Cancel',exact:true}).click();
+  assert.equal(revoked,false);
+  await modal.getByRole('button',{name:'Revoke',exact:true}).click();
+  await page.locator('#confirmModal').getByRole('button',{name:'Revoke collector',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.device-registration-tokens').textContent.includes('Revoked'));
+  assert.equal(revoked,true); assert.equal(dialogs,0);
+  await page.waitForFunction(()=>!document.getElementById('confirmModal').classList.contains('show'));
+  await page.evaluate(async()=>{ await Promise.allSettled(document.getAnimations().map(a=>a.finished)); document.querySelector('#deviceRegistrationModal .modal-body').scrollTop=0; });
+  await modal.screenshot({path:'/tmp/elistly-unified-collector.png'});
+  await page.evaluate(() => App.closeModal('deviceRegistrationModal'));
+  await page.waitForFunction(()=>!document.getElementById('deviceRegistrationModal'));
+  await page.unroute('**/device-reporting/tokens**');
+  await page.route('**/device-reporting/tokens**', route => route.abort());
+  await page.evaluate(async () => { try { await App.showDeviceReportingModal(); } catch {} });
+  assert.match(await page.locator('#deviceReportingModal').textContent(),/Could not load reporting/,'network failure must be visible inside the reporting UI');
+  await page.evaluate(() => App.closeModal('deviceReportingModal'));
+  await page.waitForFunction(()=>!document.getElementById('deviceReportingModal'));
+  let reportingRevoked=false; let reportingOffline=true;
+  await page.unroute('**/device-reporting/tokens**');
+  await page.route('**/device-reporting/tokens**', async route => {
+    if(route.request().method()==='DELETE') {
+      if(reportingOffline) return route.abort();
+      reportingRevoked=true;
+    }
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tokens:[{id:'dpt_test',workspace_id:'main',device_id:'device1',revoked_at:reportingRevoked?'2026-01-01':null},{id:'dpt_other',workspace_id:'other',device_id:'OTHER-WORKSPACE'}]})});
+  });
+  await page.evaluate(async()=>{ App.data.entities={device1:{id:'device1',hostname:'TEST-PC',_elistlyRegistration:{hardwareIdentity:'synthetic'}}}; await App.showDeviceReportingModal(); });
+  assert.equal(await page.getByLabel('Registered computer').inputValue(),'device1');
+  assert.doesNotMatch(await page.locator('#deviceReportingModal').textContent(),/OTHER-WORKSPACE/,'report management must stay in the chosen workspace');
+  assert.match(await page.locator('#deviceReportingModal').textContent(),/TEST-PC — Active/);
+  await page.locator('#deviceReportingModal').getByRole('button',{name:'Revoke reporting',exact:true}).click();
+  assert.equal(reportingRevoked,false);
+  await page.locator('#confirmModal').getByRole('button',{name:'Revoke reporting',exact:true}).click();
+  await page.waitForFunction(()=>document.body.textContent.includes('Could not revoke reporting. Check your connection'));
+  reportingOffline=false;
+  await page.locator('#deviceReportingModal').getByRole('button',{name:'Revoke reporting',exact:true}).click();
+  await page.locator('#confirmModal').getByRole('button',{name:'Revoke reporting',exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('deviceReportingModal').textContent.includes('Revoked'));
+  assert.equal(reportingRevoked,true); assert.equal(dialogs,0);
+  const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
+  assert.doesNotMatch(source,/\b(?:alert|confirm|prompt)\s*\(/,'native browser dialogs are forbidden');
+  console.log('PASS unified collector: one-time and automatic downloads, schedule, secret boundary, expiry, failure, confirmed revocation and no native dialogs');
+ }finally{await browser?.close();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

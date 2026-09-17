@@ -1,8 +1,14 @@
 # Elistly roadmap
 
-Last updated: 2026-08-27
+Last updated: 2026-09-17
 
-Elistly’s next release is a trustworthy account-backed modular inventory: user-defined categories, entity types and fields remain authoritative; account data survives failure and conflict honestly; import/export is reversible enough to trust; and optional Windows Device Intake populates the normal Add Device flow without inventing schema or people.
+## Product direction: earn a hosted subscription
+
+Build a trustworthy service worth paying for before adding billing. Elistly remains open source and self-hostable. A useful free hosted tier and paid tiers should compete on dependable operation, scale, collaboration, useful history and automation—not restricted source, lock-in, or withheld basic security. Pricing and tier limits remain undecided.
+
+Delivery order: protect the first installed reporting device; establish verified security boundaries; prove operational reliability (including restoration and export); deliver recurring hosted value; then introduce subscriptions. Security disclosures must accurately explain protections and limitations, not substitute disclaimers for engineering.
+
+Elistly is being built into a trustworthy managed inventory service that is worth paying for while remaining open source and self-hostable. The hosted service must earn payment through reliability, security, useful automation and reduced operational effort—not lock-in or weakened free/self-hosted editions. User-defined categories, entity types and fields remain authoritative; account data survives failure and conflict honestly; import/export stays reversible enough to trust; and optional Windows Device Intake populates the normal Add Device flow without inventing schema or people.
 
 This roadmap names product outcomes. Design notes and historical plans are constraints and evidence, not parallel work queues.
 
@@ -32,6 +38,27 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Checksummed Windows collector candidate with disclosed local-only behavior.
 - Integrated selected-item deletion requires exact-count confirmation and uses the existing revision/outbox save path once. The `/` / `Ctrl+K` / `Cmd+K` search-focus shortcut remains outside editable controls and retains accessible key metadata.
 - The built-in entity-type catalog is materialized for every workspace and remains visible in management while default-disabled. Presets enable catalog entries explicitly; they do not control whether entries exist or can be discovered.
+
+## Current priorities — authorized 2026-09-17
+
+### Now: protect the first real scheduled-reporting installation
+
+David intends to complete the first managed computer and install scheduled device reporting on 2026-09-17. Treat the deployed installer, task identity, per-device credential, report endpoint and accepted payload as a compatibility boundary until that physical acceptance result is recorded. Verify and document the current contract before changing it. Subsequent releases must keep an installed task working or provide a deliberately tested upgrade/migration path; never silently strand an out-of-hand computer. Do not alter the reporting protocol, task schedule, credential format or device identity while this acceptance is in flight unless a proven security/correctness defect requires it. Actual Windows execution is David's acceptance step, not something Linux tests can establish.
+
+### Next: managed-service trust and security
+
+Security and operational trust are baseline service qualities, not paid-tier restrictions. Continue bounded work that does not disrupt the reporting acceptance:
+
+- Verify current Neon Auth support for passkeys with user verification and/or MFA against authoritative documentation and an isolated test environment. Define strong enrollment, recovery and factor-removal behavior; never deploy an untested authentication cutover or lock David out.
+- Review and harden token validation, expiry, issuer/audience rules, session revocation and sensitive-action reauthentication. Prove cross-account denial rather than trusting happy-path tests.
+- Review stored-XSS/browser policy protection, local inventory/outbox retention, logout cleanup and shared-device exposure without discarding unsynced changes.
+- Verify production database permissions, provider storage/backup protection, administrative account protections and hosting/data-processing facts where authorized access exists. Mark inaccessible evidence as unknown, not secure.
+- Review per-device versus enrollment credential boundaries, rate/body limits, logging without secrets, recovery and audit needs. Do not broaden registration-only credentials.
+- Deliver verified fixes for bounded defects and a concise remaining-risk/decision list. No claims of zero risk; no backward-compatibility branches. Preserve dirty work and real records; no destructive tests on production.
+
+Neon Managed Auth currently does not provide the required MFA capability, and no imitation second-factor flow is authorized. A provider migration or self-hosted authentication design needs explicit review before implementation. The current database connection also cannot prove tenant isolation with RLS because the shared runtime role can forge application-supplied identity; choose a trusted identity boundary before any RLS migration.
+
+This is an active roadmap outcome, not a reminder-only item. Use the existing portfolio coordinator for continuation rather than restoring obsolete Elistly workers. Major provider/migration decisions or required account-owner actions are escalations; lack of native Windows access does not block independent documentation, compatibility, testing or security work.
 
 ## Remaining release work
 
@@ -94,6 +121,23 @@ Release approval was given on 2026-09-01. Commit `2a5616e` is published to produ
 - Four browser regressions reproduced active-node injection before the fix and passed afterward. The security runner runs all scenarios by default, including import/reload/click, editor/export, settings, local QR and import persistence coverage.
 - The application bundle and service-worker shell versions were advanced and published. Production `app.html` requests bundle version 27; deployed `app.js` and `sw.js` match the accepted source byte-for-byte.
 - Native Windows collector acceptance remains the previously disclosed external hardware gate; no additional feature work is authorized by that wait.
+
+## Managed Windows registration deployment (source complete; not deployed)
+
+- A workspace-bound registration secret now has no automatic expiry by default so managed deployment media does not silently stop working. An operator can instead choose a future expiry and can always revoke the secret manually.
+- The `dr_` registration boundary remains additive and device-only: it can create a Computer from the machine that runs the script, but cannot read inventory, edit existing records, access account/admin routes or infer a Person assignment.
+- The UI lists permanent, scheduled, expired and revoked registrations truthfully and uses the shared responsive modal behavior.
+- Source/browser and Worker coverage passes for permanent and explicitly expiring registrations. Production requires the nullable-expiry schema migration, Worker and Pages changes to be deployed together under the existing release authorization process.
+- Native Windows execution remains the disclosed external hardware gate. It does not block this source result and is not represented as verified.
+
+## Unified Windows device collector (local source verified; not deployed)
+
+- Settings → **Windows device collector → Create** now has one form and one **Save and download** action. The current workspace and optional collector name are explicit. **Keep updated automatically** defaults off: unchecked registers once; checked registers and installs reporting with weekly day/time and optional sign-in settings.
+- Validation, download status, failures and destructive confirmations use product UI. The native prompt and the separate new-installation download path were removed. Browser/source regressions prohibit native JavaScript alert/confirm/prompt calls.
+- Automatic enrollment explicitly creates `dc_` secrets; existing `dr_` credentials remain registration-only. An atomic registration write returns a device-bound `dp_` credential. The report endpoint, payload, task identity and existing deployed credentials remain compatible. Existing tasks are refused before enrollment and are not modified.
+- Reporting management stays in the selected workspace, identifies known computers by name, shows network failures and requires confirmation before revocation. Collector revocation does not silently revoke installed reporting.
+- Verified locally: browser downloads for both modes, schedule selection, validation/error/revocation flows; installer/report source checks and PowerShell parsing; synthetic collector execution; isolated PostgreSQL new/existing registration, credential scoping, revocation and revision-conflict tests; all 24 root JavaScript test files and full Worker suite (33 tests). Full gate details and RED/GREEN evidence are in `.hermes/windows-collector-unified-status.md`.
+- **Not verified:** real Windows CIM/ACL/Task Scheduler installation, delivery and removal. No deployment or production-data writes occurred. Source completion does not imply physical acceptance. See [collector instructions](docs/windows-device-collector.md); the earlier deployed installation contract remains in [the handoff](docs/windows-device-reporting-handoff.md).
 
 ## Triggered work, not background work
 

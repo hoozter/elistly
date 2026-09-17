@@ -4,7 +4,13 @@
 #   NEON_DATABASE_URL
 #   NEON_AUTH_URL
 #   NEON_AUTH_JWKS_URL
+#   NEON_AUTH_JWT_ISSUER
+#   NEON_AUTH_JWT_AUDIENCE
 #   ELISTLY_ADMIN_EMAILS
+#
+# NEON_AUTH_JWT_ISSUER and NEON_AUTH_JWT_AUDIENCE must be the exact `iss` and
+# `aud` claims from a known-good current Neon Auth access token. Store them as
+# encrypted secrets so each environment's auth binding stays explicit.
 #
 # Required non-secret Worker variable:
 #   ELISTLY_ALLOWED_ORIGINS (comma-separated exact frontend HTTP(S) origins)

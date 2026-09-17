@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NOTES_FILE="$ROOT_DIR/neon/neon-stuff.txt"
+NOTES_FILE="${ELISTLY_NEON_NOTES_FILE:-$HOME/.local/share/elistly-private/neon/neon-stuff.txt}"
 WORKER_DIR="$ROOT_DIR/worker"
 
 if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
@@ -23,9 +23,15 @@ NEON_AUTH_URL="${NEON_AUTH_URL:-$(read_next_line_after "Auth URL")}"
 NEON_AUTH_JWKS_URL="${NEON_AUTH_JWKS_URL:-$(read_next_line_after "JWKS URL")}"
 NEON_DATABASE_URL="${NEON_DATABASE_URL:-$(read_next_line_after "Connection string")}"
 ELISTLY_API_URL="${ELISTLY_API_URL:-https://elistly-api.royal-poetry-e390.workers.dev}"
+NEON_AUTH_JWT_ISSUER="${NEON_AUTH_JWT_ISSUER:-}"
+NEON_AUTH_JWT_AUDIENCE="${NEON_AUTH_JWT_AUDIENCE:-}"
 
 if [[ -z "$NEON_AUTH_URL" || -z "$NEON_AUTH_JWKS_URL" || -z "$NEON_DATABASE_URL" ]]; then
   echo "Could not read Neon values from $NOTES_FILE" >&2
+  exit 1
+fi
+if [[ -z "$NEON_AUTH_JWT_ISSUER" || -z "$NEON_AUTH_JWT_AUDIENCE" ]]; then
+  echo "Set NEON_AUTH_JWT_ISSUER and NEON_AUTH_JWT_AUDIENCE from a verified, current Neon Auth JWT before deploying." >&2
   exit 1
 fi
 
@@ -76,6 +82,8 @@ echo "Setting Worker secrets..."
 put_worker_secret NEON_DATABASE_URL "$NEON_DATABASE_URL"
 put_worker_secret NEON_AUTH_URL "$NEON_AUTH_URL"
 put_worker_secret NEON_AUTH_JWKS_URL "$NEON_AUTH_JWKS_URL"
+put_worker_secret NEON_AUTH_JWT_ISSUER "$NEON_AUTH_JWT_ISSUER"
+put_worker_secret NEON_AUTH_JWT_AUDIENCE "$NEON_AUTH_JWT_AUDIENCE"
 
 if [[ -n "${ELISTLY_ADMIN_EMAILS:-}" ]]; then
   put_worker_secret ELISTLY_ADMIN_EMAILS "$ELISTLY_ADMIN_EMAILS"

@@ -52,6 +52,20 @@ describe("Elistly Worker route seams", () => {
     expect(calls[0].query).toContain("updated_at::text AS updated_at");
   });
 
+  it("creates the database client with the configured URL without request-context options", async () => {
+    const urls = [];
+    const worker = createWorker({
+      createSql: url => { urls.push(url); return mockSql(); },
+      authenticate: async () => user,
+      checkAdmin: async () => false,
+    });
+
+    const response = await fetchFrom(worker, "/app-data");
+
+    expect(response.status).toBe(200);
+    expect(urls).toEqual([env.NEON_DATABASE_URL]);
+  });
+
   it("rejects unauthenticated application data requests through the injected auth boundary", async () => {
     const worker = createWorker({
       createSql: () => mockSql(),
@@ -239,11 +253,12 @@ describe("Elistly Worker route seams", () => {
     expect(response.status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0].query).toContain("DELETE FROM device_registration_tokens");
+    expect(calls[0].query).toContain("DELETE FROM device_reporting_tokens");
     expect(calls[0].query).toContain("DELETE FROM app_data");
     expect(calls[0].query).toContain("DELETE FROM profiles");
     expect(calls[0].query).toContain("DELETE FROM admin_users");
     expect(calls[0].query).toContain('DELETE FROM neon_auth."user"');
-    expect(calls[0].values).toEqual([user.id, user.id, user.id, user.id, user.id]);
+    expect(calls[0].values).toEqual([user.id, user.id, user.id, user.id, user.id, user.id]);
   });
 
   it("forbids non-admin account deletion before SQL mutation", async () => {
@@ -258,5 +273,69 @@ describe("Elistly Worker route seams", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: "Forbidden" });
     expect(calls).toEqual([]);
+  });
+});
+
+function encodeJwtPart(value) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function signedJwt({ privateKey, kid, payload }) {
+  const header = encodeJwtPart({ alg: "EdDSA", kid, typ: "JWT" });
+  const body = encodeJwtPart(payload);
+  const signature = await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(`${header}.${body}`));
+  const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${header}.${body}.${encodedSignature}`;
+}
+
+describe("JWT claim boundary", () => {
+  it("rejects trusted-key JWTs without expiry or with wrong issuer, audience, or expiry", async () => {
+    const kid = `claims-${crypto.randomUUID()}`;
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async url => String(url) === "https://jwks.example.test/current"
+      ? new Response(JSON.stringify({ keys: [{ ...jwk, kid }] })) : originalFetch(url);
+    try {
+      const worker = createWorker({ createSql: () => mockSql(), checkAdmin: async () => false });
+      const now = Math.floor(Date.now() / 1000);
+      const rejectedPayloads = [
+        { sub: "user-1", iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "user-1", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
+        { sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: "wrong-audience" },
+        { sub: "user-1", exp: now - 1, iss: "https://auth.example.test", aud: "elistly-api" },
+      ];
+      for (const payload of rejectedPayloads) {
+        const token = await signedJwt({ privateKey: pair.privateKey, kid, payload });
+        const context = createExecutionContext();
+        const response = await worker.fetch(new Request("https://api.example.test/app-data", { headers: { Authorization: `Bearer ${token}` } }), {
+          ...env,
+          NEON_AUTH_URL: "https://auth.example.test",
+          NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
+          NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
+          NEON_AUTH_JWT_AUDIENCE: "elistly-api",
+        }, context);
+        await waitOnExecutionContext(context);
+        expect(response.status).toBe(401);
+      }
+
+      const validToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
+        sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: ["other-service", "elistly-api"],
+      } });
+      const context = createExecutionContext();
+      const accepted = await worker.fetch(new Request("https://api.example.test/app-data", { headers: { Authorization: `Bearer ${validToken}` } }), {
+        ...env,
+        NEON_AUTH_URL: "https://auth.example.test",
+        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
+        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
+        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
+      }, context);
+      await waitOnExecutionContext(context);
+      expect(accepted.status).toBe(200);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

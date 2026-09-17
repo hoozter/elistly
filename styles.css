@@ -527,6 +527,38 @@ aside a.active {
 .legal-list li:last-child { margin-bottom: 0; }
 .legal-section a { color: var(--accent-color); text-decoration: none; }
 .legal-section a:hover { text-decoration: underline; }
+.legal-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+.legal-tabs [role="tab"] {
+  appearance: none;
+  flex: 0 0 auto;
+  padding: 0.65rem 0.5rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.legal-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--accent-color);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.legal-tabs [role="tab"]:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.third-party-notices-frame {
+  display: block;
+  width: 100%;
+  height: 22rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+}
 
 /* Footer link with icon (e.g. GitHub) */
 .app-footer-github { display: inline-flex; align-items: center; gap: 0.35rem; }

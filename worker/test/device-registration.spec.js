@@ -3,7 +3,26 @@ import { describe, expect, it } from "vitest";
 import { addRegisteredDevice, createWorker, validateRegistrationFacts } from "../src/index.js";
 
 const identity = "a".repeat(64);
-const facts = { hardwareIdentity: identity, hostname: "PC-01", serialNumber: "SERIAL-1" };
+const snapshot = {
+  schemaVersion: "elistly.windows-device-registration.v1",
+  collectedAt: "2026-01-01T00:00:00.000Z",
+  device: { manufacturer: "Acme", model: "Model 1", serialNumber: "SERIAL-1", uuid: "uuid-1" },
+  windows: { edition: "Windows 11 Pro", version: "10.0.26100", build: "26100", displayRelease: "24H2", installDate: "2025-01-01T00:00:00.000Z" },
+  cpu: { model: "Example CPU", cores: 8, logicalProcessors: 16 },
+  ramBytes: 34359738368,
+  fixedDisks: [{ capacityBytes: 1000000000000, freeBytes: 500000000000 }],
+  networkAdapters: [{ name: "Ethernet", macAddress: "00-11-22-33-44-55", ipv4Addresses: ["192.168.1.10"], ipv6Addresses: ["fe80::1"] }],
+  biosVersion: "1.2.3",
+  tpm: { present: true, version: "2.0", ready: true },
+  secureBoot: true,
+  bitLockerProtectionStatus: "On",
+  battery: { designCapacityMWh: 60000, fullChargeCapacityMWh: 54000, healthPercent: 90 },
+  lastBootAt: "2026-01-01T00:00:00.000Z",
+  uptimeSeconds: 3600,
+  lastInteractiveUser: { username: null, time: null, source: "Win32_ComputerSystem.UserName", observation: "current interactive session" },
+  availability: { tpm: null, secureBoot: null, bitLocker: null, battery: null, networkAdapters: null, lastInteractiveUser: "Unavailable: no interactive user was observed." }
+};
+const facts = { hardwareIdentity: identity, hostname: "PC-01", serialNumber: "SERIAL-1", manufacturer: "Acme", model: "Model 1", windowsEdition: "Windows 11 Pro", inventorySnapshot: snapshot };
 const registrationAuthorization = token => ({ Authorization: ["Bear", "er"].join("") + ` ${token}` });
 
 function payload(owner = "default") {
@@ -28,6 +47,16 @@ async function fetchRegistration(worker, path, options = {}) {
 }
 
 describe("device registration boundary", () => {
+  it("defaults to no expiry and accepts only future explicit expiry", async () => {
+    const sql = async (strings, ...values) => strings.join(' ').includes('SELECT payload') ? [{payload: payload()}] : [];
+    const worker = createWorker({createSql: () => sql, authenticate: async () => ({id:'owner'})});
+    for (const expiry of [undefined, null, '2099-01-01T00:00:00.000Z', 'invalid', '2020-01-01T00:00:00Z']) {
+      const response = await fetchRegistration(worker, '/device-registration/tokens', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspaceId:'default',expiresAt:expiry})});
+      const valid = expiry == null || expiry.startsWith('2099');
+      expect(response.status).toBe(valid ? 201 : 400);
+      if (valid) expect((await response.json()).expiresAt).toBe(expiry ?? null);
+    }
+  });
   it("creates one explicitly marked Computer and repeated registration is idempotent", () => {
     const initial = payload();
     const first = addRegisteredDevice(initial, "default", facts);
@@ -36,6 +65,8 @@ describe("device registration boundary", () => {
     expect(second.created).toBe(false);
     expect(Object.keys(second.payload.workspaces.default.entities)).toHaveLength(1);
     expect(second.entity._elistlyRegistration.hardwareIdentity).toBe(identity);
+    expect(second.entity._elistlyRegistration.inventorySnapshot).toEqual(snapshot);
+    expect(second.payload).toEqual(first.payload);
     expect(second.entity.name).toBe("PC-01");
     expect(second.entity.assignedTo).toBeUndefined();
     expect(initial.workspaces.default.entities).toEqual({});
@@ -61,15 +92,25 @@ describe("device registration boundary", () => {
     expect(() => addRegisteredDevice(state, "default", facts)).toThrow("Computer entity type");
   });
 
+  it("accepts only the bounded allowlisted inventory snapshot", () => {
+    expect(validateRegistrationFacts(facts).inventorySnapshot.fixedDisks).toHaveLength(1);
+    expect(validateRegistrationFacts(facts).inventorySnapshot.networkAdapters).toHaveLength(1);
+    expect(() => validateRegistrationFacts({ ...facts, email: "no@example.test" })).toThrow("Unknown registration field");
+    expect(() => validateRegistrationFacts({ ...facts, inventorySnapshot: { ...snapshot, files: ["C:\\secret.txt"] } })).toThrow("Unknown inventorySnapshot field");
+    expect(() => validateRegistrationFacts({ ...facts, inventorySnapshot: { ...snapshot, fixedDisks: [{ ...snapshot.fixedDisks[0], fileList: [] }] } })).toThrow("Unknown fixedDisks item field");
+    expect(() => validateRegistrationFacts({ ...facts, inventorySnapshot: { ...snapshot, networkAdapters: [{ ...snapshot.networkAdapters[0], gateway: "192.168.1.1" }] } })).toThrow("Unknown networkAdapters item field");
+    expect(() => validateRegistrationFacts({ ...facts, inventorySnapshot: { ...snapshot, networkAdapters: Array(33).fill(snapshot.networkAdapters[0]) } })).toThrow("networkAdapters must contain at most 32 adapters");
+  });
+
   it("serves the registration HTTP path through the SQL seam and preserves a 409 manual collision", async () => {
     const initial = payload();
     const calls = [];
     const sql = async (strings, ...values) => {
       const query = strings.join(" ");
       calls.push({ query, values });
+      if (query.includes("UPDATE app_data")) { Object.assign(initial, JSON.parse(values.find(value => typeof value === "string" && value.startsWith("{")))); return [{ updated_at: "2026-01-01T00:01:00.000Z" }]; }
       if (query.includes("FROM device_registration_tokens")) return [{ id: "drt_1", owner_user_id: "owner", workspace_id: "default" }];
       if (query.includes("SELECT payload")) return [{ payload: initial, updated_at: "2026-01-01T00:00:00.000Z" }];
-      if (query.includes("UPDATE app_data")) return [{ updated_at: "2026-01-01T00:01:00.000Z" }];
       return [];
     };
     const worker = createWorker({ createSql: () => sql, authenticate: async () => null });
@@ -78,12 +119,36 @@ describe("device registration boundary", () => {
     const response = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify(facts) });
     expect(response.status).toBe(201);
     expect((await response.json()).created).toBe(true);
-    expect(calls.some(call => call.query.includes("UPDATE app_data"))).toBe(true);
+    const appDataWrites = calls.filter(call => call.query.includes("UPDATE app_data"));
+    expect(appDataWrites).toHaveLength(1);
+    const writtenPayload = JSON.parse(appDataWrites[0].values.find(value => typeof value === "string" && value.startsWith("{")));
+    expect(Object.values(writtenPayload.workspaces.default.entities)[0]._elistlyRegistration.inventorySnapshot).toEqual(snapshot);
+
+    const retry = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify({ ...facts, inventorySnapshot: { ...snapshot, collectedAt: "2026-02-01T00:00:00.000Z" } }) });
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).created).toBe(false);
+    expect(calls.filter(call => call.query.includes("UPDATE app_data"))).toHaveLength(1);
 
     initial.workspaces.default.entities.manual = { id: "manual", type: "computer", serialNumber: facts.serialNumber };
-    const collision = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify(facts) });
+    const collision = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify({ ...facts, hardwareIdentity: "b".repeat(64) }) });
     expect(collision.status).toBe(409);
     expect(await collision.json()).toEqual({ error: "A manual Computer already has this serial number" });
+  });
+
+  it("creates reporting enrollment only on explicit opt-in, keeping ordinary registration-only secrets", async () => {
+    const calls = [];
+    const sql = async (strings, ...values) => {
+      calls.push({ query: strings.join(" "), values });
+      return strings.join(" ").includes("SELECT payload") ? [{ payload: payload() }] : [];
+    };
+    const worker = createWorker({ createSql: () => sql, authenticate: async () => ({ id: "owner" }) });
+    for (const automaticReporting of [false, true]) {
+      const response = await fetchRegistration(worker, "/device-registration/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId: "default", automaticReporting }) });
+      expect(response.status).toBe(201);
+      expect((await response.json()).token).toMatch(automaticReporting ? /^dc_/ : /^dr_/);
+    }
+    const invalid = await fetchRegistration(worker, "/device-registration/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspaceId: "default", automaticReporting: "true" }) });
+    expect(invalid.status).toBe(400);
   });
 
   it("does not treat a registration token as an account session token", async () => {

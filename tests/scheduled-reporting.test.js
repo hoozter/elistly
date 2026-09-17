@@ -1,0 +1,54 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('app.js', 'utf8');
+const start = source.indexOf('      buildDeviceReportingInstaller(');
+assert.ok(start > 0, 'scheduled reporting installer builder exists');
+const end = source.indexOf('      renderDeviceRegistrationTokens(', start);
+const methods = source.slice(start, end);
+const app = vm.runInNewContext('({' + methods + '})', { btoa: s => Buffer.from(s,'binary').toString('base64'), TextEncoder, encodeURIComponent, unescape });
+assert.throws(
+  () => app.buildDeviceReportingInstaller('http://api.example.test', 'dp_SYNTHETIC'),
+  /HTTPS/i
+);
+const installer = app.buildDeviceReportingInstaller('https://api.example.test', 'dp_SYNTHETIC');
+assert.match(installer, /Register-ScheduledTask/);
+assert.match(installer, /-Weekly/);
+assert.match(installer, /-AtLogOn/);
+assert.match(installer, /-StartWhenAvailable/);
+assert.match(installer, /-MultipleInstances IgnoreNew/);
+assert.match(installer, /Unregister-ScheduledTask/);
+assert.match(installer, /Start-ScheduledTask/);
+assert.match(installer, /SetAccessRuleProtection/);
+assert.doesNotMatch(installer, /ExecutionPolicy|Bypass|DownloadString|iex\b/i);
+const report = app.buildDeviceRegistrationScript('https://api.example.test', 'dp_SYNTHETIC', true);
+assert.match(report, /device-reporting\/report/);
+assert.doesNotMatch(report, /device-registration\/register/);
+assert.match(report, /TimeoutSec 45/);
+assert.match(report, /last-result.json/);
+fs.writeFileSync('/tmp/elistly-install-reporting-test.ps1', installer);
+fs.writeFileSync('/tmp/elistly-reporting-test.ps1', report);
+console.log('PASS scheduled reporting installer and report generation');
+
+const combined = app.buildDeviceCollectorScript('https://api.example.test', 'dc_SYNTHETIC', { automaticReporting: true, day: 'Friday', time: '14:30', atLogon: false });
+assert.match(combined, /device-registration\/register/);
+assert.match(combined, /device-reporting\/report/);
+assert.match(combined, /reportingToken/);
+assert.match(combined, /-DaysOfWeek Friday -At '14:30'/);
+assert.doesNotMatch(combined, /New-ScheduledTaskTrigger -AtLogOn/);
+assert.ok(combined.indexOf('reporting is already installed') < combined.indexOf('device-registration/register'), 'refuse replacement before registration or credential issuance');
+assert.ok(combined.indexOf('device-registration/register') < combined.indexOf('Register-ScheduledTask -TaskName'), 'register before scheduling');
+const oneTime = app.buildDeviceCollectorScript('https://api.example.test', 'dr_SYNTHETIC', { automaticReporting: false });
+assert.match(oneTime, /device-registration\/register/);
+assert.doesNotMatch(oneTime, /ScheduledTask|device-reporting|ProgramData/);
+assert.throws(() => app.buildDeviceCollectorScript('https://api.example.test', 'dc_SYNTHETIC', {automaticReporting:true, day:"Friday'; evil", time:'09:00'}), /schedule/i);
+fs.writeFileSync('/tmp/elistly-combined-collector-test.ps1', combined);
+console.log('PASS combined collector selects one-time or register-and-schedule with validated schedule');
+assert.throws(() => app.buildDeviceCollectorScript('https://api.example.test', 'dc_SYNTHETIC', {automaticReporting:true, time:''}), /schedule/i, 'an empty chosen time must not silently become 09:00');
+const installedReport = combined.split("$reportScript = @'\n")[1].split("\n'@")[0];
+assert.doesNotMatch(installedReport, /dc_SYNTHETIC|device-registration\/register/);
+assert.match(installedReport, /__ELISTLY_DEVICE_TOKEN__/);
+const removalScript = combined.split("'Remove-ElistlyReporting.ps1'), @'\n")[1].split("\n'@")[0];
+assert.doesNotMatch(removalScript, /dc_SYNTHETIC|dp_SYNTHETIC|device-registration|device-reporting/);
+fs.writeFileSync('/tmp/elistly-registration-enrollment-test.ps1', app.buildDeviceRegistrationScript('https://api.example.test', 'dc_SYNTHETIC', false, true));
+assert.match(combined, /Delete this downloaded installer after installation: it contains a workspace enrollment secret\./, 'combined download disclosure must describe its wider enrollment scope');

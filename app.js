@@ -159,6 +159,55 @@ const Storage = {
     return `${this.USER_OUTBOX_PREFIX}${userId}`;
   },
 
+  _getDurableAccountKeys() {
+    try {
+      const keys = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key === this.KEY || key.startsWith(this.USER_CACHE_PREFIX) || key.startsWith(this.USER_UPDATED_PREFIX) || key.startsWith(this.USER_OUTBOX_PREFIX)) keys.push(key);
+      }
+      return keys;
+    } catch (error) {
+      throw new Error('Local account data could not be checked. Sign out was not completed.');
+    }
+  },
+
+  _removeDurableKey(key) {
+    localStorage.removeItem(key);
+  },
+
+  async prepareForSignOut() {
+    const keys = this._getDurableAccountKeys();
+    for (const key of keys.filter(key => key.startsWith(this.USER_OUTBOX_PREFIX))) {
+      let outbox;
+      try {
+        outbox = JSON.parse(localStorage.getItem(key));
+      } catch (_) {
+        throw new Error('Local pending changes could not be verified. Sign out was not completed.');
+      }
+      if (!Array.isArray(outbox)) throw new Error('Local pending changes could not be verified. Sign out was not completed.');
+      if (outbox.length) throw new Error('Unsynced changes are still stored on this browser. Sync or resolve them before signing out.');
+    }
+
+    const snapshots = [];
+    try {
+      for (const key of keys) snapshots.push([key, localStorage.getItem(key)]);
+      for (const [key] of snapshots) this._removeDurableKey(key);
+      if (keys.some(key => localStorage.getItem(key) !== null)) throw new Error('Local persistence verification failed.');
+    } catch (_) {
+      for (const [key, value] of snapshots) {
+        try { if (value !== null) localStorage.setItem(key, value); } catch (_) {}
+      }
+      throw new Error('Local account data could not be cleared. Sign out was not completed.');
+    }
+
+    this._cached = null;
+    this._cachedUserId = null;
+    this._isDirty = false;
+    this._saveChains = {};
+    this._setSyncStatus('idle', '');
+  },
+
   _readOutbox(userId) {
     try {
       const raw = localStorage.getItem(this._getUserOutboxKey(userId));
@@ -226,23 +275,9 @@ const Storage = {
     try {
       localStorage.setItem(this._getUserCacheKey(userId), JSON.stringify(payload || {}));
       if (updatedAt) localStorage.setItem(this._getUserUpdatedKey(userId), String(updatedAt));
-      localStorage.setItem(this.KEY, JSON.stringify(payload || {}));
     } catch (e) {
       console.error('Storage._writeUserCache failed', e);
     }
-  },
-
-  _migrateLegacyCache(userId) {
-    const existingUserCache = this._readUserCache(userId);
-    if (existingUserCache) return;
-    try {
-      const raw = localStorage.getItem(this.KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (data && typeof data === 'object') {
-        this._writeUserCache(userId, data, '');
-      }
-    } catch (_) {}
   },
 
   async getImportIdentity() {
@@ -283,7 +318,6 @@ const Storage = {
           throw error;
         }
 
-        this._migrateLegacyCache(user.id);
         const outbox = this._readOutbox(user.id);
         if (outbox.length) {
           const pending = outbox[outbox.length - 1].payload;
@@ -430,7 +464,7 @@ const Storage = {
         this._cachedUserId = identity.userId;
         this._writeUserCache(identity.userId, data, updatedAt);
         const serialized = JSON.stringify(data);
-        if (localStorage.getItem(this.KEY) !== serialized || localStorage.getItem(this._getUserCacheKey(identity.userId)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(identity.userId)) !== String(updatedAt)) {
+        if (localStorage.getItem(this._getUserCacheKey(identity.userId)) !== serialized || localStorage.getItem(this._getUserUpdatedKey(identity.userId)) !== String(updatedAt)) {
           throw new Error('Account cache persistence verification failed.');
         }
       } catch (cacheError) {
@@ -448,6 +482,7 @@ const Storage = {
 
   getOnboardingDone() {
     if (this._cached && 'onboardingDone' in this._cached) return !!this._cached.onboardingDone;
+    if (backendClient) return false;
     try {
       const raw = localStorage.getItem(this.KEY);
       const data = raw ? JSON.parse(raw) : null;
@@ -1145,10 +1180,21 @@ const App = {
         if (!backendClient) return;
         this.closeProfileDropdown();
         this.closeModal('settingsModal');
-        await backendClient.auth.signOut();
-        Storage._cached = null;
-        Storage._cachedUserId = null;
+        try {
+          await Storage.prepareForSignOut();
+        } catch (error) {
+          this.showNotification(error.message || 'Local account data could not be cleared. Sign out was not completed.', 'error');
+          return false;
+        }
+        try {
+          const result = await backendClient.auth.signOut();
+          if (result && result.error) throw result.error;
+        } catch (error) {
+          this.showNotification('Sign out did not complete. Local account data was cleared; reload or try again before sharing this browser.', 'error');
+          return false;
+        }
         window.location.reload();
+        return true;
       },
 
       setupEventListeners() {
@@ -2459,39 +2505,241 @@ const App = {
         const workspaceId = this.data.currentWorkspaceId;
         if (!workspaceId) return this.showNotification('Choose a workspace first.', 'error');
         const modal = document.createElement('div');
-        modal.className = 'modal-overlay';
-        const card = document.createElement('div'); card.className = 'modal';
-        const heading = document.createElement('h3'); heading.textContent = 'Windows device registration';
-        const note = document.createElement('p'); note.textContent = `Create a script for “${this.getCurrentWorkspaceName()}”, then run it on the target computer. Active and revoked scripts remain listed here.`;
-        const tokens = document.createElement('div'); tokens.className = 'device-registration-tokens'; tokens.setAttribute('aria-live', 'polite');
-        const create = document.createElement('button'); create.className = 'btn btn-primary'; create.type = 'button'; create.textContent = 'Create 24-hour registration script';
-        const close = document.createElement('button'); close.className = 'btn btn-secondary'; close.type = 'button'; close.textContent = 'Done'; close.onclick = () => modal.remove();
+        modal.id = 'deviceRegistrationModal'; modal.className = 'modal';
+        modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); modal.setAttribute('aria-labelledby', 'deviceRegistrationTitle');
+        modal.innerHTML = `<div class="modal-content">
+          <div class="modal-header"><h3 id="deviceRegistrationTitle">Windows device collector</h3></div>
+          <div class="modal-body">
+            <p id="collectorWorkspace"></p>
+            <p>Download one PowerShell script and run it on the Windows computer. It collects hardware and Windows facts and registers the computer. Existing manual records and person assignments are preserved.</p>
+            <div class="form-group"><label for="collectorName">Collector name (optional)</label><input id="collectorName" type="text" maxlength="100"><p class="help-text">A name for this download, such as Office PCs. The computer is named from its Windows hostname.</p></div>
+            <div class="form-group"><label for="collectorAutomatic"><input id="collectorAutomatic" type="checkbox"> Keep updated automatically</label>
+              <p class="help-text">Unchecked: collect and register once, without installing anything. Checked: register and install reporting on this computer; run the script in administrator PowerShell. Reports update collected facts, not your manual fields. No remote code updates.</p></div>
+            <fieldset id="collectorSchedule" hidden><legend>Reporting schedule</legend>
+              <div class="form-group"><label for="collectorDay">Day of week</label><select id="collectorDay">${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => `<option>${day}</option>`).join('')}</select></div>
+              <div class="form-group"><label for="collectorTime">Time on the Windows computer</label><input id="collectorTime" type="time" value="09:00"></div>
+              <label for="collectorLogon"><input id="collectorLogon" type="checkbox" checked> Also after sign-in</label>
+              <p class="help-text">Runs immediately after installation, then weekly at the local time above. Missed runs catch up. Existing installed tasks are never replaced by this script.</p>
+            </fieldset>
+            <div class="form-group"><label for="registrationExpiry">Optional expiry (local time) — leave blank for no expiry</label><input id="registrationExpiry" type="datetime-local"></div>
+            <p class="help-text">The download contains a private workspace enrollment secret, available only in this download. Store it securely and delete it from the target after use. Expiry or revocation stops future registrations; it does not stop already installed reporting. Revoke reporting separately below.</p>
+            <p id="collectorStatus" role="status" aria-live="polite"></p>
+            <details><summary>Created collectors and reporting</summary><div class="device-registration-tokens" aria-live="polite"></div><button type="button" class="btn btn-secondary" id="manageDeviceReporting">Manage installed reporting</button></details>
+          </div>
+          <div class="modal-actions"><button type="button" class="btn btn-primary" id="saveCollector">Save and download</button><button type="button" class="btn btn-secondary" id="closeCollector">Done</button></div>
+        </div>`;
+        modal.querySelector('#collectorWorkspace').textContent = `Workspace: ${this.getCurrentWorkspaceName()}. To use another workspace, close this form and switch workspace first.`;
+        const status = modal.querySelector('#collectorStatus');
+        const tokens = modal.querySelector('.device-registration-tokens');
+        const automatic = modal.querySelector('#collectorAutomatic');
+        automatic.onchange = () => { modal.querySelector('#collectorSchedule').hidden = !automatic.checked; };
         const refresh = async () => {
-          tokens.replaceChildren(document.createTextNode('Loading scripts…'));
-          const result = await apiRequest('/device-registration/tokens');
-          if (!result.ok) return tokens.replaceChildren(Object.assign(document.createElement('p'), { className: 'error-message', textContent: result.data.error || 'Could not load registration scripts.' }));
-          this.renderDeviceRegistrationTokens(tokens, result.data.tokens || [], refresh);
+          tokens.textContent = 'Loading collectors…';
+          try {
+            const result = await apiRequest('/device-registration/tokens');
+            if (!result.ok) { tokens.textContent = result.data.error || 'Could not load collectors.'; return; }
+            this.renderDeviceRegistrationTokens(tokens, (result.data.tokens || []).filter(record => record.workspace_id === workspaceId), refresh);
+          } catch { tokens.textContent = 'Could not load collectors. Close and reopen to retry.'; }
         };
+        const create = modal.querySelector('#saveCollector');
         create.onclick = async () => {
-          const label = window.prompt(`Optional label for the script for “${this.getCurrentWorkspaceName()}”:`, '');
-          if (label === null) return;
-          const result = await apiRequest('/device-registration/tokens', { method: 'POST', body: { workspaceId, label } });
-          if (!result.ok) return this.showNotification(result.data.error || 'Could not create registration script.', 'error');
-          const script = this.buildDeviceRegistrationScript(getApiUrl().replace(/\/$/, ''), result.data.token);
-          const blob = new Blob([script], { type: 'text/plain;charset=utf-8' });
-          const download = document.createElement('a');
-          download.href = URL.createObjectURL(blob); download.download = 'Register-ElistlyDevice.ps1'; download.click();
-          setTimeout(() => URL.revokeObjectURL(download.href), 0);
-          const secret = document.createElement('code'); secret.className = 'registration-token'; secret.textContent = result.data.token;
-          tokens.replaceChildren(Object.assign(document.createElement('p'), { textContent: `Script downloaded. This token is shown once and expires ${new Date(result.data.expiresAt).toLocaleString()}.` }), secret);
-          await refresh();
+          const expiry = modal.querySelector('#registrationExpiry').value;
+          if (expiry && (!Number.isFinite(new Date(expiry).getTime()) || new Date(expiry) <= new Date())) { status.textContent = 'Choose a future expiry time or leave it blank.'; return; }
+          const options = { automaticReporting: automatic.checked, day: modal.querySelector('#collectorDay').value, time: modal.querySelector('#collectorTime').value, atLogon: modal.querySelector('#collectorLogon').checked };
+          create.disabled = true;
+          status.textContent = 'Creating collector…';
+          let issued = false;
+          try {
+            const apiUrl = getApiUrl().replace(/\/$/, '');
+            // Validate configuration before issuing a secret.
+            this.buildDeviceCollectorScript(apiUrl, '', options);
+            const result = await apiRequest('/device-registration/tokens', { method: 'POST', body: { workspaceId, label: modal.querySelector('#collectorName').value.trim(), expiresAt: expiry ? new Date(expiry).toISOString() : null, automaticReporting: options.automaticReporting } });
+            if (!result.ok) { status.textContent = result.data.error || 'Could not create collector. Try again.'; return; }
+            issued = true;
+            const script = this.buildDeviceCollectorScript(apiUrl, result.data.token, options);
+            const url = URL.createObjectURL(new Blob(['\ufeff', script], { type: 'text/plain;charset=utf-8' }));
+            const download = document.createElement('a'); download.href = url; download.download = 'Collect-ElistlyDevice.ps1'; download.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            status.textContent = options.automaticReporting
+              ? 'Collector saved and download started. Run in administrator PowerShell to register and install reporting. No computer has been changed yet. Delete the download from the target after use.'
+              : 'Collector saved and download started. Run in PowerShell to collect and register once. Nothing will be installed. No computer has been changed yet.';
+            await refresh();
+          } catch (error) {
+            status.textContent = issued ? 'Collector was created, but the download could not be started. Revoke it below and create another download.' : (error.message || 'Could not create collector. Try again.');
+            if (issued) await refresh();
+          } finally { create.disabled = false; }
         };
-        card.append(heading, note, create, tokens, close); modal.appendChild(card); document.body.appendChild(modal); await refresh();
+        modal.querySelector('#closeCollector').onclick = () => this.closeModal(modal.id);
+        modal.querySelector('#manageDeviceReporting').onclick = () => { this.closeModal(modal.id); this.showDeviceReportingModal(); };
+        document.body.appendChild(modal); this.showModal(modal.id); await refresh();
       },
 
-      buildDeviceRegistrationScript(apiUrl, token) {
+      async showDeviceReportingModal() {
+        const workspaceId = this.data.currentWorkspaceId;
+        const modal = document.createElement('div'); modal.id = 'deviceReportingModal'; modal.className = 'modal';
+        modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); modal.setAttribute('aria-labelledby', 'deviceReportingTitle');
+        const card = document.createElement('div'); card.className = 'modal-content';
+        const header = document.createElement('div'); header.className = 'modal-header';
+        const heading = document.createElement('h3'); heading.id = 'deviceReportingTitle'; heading.textContent = 'Installed Windows reporting'; header.append(heading);
+        const body = document.createElement('div'); body.className = 'modal-body';
+        const note = document.createElement('p'); note.textContent = 'Inspect registered computers and revoke reporting access here. Refresh the app after a report to see new facts. Revoking access stops future reports but does not remove the Windows task or delete inventory. On the computer, run the installed Remove-ElistlyReporting.ps1 to remove its task and local credential.';
+        const label = document.createElement('label'); label.textContent = 'Registered computer'; label.htmlFor = 'reportingDevice';
+        const select = document.createElement('select'); select.id = 'reportingDevice';
+        const devices = Object.values(this.data.entities || {}).filter(e => e._elistlyRegistration?.hardwareIdentity);
+        devices.forEach(e => { const option = document.createElement('option'); option.value = e.id; option.textContent = e.hostname || e.name || e.serialNumber || e.id; select.append(option); });
+        const snapshot = document.createElement('pre'); snapshot.style.whiteSpace = 'pre-wrap'; snapshot.style.overflowWrap = 'anywhere';
+        const showSnapshot = () => { const e = this.data.entities[select.value]; snapshot.textContent = e ? JSON.stringify(e._elistlyRegistration, null, 2) : 'No registered computer in this workspace yet. Register it and refresh the app.'; };
+        select.onchange = showSnapshot; showSnapshot();
+        const details = document.createElement('details'); details.append(Object.assign(document.createElement('summary'), { textContent: 'Last collected facts (refresh app after a report)' }), snapshot);
+        const records = document.createElement('div'); records.setAttribute('aria-live', 'polite');
+        const refresh = async () => {
+          let result;
+          try { result = await apiRequest('/device-reporting/tokens'); }
+          catch { records.textContent = 'Could not load reporting credentials. Close and reopen to retry.'; return; }
+          records.replaceChildren();
+          if (!result.ok) { records.textContent = result.data.error || 'Could not load reporting credentials.'; return; }
+          const reportingRecords = (result.data.tokens || []).filter(record => record.workspace_id === workspaceId);
+          if (!reportingRecords.length) records.textContent = 'No reporting credentials in this workspace yet.';
+          for (const record of reportingRecords) {
+            const row = document.createElement('p');
+            const device = this.data.entities[record.device_id];
+            row.textContent = `${device?.hostname || device?.name || record.device_id} — ${record.revoked_at ? 'Revoked' : 'Active'}${record.last_used_at ? `; last report ${new Date(record.last_used_at).toLocaleString()}` : '; not used yet'} `;
+            if (!record.revoked_at) { const revoke = document.createElement('button'); revoke.type = 'button'; revoke.className = 'btn btn-danger btn-sm'; revoke.textContent = 'Revoke reporting'; revoke.onclick = () => this.showConfirmModal({ title: 'Revoke reporting?', message: 'This stops future reports from this credential. The Windows task and inventory remain. Other reporting credentials are unchanged.', confirmLabel: 'Revoke reporting', onConfirm: async () => {
+              try {
+                const response = await apiRequest(`/device-reporting/tokens/${encodeURIComponent(record.id)}`, { method: 'DELETE' });
+                if (!response.ok) return this.showNotification(response.data.error || 'Could not revoke reporting.', 'error');
+                await refresh();
+              } catch { this.showNotification('Could not revoke reporting. Check your connection and try again.', 'error'); }
+            } }); row.append(revoke); }
+            records.append(row);
+          }
+        };
+        const actions = document.createElement('div'); actions.className = 'modal-actions';
+        const close = document.createElement('button'); close.className = 'btn btn-secondary'; close.textContent = 'Done'; close.onclick = () => this.closeModal(modal.id);
+        body.append(note, label, select, details, records); actions.append(close); card.append(header, body, actions); modal.append(card); document.body.append(modal); this.showModal(modal.id); await refresh();
+      },
+
+      buildDeviceReportingInstaller(apiUrl, token, options = {}) {
+        if (!/^https:\/\//i.test(apiUrl)) throw new Error('Scheduled reporting requires an HTTPS API base URL.');
+        const day = options.day ?? 'Monday';
+        const time = options.time ?? '09:00';
+        const atLogon = options.atLogon !== false;
+        if (!['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].includes(day) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('Choose a valid reporting schedule.');
+        const script = this.buildDeviceRegistrationScript(apiUrl, options.registrationToken ? '__ELISTLY_DEVICE_TOKEN__' : token, true);
+        const enrollment = options.registrationToken ? `$enrollment = & {
+${this.buildDeviceRegistrationScript(apiUrl, options.registrationToken, false, true)}
+}
+if ($enrollment.reportingToken -notmatch '^dp_[A-Za-z0-9_-]{32,}$') { throw 'Registration did not return a reporting credential. No task was installed.' }
+` : '';
+        const installer = `# Elistly scheduled inventory reporting. No self-updating code or policy changes.
+param([switch]$Uninstall)
+$ErrorActionPreference = 'Stop'
+$taskName = 'Elistly Inventory Report'
+$root = Join-Path $env:ProgramData 'Elistly'
+$scriptPath = Join-Path $root 'Report-ElistlyDevice.ps1'
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Open PowerShell as administrator to install or remove the task.' }
+if ((Test-Path -LiteralPath $root) -and ((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Refusing an Elistly directory that is a link.' }
+if ($Uninstall) {
+  if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $taskName }
+  $deadline = [DateTime]::UtcNow.AddSeconds(15)
+  while ((Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).State -eq 'Running') { if ([DateTime]::UtcNow -gt $deadline) { throw 'Task is still stopping. Retry removal.' }; Start-Sleep -Milliseconds 250 }
+  if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
+  foreach ($name in @('Report-ElistlyDevice.ps1', 'last-result.json', 'Remove-ElistlyReporting.ps1')) { $p = Join-Path $root $name; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force } }
+  Write-Host 'Elistly task and local reporting credential removed. Revoke its credential in Elistly as well. Inventory records were not deleted.'
+  return
+}
+if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { throw 'Elistly reporting is already installed. Remove it with -Uninstall before installing a replacement.' }
+[void][IO.Directory]::CreateDirectory($root)
+$acl = New-Object Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+  $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+  $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+  $acl.AddAccessRule($rule)
+}
+$acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+Set-Acl -LiteralPath $root -AclObject $acl
+foreach ($name in @('Report-ElistlyDevice.ps1', 'last-result.json', 'Remove-ElistlyReporting.ps1')) { if (Test-Path -LiteralPath (Join-Path $root $name)) { throw 'Existing Elistly reporting files must be removed using -Uninstall first.' } }
+${enrollment}$reportScript = @'
+${script}
+'@
+${options.registrationToken ? "$reportScript = $reportScript.Replace('__ELISTLY_DEVICE_TOKEN__', $enrollment.reportingToken)" : ''}
+[IO.File]::WriteAllText($scriptPath, $reportScript, (New-Object Text.UTF8Encoding($true)))
+$exe = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+$action = New-ScheduledTaskAction -Execute $exe -Argument ('-NoProfile -NonInteractive -File "' + $scriptPath + '"')
+$weekly = New-ScheduledTaskTrigger -Weekly -DaysOfWeek ${day} -At '${time}'
+${atLogon ? "$logon = New-ScheduledTaskTrigger -AtLogOn\n$logon.Delay = 'PT1M'" : ''}
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$runAs = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+try {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($weekly${atLogon ? ', $logon' : ''}) -Settings $settings -Principal $runAs -Description 'Reports this computer inventory to Elistly weekly${atLogon ? ' and after sign-in' : ''}. No remote code updates.' -ErrorAction Stop | Out-Null
+} catch { Remove-Item -LiteralPath $scriptPath -Force; throw }
+Start-ScheduledTask -TaskName $taskName
+Write-Host 'Installed Elistly Inventory Report and started its first run. Weekly ${day} ${time}${atLogon ? ' and after sign-in' : ''}; missed runs catch up.'
+Write-Host 'Check Task Scheduler or, in this administrator window: Get-Content "$env:ProgramData\\Elistly\\last-result.json"'
+Write-Host 'Delete this downloaded installer after installation: it contains ${options.registrationToken ? 'a workspace enrollment secret' : 'a device-scoped credential'}.'
+Write-Host 'Remove using: & "$env:ProgramData\\Elistly\\Remove-ElistlyReporting.ps1"'
+`;
+        const removal = installer.slice(0, installer.indexOf('if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { throw')).replace('param([switch]$Uninstall)', '$Uninstall = $true');
+        return installer.replace('[IO.File]::WriteAllText($scriptPath,', `[IO.File]::WriteAllText((Join-Path $root 'Remove-ElistlyReporting.ps1'), @'
+${removal}
+'@, (New-Object Text.UTF8Encoding($true)))
+[IO.File]::WriteAllText($scriptPath,`);
+      },
+
+      buildDeviceCollectorScript(apiUrl, token, options = {}) {
+        if (!/^https:\/\//i.test(apiUrl)) throw new Error('Windows collection requires an HTTPS API base URL.');
+        if (!options.automaticReporting) return this.buildDeviceRegistrationScript(apiUrl, token);
+        return this.buildDeviceReportingInstaller(apiUrl, '', { ...options, registrationToken: token });
+      },
+
+      buildDeviceRegistrationScript(apiUrl, token, reporting = false, returnResponse = false) {
         const ps = value => `'${String(value).replace(/'/g, "''")}'`;
-        return `# Elistly device registration. This secret expires in 24 hours; store it only in your deployment secret store.\nparam([string]$RegistrationToken = ${ps(token)})\n$ErrorActionPreference = 'Stop'\nif (-not $RegistrationToken) { throw 'RegistrationToken is required.' }\nfunction Test-ElistlyStableIdentifier([string]$Value) {\n  $normalized = $Value.Trim()\n  if (-not $normalized -or $normalized -match '^(?i:(to be filled by o\\.?e\\.?m\\.?|default string|none|unknown|system serial number|0+|f+))$') { return $false }\n  return $true\n}\n$bios = Get-CimInstance Win32_BIOS\n$product = Get-CimInstance Win32_ComputerSystemProduct\n$computer = Get-CimInstance Win32_ComputerSystem\n$os = Get-CimInstance Win32_OperatingSystem\n$serialNumber = [string]$bios.SerialNumber\n$biosUuid = [string]$product.UUID\nif (-not (Test-ElistlyStableIdentifier $serialNumber) -or -not (Test-ElistlyStableIdentifier $biosUuid)) { throw 'A non-generic BIOS serial number and BIOS UUID are required for stable registration.' }\n$identityMaterial = "$biosUuid|$serialNumber"\n$hardwareIdentity = ([System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create()).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($identityMaterial)))).Replace('-', '').ToLowerInvariant()\n$body = @{ hardwareIdentity = $hardwareIdentity; hostname = $env:COMPUTERNAME; serialNumber = $serialNumber; manufacturer = [string]$computer.Manufacturer; model = [string]$computer.Model; windowsEdition = [string]$os.Caption } | ConvertTo-Json -Compress\n$response = Invoke-RestMethod -Method Post -Uri ${ps(`${apiUrl}/device-registration/register`)} -Headers @{ Authorization = "Bearer $RegistrationToken"; 'Content-Type' = 'application/json' } -Body $body\nif ($response.created) {\n  Write-Host "Registered Elistly device $($response.deviceId)"\n} else {\n  Write-Host "Elistly device already registered: $($response.deviceId)"\n}\n`;
+        const lines = [
+          reporting ? '# Elistly device-scoped inventory report. Installed locally; no self-updates or security-setting changes.' : '# Elistly one-time Windows device registration. This script has no persistence, scheduler, self-update, or security-setting changes.',
+          `param([string]$RegistrationToken = ${ps(token)}, [switch]$Preview)`,
+          "$ErrorActionPreference = 'Stop'",
+          "if (-not $RegistrationToken) { throw 'RegistrationToken is required.' }",
+          "function Test-ElistlyStableIdentifier([string]$Value) {",
+          "  $normalized = if ($null -eq $Value) { '' } else { $Value.Trim() }",
+          "  return [bool]($normalized -and $normalized -notmatch '^(?i:(to be filled by o\\.?e\\.?m\\.?|default string|none|unknown|system serial number|0+|f+))$')",
+          "}",
+          "function Get-ElistlyCim([string]$ClassName, [string]$Namespace = 'root/cimv2', [string]$Filter) {",
+          "  try { if ($Filter) { Get-CimInstance -Namespace $Namespace -ClassName $ClassName -Filter $Filter -ErrorAction Stop } else { Get-CimInstance -Namespace $Namespace -ClassName $ClassName -ErrorAction Stop } } catch { $null }",
+          "}",
+          "function Get-ElistlyFirstCim([string]$ClassName, [string]$Namespace = 'root/cimv2', [string]$Filter) { Get-ElistlyCim $ClassName $Namespace $Filter | Select-Object -First 1 }",
+          "function Get-ElistlyIsoDate($Value) { try { if ($null -eq $Value) { return $null }; if ($Value -is [datetime]) { return ([datetime]$Value).ToUniversalTime().ToString('o') }; [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$Value).ToUniversalTime().ToString('o') } catch { $null } }",
+          "$collectedAt = [DateTime]::UtcNow.ToString('o')",
+          "$availability = [ordered]@{ tpm = $null; secureBoot = $null; bitLocker = $null; battery = $null; networkAdapters = $null; lastInteractiveUser = $null }",
+          "$bios = Get-ElistlyFirstCim 'Win32_BIOS'; $product = Get-ElistlyFirstCim 'Win32_ComputerSystemProduct'; $computer = Get-ElistlyFirstCim 'Win32_ComputerSystem'; $os = Get-ElistlyFirstCim 'Win32_OperatingSystem'; $cpu = Get-ElistlyFirstCim 'Win32_Processor'",
+          "$serialNumber = if ($bios) { [string]$bios.SerialNumber } else { $null }; $biosUuid = if ($product) { [string]$product.UUID } else { $null }",
+          "if (-not (Test-ElistlyStableIdentifier $serialNumber) -or -not (Test-ElistlyStableIdentifier $biosUuid)) { throw 'A non-generic BIOS serial number and BIOS UUID are required for stable registration.' }",
+          "$identityMaterial = \"$biosUuid|$serialNumber\"; $hardwareIdentity = ([System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create()).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($identityMaterial)))).Replace('-', '').ToLowerInvariant()",
+          "$disks = @(Get-ElistlyCim 'Win32_LogicalDisk' 'root/cimv2' 'DriveType = 3' | Select-Object -First 32 | ForEach-Object { [ordered]@{ capacityBytes = if ($_.Size -ne $null) { [uint64]$_.Size } else { $null }; freeBytes = if ($_.FreeSpace -ne $null) { [uint64]$_.FreeSpace } else { $null } } })",
+          "$networkAdapters = @(); try { $networkAdapters = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' -and $_.MacAddress } | Select-Object -First 32 | ForEach-Object { $adapter = $_; $addresses = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4,IPv6 -ErrorAction Stop | Where-Object { $_.IPAddress -and $_.IPAddress -notin @('127.0.0.1', '::1') } | Select-Object -First 16); [ordered]@{ name = [string]$adapter.Name; macAddress = [string]$adapter.MacAddress; ipv4Addresses = @($addresses | Where-Object AddressFamily -eq 'IPv4' | Select-Object -First 8 -ExpandProperty IPAddress); ipv6Addresses = @($addresses | Where-Object AddressFamily -eq 'IPv6' | Select-Object -First 8 -ExpandProperty IPAddress) } }) } catch { $availability.networkAdapters = 'Unavailable: local network adapter query is not permitted or supported.' }",
+          "$tpm = [ordered]@{ present = $null; version = $null; ready = $null }; try { $tpmInfo = Get-Tpm -ErrorAction Stop; $tpm.present = [bool]$tpmInfo.TpmPresent; $tpm.ready = [bool]$tpmInfo.TpmReady; $tpmCim = Get-ElistlyFirstCim 'Win32_Tpm' 'root/cimv2/security/microsofttpm'; $tpm.version = if ($tpmCim -and $tpmCim.SpecVersion) { [string]$tpmCim.SpecVersion } else { $null } } catch { $availability.tpm = 'Unavailable: TPM query is not permitted or supported.' }",
+          "$secureBoot = $null; try { $secureBoot = [bool](Confirm-SecureBootUEFI -ErrorAction Stop) } catch { $availability.secureBoot = 'Unavailable: Secure Boot query is not permitted or supported.' }",
+          "$bitLocker = $null; try { $bitLocker = [string](Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop | Select-Object -ExpandProperty ProtectionStatus); if (-not $bitLocker) { $bitLocker = $null } } catch { $availability.bitLocker = 'Unavailable: BitLocker query is not permitted or supported.' }",
+          "$battery = [ordered]@{ designCapacityMWh = $null; fullChargeCapacityMWh = $null; healthPercent = $null }; try { $staticBattery = Get-ElistlyFirstCim 'BatteryStaticData' 'root/wmi'; $fullBattery = Get-ElistlyFirstCim 'BatteryFullChargedCapacity' 'root/wmi'; if ($staticBattery -and $staticBattery.DesignedCapacity) { $battery.designCapacityMWh = [uint64]$staticBattery.DesignedCapacity }; if ($fullBattery -and $fullBattery.FullChargedCapacity) { $battery.fullChargeCapacityMWh = [uint64]$fullBattery.FullChargedCapacity }; if ($battery.designCapacityMWh -and $battery.fullChargeCapacityMWh) { $battery.healthPercent = [Math]::Round((100 * $battery.fullChargeCapacityMWh) / $battery.designCapacityMWh) } } catch { $availability.battery = 'Unavailable: battery query is not permitted or supported.' }",
+          "$lastBootAt = if ($os) { Get-ElistlyIsoDate $os.LastBootUpTime } else { $null }; $uptimeSeconds = if ($lastBootAt) { [Math]::Max(0, [Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($lastBootAt)).TotalSeconds)) } else { $null }",
+          "$displayRelease = $null; try { $displayRelease = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' -Name DisplayVersion -ErrorAction Stop).DisplayVersion } catch { $null }",
+          "$interactiveUser = if ($computer -and $computer.UserName -and [string]$computer.UserName -notmatch '(?i)^(NT AUTHORITY\\\\SYSTEM|SYSTEM)$') { [string]$computer.UserName } else { $null }; if (-not $interactiveUser) { $availability.lastInteractiveUser = 'Unavailable: no interactive user was observed.' }; $lastInteractiveUser = [ordered]@{ username = $interactiveUser; time = if ($interactiveUser) { $collectedAt } else { $null }; source = 'Win32_ComputerSystem.UserName'; observation = 'current interactive session' }",
+          "$inventorySnapshot = [ordered]@{ schemaVersion = 'elistly.windows-device-registration.v1'; collectedAt = $collectedAt; device = [ordered]@{ manufacturer = if ($computer) { [string]$computer.Manufacturer } else { $null }; model = if ($computer) { [string]$computer.Model } else { $null }; serialNumber = $serialNumber; uuid = $biosUuid }; windows = [ordered]@{ edition = if ($os) { [string]$os.Caption } else { $null }; version = if ($os) { [string]$os.Version } else { $null }; build = if ($os) { [string]$os.BuildNumber } else { $null }; displayRelease = if ($displayRelease) { [string]$displayRelease } else { $null }; installDate = if ($os) { Get-ElistlyIsoDate $os.InstallDate } else { $null } }; cpu = [ordered]@{ model = if ($cpu) { [string]$cpu.Name } else { $null }; cores = if ($cpu -and $cpu.NumberOfCores -ne $null) { [int]$cpu.NumberOfCores } else { $null }; logicalProcessors = if ($cpu -and $cpu.NumberOfLogicalProcessors -ne $null) { [int]$cpu.NumberOfLogicalProcessors } else { $null } }; ramBytes = if ($computer -and $computer.TotalPhysicalMemory -ne $null) { [uint64]$computer.TotalPhysicalMemory } else { $null }; fixedDisks = $disks; networkAdapters = $networkAdapters; biosVersion = if ($bios) { [string]$bios.SMBIOSBIOSVersion } else { $null }; tpm = $tpm; secureBoot = $secureBoot; bitLockerProtectionStatus = $bitLocker; battery = $battery; lastBootAt = $lastBootAt; uptimeSeconds = $uptimeSeconds; lastInteractiveUser = $lastInteractiveUser; availability = $availability }",
+          "$payload = [ordered]@{ hardwareIdentity = $hardwareIdentity; hostname = $env:COMPUTERNAME; serialNumber = $serialNumber; manufacturer = $inventorySnapshot.device.manufacturer; model = $inventorySnapshot.device.model; windowsEdition = $inventorySnapshot.windows.edition; inventorySnapshot = $inventorySnapshot }",
+          "if ($Preview) { Write-Output ($payload | ConvertTo-Json -Depth 8); Write-Host 'Preview only: no data was transmitted.'; return }",
+          "$body = $payload | ConvertTo-Json -Depth 8 -Compress",
+          `if ([System.Text.Encoding]::UTF8.GetByteCount($body) -gt 65536) { throw 'Registration payload exceeds 64KB.' }`,
+          `$utf8Body = [System.Text.Encoding]::UTF8.GetBytes($body); $response = Invoke-RestMethod -TimeoutSec 45 -Method Post -Uri ${ps(`${apiUrl}${reporting ? '/device-reporting/report' : '/device-registration/register'}`)} -Headers @{ Authorization = \"Bearer $RegistrationToken\"; 'Content-Type' = 'application/json; charset=utf-8' } -ContentType 'application/json; charset=utf-8' -Body $utf8Body`,
+          "if ($response.created) { Write-Host \"Registered Elistly device $($response.deviceId)\" } else { Write-Host \"Elistly device already registered: $($response.deviceId). Existing registration was not changed.\" }"
+        ];
+        if (returnResponse) lines.push('Write-Output $response');
+        if (reporting) {
+          lines[lines.length - 1] = "[ordered]@{ success = $true; completedAt = [DateTime]::UtcNow.ToString('o'); deviceId = $response.deviceId } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'last-result.json') -Encoding UTF8";
+          lines.splice(4, 0, 'try {');
+          lines.push("} catch { [ordered]@{ success = $false; completedAt = [DateTime]::UtcNow.ToString('o'); message = 'Report failed. Check network, device credential and Task Scheduler result; no security policy was changed.' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'last-result.json') -Encoding UTF8; exit 1 }");
+        }
+        return lines.join('\n');
       },
 
       renderDeviceRegistrationTokens(container, records, refresh) {
@@ -2500,12 +2748,18 @@ const App = {
         const list = document.createElement('ul'); list.className = 'device-registration-token-list';
         records.forEach(record => {
           const item = document.createElement('li');
-          const status = record.revoked_at ? 'Revoked' : new Date(record.expires_at) <= new Date() ? 'Expired' : 'Active';
-          const summary = document.createElement('span'); summary.textContent = `${record.label || record.workspace_id} — ${status}; expires ${new Date(record.expires_at).toLocaleString()}${record.last_used_at ? `; last used ${new Date(record.last_used_at).toLocaleString()}` : ''}`;
+          const status = record.revoked_at ? 'Revoked' : record.expires_at && new Date(record.expires_at) <= new Date() ? 'Expired' : 'Active';
+          const summary = document.createElement('span'); summary.textContent = `${record.label || record.workspace_id} — ${status}; ${record.expires_at ? `expires ${new Date(record.expires_at).toLocaleString()}` : 'no automatic expiry'}${record.last_used_at ? `; last used ${new Date(record.last_used_at).toLocaleString()}` : ''}`;
           item.appendChild(summary);
           if (!record.revoked_at && status === 'Active') {
             const revoke = document.createElement('button'); revoke.className = 'btn btn-danger btn-sm'; revoke.type = 'button'; revoke.textContent = 'Revoke';
-            revoke.onclick = async () => { const result = await apiRequest(`/device-registration/tokens/${encodeURIComponent(record.id)}`, { method: 'DELETE' }); if (!result.ok) return this.showNotification(result.data.error || 'Could not revoke script.', 'error'); await refresh(); };
+            revoke.onclick = () => this.showConfirmModal({ title: 'Revoke collector?', message: 'This download will no longer register computers or enroll reporting. Already installed reporting and inventory remain unchanged.', confirmLabel: 'Revoke collector', onConfirm: async () => {
+              try {
+                const result = await apiRequest(`/device-registration/tokens/${encodeURIComponent(record.id)}`, { method: 'DELETE' });
+                if (!result.ok) return this.showNotification(result.data.error || 'Could not revoke collector.', 'error');
+                await refresh();
+              } catch { this.showNotification('Could not revoke collector. Check your connection and try again.', 'error'); }
+            } });
             item.appendChild(revoke);
           }
           list.appendChild(item);
@@ -3607,11 +3861,11 @@ const App = {
                           Import CSV
                         </button>
                         <div class="device-collector-card">
-                          <strong>Windows device registration</strong>
-                          <p class="help-text">Creates a 24-hour, workspace-bound PowerShell registration script. It can only register the computer that runs it; it cannot read or edit inventory, profiles, or admin settings.</p>
+                          <strong>Windows device collector</strong>
+                          <p class="help-text">Create one workspace-bound PowerShell script to register a Windows computer. Choose Keep updated automatically to install scheduled reporting too. No automatic expiry by default; choose an expiry or revoke the collector when finished.</p>
                           <button type="button" class="btn btn-secondary" onclick="App.showDeviceRegistrationModal()">
-                            <span class="material-icons">laptop_windows</span>
-                            Create registration script
+                            <span class="material-icons" aria-hidden="true">laptop_windows</span>
+                            Create
                           </button>
                           <button type="button" class="btn btn-secondary" onclick="App.showRecommendedWindowsFieldsConfirm()">
                             <span class="material-icons">playlist_add</span>
@@ -3619,7 +3873,7 @@ const App = {
                           </button>
                           <details class="device-collector-details">
                             <summary>Deployment and safety details</summary>
-                            <p class="help-text">Run the downloaded script on the target computer, or pass <code>-RegistrationToken</code> from your deployment secret store. The secret is displayed once, expires in 24 hours, and may be revoked after creation. A repeat uses the same hardware identity and does not overwrite manual records or assign a person.</p>
+                            <p class="help-text">Run the downloaded script on the target computer. Automatic reporting requires administrator PowerShell. Keep the registration secret private. There is no automatic expiry unless you choose an expiry date and time when creating the script. You can revoke it manually at any time. A repeat uses the same hardware identity and does not overwrite manual records or assign a person.</p>
                           </details>
                         </div>
                         <button class="btn btn-secondary" onclick="App.showAddPresetModal()">
@@ -5601,29 +5855,49 @@ const App = {
               <div class="modal-header">
                 <h3>Legal &amp; policies</h3>
               </div>
+              <div class="legal-tabs" role="tablist" aria-label="Legal information">
+                <button type="button" role="tab" id="privacyTab" aria-selected="true" aria-controls="privacyPanel">Privacy</button>
+                <button type="button" role="tab" id="termsTab" aria-selected="false" aria-controls="termsPanel" tabindex="-1">Terms</button>
+                <button type="button" role="tab" id="noticesTab" aria-selected="false" aria-controls="noticesPanel" tabindex="-1">Third-party notices</button>
+              </div>
               <div class="legal-modal-body">
+                <div role="tabpanel" id="privacyPanel" aria-labelledby="privacyTab">
                 <section class="legal-section">
-                  <h4>Disclaimer</h4>
-                  <p>This software is provided free to use in its current form. Elistly is in <strong>beta</strong>: features and behaviour may change. We do not guarantee availability, correctness, or fitness for any purpose.</p>
-                  <p>You use the service and store data at your own risk. We are not responsible for any data you store, any loss of data, or how you use the application. Do not rely on it as the only copy of important information.</p>
+                  <h4>What the app handles</h4>
+                  <p>Account details include your email and display name. Inventory data includes the categories, types, items, settings, and other content you enter. The browser also keeps an account cache and unsent edits locally to support reloads and reconnecting.</p>
                 </section>
                 <section class="legal-section">
-                  <h4>Data &amp; privacy</h4>
-                  <p><strong>What we store</strong></p>
-                  <p>When you use an account, we store your account data (email, authentication) and your app data: categories, entity types, entities, settings, and optionally theme preferences. Data is stored in the infrastructure configured for this app.</p>
-                  <p><strong>Why</strong></p>
-                  <p>To provide the app (inventory, workspaces, sync across devices) and to keep your account secure.</p>
-                  <p><strong>Your rights</strong></p>
-                  <ul class="legal-list">
-                    <li><strong>Export</strong> your data: Profile → Export all data.</li>
-                    <li><strong>Delete your account</strong>: Profile → Delete account. This removes your account and associated data.</li>
-                  </ul>
-                  <p>If you use a third-party auth or database provider, their terms also apply.</p>
+                  <h4>Where your information is stored</h4>
+                  <p>Elistly uses Cloudflare to run the service and Neon to manage accounts and store your inventory. Your information is not end-to-end encrypted. This means authorised Elistly administrators and service providers may be able to access it when needed to operate, support, protect, or maintain the service.</p>
+                  <p>When you create an account or sign in, your password is sent to Neon to verify your identity. Your password is not stored with your inventory. Neon stores password credentials as a one-way hash rather than as readable plain text.</p>
+                </section>
+                <section class="legal-section">
+                  <h4>Your choices</h4>
+                  <p>You can export account data in Profile. The Profile menu provides account deletion. Browser-held cache or queued changes are controlled by the browser and device you use.</p>
+                  <p>Deleting your account removes it from the service. Any information still stored in your browser is managed by you through your browser or device settings.</p>
+                </section>
+                </div>
+                <div role="tabpanel" id="termsPanel" aria-labelledby="termsTab" hidden>
+                <section class="legal-section">
+                  <h4>Using Elistly</h4>
+                  <p>Elistly is provided free to use in its current form and is in <strong>beta</strong>. Features and behaviour may change. Do not use it as the only copy of important information.</p>
+                  <p>Use the service lawfully and do not attempt to interfere with it or access another account. You are responsible for the content you enter and for keeping access to your account and devices secure.</p>
+                </section>
+                <section class="legal-section">
+                  <h4>No warranty</h4>
+                  <p>We do not guarantee availability, correctness, security, or fitness for a particular purpose. Use the service and store data at your own risk.</p>
                 </section>
                 <section class="legal-section">
                   <h4>Source code</h4>
-                  <p>The source code is available for review and auditing on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
+                  <p>The source code is available for review on <a href="https://github.com/hoozter/elistly" target="_blank" rel="noopener noreferrer">GitHub</a>.</p>
                 </section>
+                </div>
+                <div role="tabpanel" id="noticesPanel" aria-labelledby="noticesTab" hidden>
+                <section class="legal-section">
+                  <p>Full third-party copyright and license notices for the shipped browser assets and production Worker dependencies.</p>
+                  <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=9ec1f915882700b3d1d9bb9a0f9a9231e298d1fb7f55ee08da04dce3845b63a7" title="Full third-party notices"></iframe>
+                </section>
+                </div>
               </div>
             </div>
           </div>
@@ -5633,7 +5907,32 @@ const App = {
         const div = document.createElement('div');
         div.innerHTML = modalHtml;
         document.body.appendChild(div.firstElementChild);
+        this.initLegalTabs(document.getElementById('legalModal'));
         this.showModal('legalModal');
+      },
+
+      initLegalTabs(modal) {
+        const tabs = Array.from(modal.querySelectorAll('[role="tab"]'));
+        const activateTab = (tab, focus) => {
+          tabs.forEach(candidate => {
+            const selected = candidate === tab;
+            candidate.setAttribute('aria-selected', String(selected));
+            candidate.tabIndex = selected ? 0 : -1;
+            document.getElementById(candidate.getAttribute('aria-controls')).hidden = !selected;
+          });
+          if (focus) tab.focus();
+        };
+        tabs.forEach((tab, index) => {
+          tab.addEventListener('click', () => activateTab(tab, false));
+          tab.addEventListener('keydown', event => {
+            let next = null;
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % tabs.length;
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index + tabs.length - 1) % tabs.length;
+            if (event.key === 'Home') next = 0;
+            if (event.key === 'End') next = tabs.length - 1;
+            if (next !== null) { event.preventDefault(); activateTab(tabs[next], true); }
+          });
+        });
       },
 
       toggleNameLock(button) {

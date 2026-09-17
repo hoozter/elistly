@@ -58,14 +58,33 @@ create table if not exists public.device_registration_tokens (
   workspace_id text not null,
   token_hash text not null unique,
   label text,
-  expires_at timestamptz not null,
+  expires_at timestamptz,
   revoked_at timestamptz,
   created_at timestamptz not null default now(),
   last_used_at timestamptz,
   constraint device_registration_tokens_hash_length check (char_length(token_hash) = 64)
 );
+alter table public.device_registration_tokens alter column expires_at drop not null;
+
 create index if not exists device_registration_tokens_owner_workspace_idx
   on public.device_registration_tokens (owner_user_id, workspace_id);
+
+-- Per-device secrets for scheduled inventory reporting. Unlike registration
+-- secrets, each credential is permanently bound to one existing device.
+create table if not exists public.device_reporting_tokens (
+  id text primary key,
+  owner_user_id text not null,
+  workspace_id text not null,
+  device_id text not null,
+  token_hash text not null unique,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz,
+  constraint device_reporting_tokens_hash_length check (char_length(token_hash) = 64)
+);
+
+create index if not exists device_reporting_tokens_owner_device_idx
+  on public.device_reporting_tokens (owner_user_id, device_id);
 
 -- ---------------------------------------------------------------------------
 -- profiles
