@@ -32,8 +32,6 @@ The Worker receives secrets:
 
 The canonical app data column is `app_data.payload`.
 
-Older migration attempts created `app_data.data`; `neon/schema.sql` now preserves existing rows by renaming or copying `data` into `payload`.
-
 ## Admin setup
 
 The first Neon Auth user becomes admin automatically when there are no active Neon Auth admins yet. This lets a fresh deployment bootstrap itself: deploy, create your account, then open the app.

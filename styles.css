@@ -3011,34 +3011,6 @@ input.elistly-checkbox:disabled {
   color: var(--text-primary);
 }
 
-/* Legacy entity-view (kept for any other use) */
-.entity-view-title {
-  font-size: 1.3rem;
-  font-weight: 600;
-  margin-bottom: 1rem;
-  color: var(--text-primary);
-}
-.entity-view-grid {
-  display: grid;
-  gap: 0.75rem;
-}
-.entity-view-row {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius);
-  background: var(--bg-tertiary);
-}
-.entity-view-label {
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.entity-view-value {
-  color: var(--text-primary);
-  word-break: break-word;
-}
-
 /* Selections & Scrollbars */
 ::selection {
   background: var(--accent-color);
@@ -3144,14 +3116,6 @@ select option:hover {
   }
   .main-content {
     padding: 1rem;
-  }
-  .entity-view-row {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-  }
-  .entity-view-label {
-    margin-bottom: 0.15rem;
-    font-size: 0.9rem;
   }
   .settings-container {
     grid-template-columns: 1fr;

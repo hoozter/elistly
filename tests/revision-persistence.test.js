@@ -687,6 +687,47 @@ async function testImportAcknowledgementAcceptsEquivalentJsonObjectOrder() {
   });
 }
 
+async function testFullBackupRestoreDoesNotReplaceAQueuedLocalChange() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const pending = { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' };
+      const backup = { version: 'test', settings: { view: 'grid' }, workspaces: { restored: { name: 'Restored', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'restored', marker: 'backup' };
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(pending));
+      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: pending }]));
+      Storage._cached = structuredClone(pending);
+      Storage._cachedUserId = 'user-1';
+      Storage._isDirty = true;
+      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'token' } } }) } };
+      window.ELISTLY_API_URL = '/mock';
+      let requests = 0;
+      window.fetch = async () => {
+        requests += 1;
+        return new Response(JSON.stringify({ payload: backup, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
+      };
+      let error = null;
+      try {
+        await Storage.setAppDataForImport(backup, { userId: 'user-1', accessToken: 'token', expectedUpdatedAt: '2026-08-12T00:00:00.000Z' });
+      } catch (caught) {
+        error = caught.message;
+      }
+      return {
+        error,
+        requests,
+        cached: Storage._cached,
+        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
+        revision: localStorage.getItem('elistlyData:userUpdated:user-1')
+      };
+    });
+
+    assert.equal(observed.error, 'Unsynced local changes must be synced or resolved before restoring a full backup.');
+    assert.equal(observed.requests, 0, 'restore must not remotely replace account data while a local change is queued');
+    assert.deepEqual(observed.cached, { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' }, 'restore rejection must retain the local edit in memory');
+    assert.deepEqual(observed.outbox, [{ id: 'pending', payload: { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' } }], 'restore rejection must retain the durable pending local change');
+    assert.equal(observed.revision, '2026-08-12T00:00:00.000Z', 'restore rejection must retain the revision that protects the queued local change');
+  });
+}
+
 async function run() {
   await testConflictPreservesDirtyLocalState();
   await testConflictNotificationKeepsTheEditorOpen();
@@ -707,6 +748,7 @@ async function run() {
   await testEmptyActiveWorkspaceHydratesInactiveWorkspaceAndAccountSettings();
   await testLegacyDetachedTypeCategorySurvivesWorkspaceHydration();
   await testImportAcknowledgementAcceptsEquivalentJsonObjectOrder();
+  await testFullBackupRestoreDoesNotReplaceAQueuedLocalChange();
 }
 
 run()

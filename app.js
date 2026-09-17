@@ -454,6 +454,7 @@ const Storage = {
   async setAppDataForImport(data, identity) {
     if (backendClient) {
       if (!identity || !identity.userId || !identity.accessToken || this._cachedUserId !== identity.userId) throw new Error('Signed-in account identity could not be confirmed.');
+      if (this._readOutbox(identity.userId).length) throw new Error('Unsynced local changes must be synced or resolved before restoring a full backup.');
       const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt: identity.expectedUpdatedAt ?? null }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};

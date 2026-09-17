@@ -19,6 +19,7 @@
       computer: {
         id: 'computer', label: 'Computer', category: 'devices', icon: 'computer',
         enableNameGen: true,
+        collection: { provider: 'windows', kind: 'computer' },
         nameGen: {
           prefix: 'PC',
           prefixEnabled: true,
@@ -32,8 +33,8 @@
         },
         fields: [
           { name: 'indexYear', label: 'Year', type: 'dropdown', required: true, visibleInCard: true, partOfName: true, options: [{ value: '2020', nameValue: 'Y0' }, { value: '2021', nameValue: 'Y1' }, { value: '2022', nameValue: 'Y2' }, { value: '2023', nameValue: 'Y3' }, { value: '2024', nameValue: 'Y4' }, { value: '2025', nameValue: 'Y5' }] },
-          { name: 'cpu', label: 'CPU', type: 'dropdown', required: true, visibleInCard: true, partOfName: true, options: [{ value: 'Intel Core i5', nameValue: '5' }, { value: 'Intel Core i7', nameValue: '7' }, { value: 'Intel Core i9', nameValue: '9' }, { value: 'Intel Core 7 Ultra', nameValue: '7U' }, { value: 'Intel Core 9 Ultra', nameValue: '9U' }] },
-          { name: 'ram', label: 'RAM', type: 'dropdown', required: true, visibleInCard: true, partOfName: true, options: [{ value: '8GB', nameValue: '8' }, { value: '16GB', nameValue: '16' }, { value: '32GB', nameValue: '32' }, { value: '64GB', nameValue: '64' }] },
+          { name: 'cpu', label: 'CPU', type: 'dropdown', required: true, visibleInCard: true, partOfName: true, collection: { provider: 'windows', capability: 'processor.summary' }, options: [{ value: 'Intel Core i5', nameValue: '5' }, { value: 'Intel Core i7', nameValue: '7' }, { value: 'Intel Core i9', nameValue: '9' }, { value: 'Intel Core 7 Ultra', nameValue: '7U' }, { value: 'Intel Core 9 Ultra', nameValue: '9U' }] },
+          { name: 'ram', label: 'RAM', type: 'dropdown', required: true, visibleInCard: true, partOfName: true, collection: { provider: 'windows', capability: 'memory.total' }, options: [{ value: '8GB', nameValue: '8' }, { value: '16GB', nameValue: '16' }, { value: '32GB', nameValue: '32' }, { value: '64GB', nameValue: '64' }] },
           { name: 'notes', label: 'Notes', type: 'textarea', required: false, visibleInCard: false, partOfName: false }
         ],
         associations: [{ name: 'assignedTo', label: 'Assigned To', type: 'association', association: { kind: 'belongs_to', targetType: 'person' } }, { name: 'locatedAt', label: 'Located At', type: 'association', association: { kind: 'belongs_to', targetType: 'building' } }]

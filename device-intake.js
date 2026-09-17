@@ -58,17 +58,17 @@
   }
 
   const capabilityRegistry = freeze({
-    'computer.hostname': { source: 'hostname', aliases: ['hostname'], fieldTypes: ['text', 'textarea'] },
-    'computer.manufacturer': { source: 'manufacturer', aliases: ['manufacturer'], fieldTypes: ['text', 'textarea'] },
-    'computer.model': { source: 'model', aliases: ['model'], fieldTypes: ['text', 'textarea'] },
-    'processor.summary': { source: 'processorSummary', aliases: ['processorSummary', 'cpu'], fieldTypes: ['text', 'textarea', 'dropdown'] },
-    'processor.description': { source: 'processorDescription', aliases: ['processorDescription'], fieldTypes: ['text', 'textarea'] },
-    'memory.total': { source: 'memorySummary', aliases: ['memorySummary', 'ram'], fieldTypes: ['text', 'textarea', 'dropdown'] },
-    'graphics.adapters': { source: 'graphicsAdapters', aliases: ['graphicsAdapters', 'gpu'], fieldTypes: ['text', 'textarea'], format: 'list' },
-    'windows.edition': { source: 'windowsEdition', aliases: ['windowsEdition'], fieldTypes: ['text', 'textarea', 'dropdown'] },
-    'windows.version': { source: 'windowsVersion', aliases: ['windowsVersion'], fieldTypes: ['text', 'textarea'] },
-    'windows.build': { source: 'windowsBuild', aliases: ['windowsBuild'], fieldTypes: ['text', 'textarea'] },
-    'bios.serial-number': { source: 'serialNumber', aliases: ['serialNumber'], fieldTypes: ['text', 'textarea'] }
+    'computer.hostname': { source: 'hostname', fieldTypes: ['text', 'textarea'] },
+    'computer.manufacturer': { source: 'manufacturer', fieldTypes: ['text', 'textarea'] },
+    'computer.model': { source: 'model', fieldTypes: ['text', 'textarea'] },
+    'processor.summary': { source: 'processorSummary', fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'processor.description': { source: 'processorDescription', fieldTypes: ['text', 'textarea'] },
+    'memory.total': { source: 'memorySummary', fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'graphics.adapters': { source: 'graphicsAdapters', fieldTypes: ['text', 'textarea'], format: 'list' },
+    'windows.edition': { source: 'windowsEdition', fieldTypes: ['text', 'textarea', 'dropdown'] },
+    'windows.version': { source: 'windowsVersion', fieldTypes: ['text', 'textarea'] },
+    'windows.build': { source: 'windowsBuild', fieldTypes: ['text', 'textarea'] },
+    'bios.serial-number': { source: 'serialNumber', fieldTypes: ['text', 'textarea'] }
   });
 
   function parseReport(text) {
@@ -193,9 +193,8 @@
       const rawValue = report.computer?.[fact];
       if (rawValue === undefined || rawValue === null || rawValue === '' || (Array.isArray(rawValue) && rawValue.length === 0)) continue;
 
-      const declared = fields.filter(field => field.collection?.capability === capability && (!field.collection.provider || field.collection.provider === 'windows'));
-      const aliases = Array.isArray(definition.aliases) ? definition.aliases : [];
-      const candidates = declared.length ? declared : fields.filter(field => !field.collection && aliases.includes(field.name));
+      const declared = fields.filter(field => field.collection?.provider === 'windows' && field.collection.capability === capability);
+      const candidates = declared;
       if (candidates.length === 0) {
         unmapped.push({ fact, value: proposalValue(definition, rawValue), reason: 'No existing field supports this collected fact.' });
         continue;
@@ -241,13 +240,12 @@
   function addRecommendedWindowsFields(entityType, registry = capabilityRegistry) {
     if (!entityType || typeof entityType !== 'object') throw new Error('A Computer type definition is required.');
     const existing = Array.isArray(entityType.fields) ? entityType.fields : [];
-    const claimedCapabilities = new Set(existing.map(field => !field.collection?.provider || field.collection.provider === 'windows' ? field.collection?.capability : null).filter(Boolean));
+    const claimedCapabilities = new Set(existing.map(field => field.collection?.provider === 'windows' ? field.collection.capability : null).filter(Boolean));
     const claimedNames = new Set(existing.map(field => field.name));
     const added = [];
 
     for (const recommendation of recommendedWindowsFields) {
-      const aliases = registry[recommendation.capability]?.aliases || [];
-      if (claimedCapabilities.has(recommendation.capability) || aliases.some(name => claimedNames.has(name))) continue;
+      if (claimedCapabilities.has(recommendation.capability) || claimedNames.has(recommendation.name)) continue;
       added.push({
         name: recommendation.name,
         label: recommendation.label,
@@ -269,7 +267,7 @@
     if (entityType.collection) {
       return entityType.collection.provider === 'windows' && entityType.collection.kind === 'computer';
     }
-    return entityType.id === 'computer';
+    return false;
   }
 
   return Object.freeze({ limits, capabilityRegistry, recommendedWindowsFields, parseReport, createDraftProposal, addRecommendedWindowsFields, isCompatibleEntityType });

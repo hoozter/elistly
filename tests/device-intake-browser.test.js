@@ -35,12 +35,13 @@ const initial = {
   entityTypes: {
     computer: {
       id: 'computer', label: 'Computer', category: 'devices', icon: 'computer', enableNameGen: false,
+      collection: { provider: 'windows', kind: 'computer' },
       fields: [
-        { name: 'hostname', label: 'Hostname', type: 'text' },
-        { name: 'manufacturer', label: 'Manufacturer', type: 'text' },
-        { name: 'model', label: 'Model', type: 'text' },
-        { name: 'gpu', label: 'Graphics', type: 'textarea' },
-        { name: 'serialNumber', label: 'Serial number', type: 'text' },
+        { name: 'hostname', label: 'Hostname', type: 'text', collection: { provider: 'windows', capability: 'computer.hostname' } },
+        { name: 'manufacturer', label: 'Manufacturer', type: 'text', collection: { provider: 'windows', capability: 'computer.manufacturer' } },
+        { name: 'model', label: 'Model', type: 'text', collection: { provider: 'windows', capability: 'computer.model' } },
+        { name: 'gpu', label: 'Graphics', type: 'textarea', collection: { provider: 'windows', capability: 'graphics.adapters' } },
+        { name: 'serialNumber', label: 'Serial number', type: 'text', collection: { provider: 'windows', capability: 'bios.serial-number' } },
         { name: 'notes', label: 'Notes', type: 'textarea' }
       ],
       associations: [{ name: 'assignedTo', label: 'Assigned To', type: 'association', association: { kind: 'belongs_to', targetType: 'person' } }]
@@ -62,6 +63,17 @@ const initial = {
   const page = await browser.newPage();
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
+    const presetCollection = await page.evaluate(() => {
+      const computer = window.ELISTLY_PRESETS.it.entityTypes.computer;
+      return {
+        compatible: window.ElistlyDeviceIntake.isCompatibleEntityType(computer),
+        cpu: computer.fields.find(field => field.name === 'cpu').collection,
+        ram: computer.fields.find(field => field.name === 'ram').collection
+      };
+    });
+    assert.equal(presetCollection.compatible, true, 'the built-in IT Computer must be a Windows collection');
+    assert.deepEqual(presetCollection.cpu, { provider: 'windows', capability: 'processor.summary' });
+    assert.deepEqual(presetCollection.ram, { provider: 'windows', capability: 'memory.total' });
     await page.evaluate(data => {
       App.data = structuredClone(data);
       localStorage.setItem('elistlyData', JSON.stringify(data));

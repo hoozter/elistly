@@ -73,6 +73,7 @@ function parserTests() {
 }
 
 function mapperTests() {
+  assert.equal(Object.values(Intake.capabilityRegistry).some(definition => Object.hasOwn(definition, 'aliases')), false, 'the capability registry uses only explicit collection metadata');
   const report = Intake.parseReport(JSON.stringify(valid({
     person: { displayName: 'Campbell Example', accountName: 'campbell', email: 'campbell@example.test' },
     computer: {
@@ -85,11 +86,11 @@ function mapperTests() {
   const entityType = {
     id: 'computer', label: 'Computer', category: 'devices',
     fields: [
-      { name: 'hostname', label: 'Hostname', type: 'text' },
+      { name: 'hostname', label: 'Hostname', type: 'text', collection: { provider: 'windows', capability: 'computer.hostname' } },
       { name: 'assetModel', label: 'Asset model', type: 'text', collection: { provider: 'windows', capability: 'computer.model' } },
-      { name: 'cpu', label: 'CPU', type: 'text' },
-      { name: 'ram', label: 'RAM', type: 'dropdown', options: [{ value: '8GB' }, { value: '32GB' }] },
-      { name: 'gpu', label: 'GPU', type: 'textarea' },
+      { name: 'cpu', label: 'CPU', type: 'text', collection: { provider: 'windows', capability: 'processor.summary' } },
+      { name: 'ram', label: 'RAM', type: 'dropdown', options: [{ value: '8GB' }, { value: '32GB' }], collection: { provider: 'windows', capability: 'memory.total' } },
+      { name: 'gpu', label: 'GPU', type: 'textarea', collection: { provider: 'windows', capability: 'graphics.adapters' } },
       { name: 'serialNumber', label: 'Serial', type: 'checkbox' },
       { name: 'build', label: 'Build', type: 'number', collection: { provider: 'windows', capability: 'windows.build' } },
       { name: 'notes', label: 'Notes', type: 'textarea' }
@@ -116,7 +117,7 @@ function mapperTests() {
   ]);
   assert.ok(proposal.unmapped.some(item => item.fact === 'manufacturer' && /no existing field/i.test(item.reason)));
   assert.ok(proposal.unmapped.some(item => item.fact === 'memorySummary' && /dropdown option/i.test(item.reason)));
-  assert.ok(proposal.unmapped.some(item => item.fact === 'serialNumber' && /field type/i.test(item.reason)));
+  assert.ok(proposal.unmapped.some(item => item.fact === 'serialNumber' && /no existing field/i.test(item.reason)));
   assert.ok(proposal.unmapped.some(item => item.fact === 'windowsBuild' && /field type/i.test(item.reason)));
   assert.equal(proposal.mapped.some(item => item.field === 'notes'), false, 'unknown custom fields remain untouched');
   assert.deepEqual(proposal.accountContext, {
@@ -129,23 +130,24 @@ function mapperTests() {
   assert.equal(JSON.stringify(draft), before.draft, 'mapping must not mutate draft values');
 
   const customRegistry = {
-    'computer.hostname': { source: 'hostname', aliases: ['machineName'], fieldTypes: ['text'] }
+    'computer.hostname': { source: 'hostname', fieldTypes: ['text'] }
   };
   const customType = { id: 'device', fields: [{ name: 'machineName', type: 'text' }] };
   const customProposal = Intake.createDraftProposal(report, customType, {}, customRegistry);
-  assert.deepEqual(customProposal.mapped.map(item => item.field), ['machineName']);
+  assert.deepEqual(customProposal.mapped, [], 'field names do not substitute for explicit collection metadata');
+  assert.ok(customProposal.unmapped.some(item => item.fact === 'hostname'), 'an unannotated field does not claim a collected fact');
   assert.ok(customProposal.unmapped.every(item => item.fact !== 'model'), 'facts outside the supplied registry are not claimed as mapped or unmapped');
 
   const dropdownReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME', processorSummary: '13th Gen Intel(R) Core(TM) i5-1335U', memorySummary: '16 GB' } })));
   const dropdownType = { id: 'computer', fields: [
-    { name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5' }, { value: 'Intel Core i7' }] },
-    { name: 'ram', type: 'dropdown', options: [{ value: '16GB' }] }
+    { name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5' }, { value: 'Intel Core i7' }], collection: { provider: 'windows', capability: 'processor.summary' } },
+    { name: 'ram', type: 'dropdown', options: [{ value: '16GB' }], collection: { provider: 'windows', capability: 'memory.total' } }
   ] };
   const dropdownProposal = Intake.createDraftProposal(dropdownReport, dropdownType, {});
   assert.deepEqual(dropdownProposal.mapped.map(item => item.value), ['Intel Core i5', '16GB'], 'dropdown comparisons normalize harmless formatting and uniquely match a configured processor family while preserving canonical options');
 
   const ambiguousCpuReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME', processorSummary: '13th Gen Intel(R) Core(TM) i5-1335U' } })));
-  const modelLikeCpuType = { id: 'computer', fields: [{ name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5 1335' }] }] };
+  const modelLikeCpuType = { id: 'computer', fields: [{ name: 'cpu', type: 'dropdown', options: [{ value: 'Intel Core i5 1335' }], collection: { provider: 'windows', capability: 'processor.summary' } }] };
   const unsafePartial = Intake.createDraftProposal(ambiguousCpuReport, modelLikeCpuType, {});
   assert.equal(unsafePartial.mapped.length, 0, 'model-like partial CPU options must not be guessed as processor families');
   assert.ok(unsafePartial.unmapped.some(item => item.fact === 'processorSummary' && /dropdown option/i.test(item.reason)));
@@ -158,10 +160,18 @@ function mapperTests() {
   assert.equal(foreignProviderProposal.mapped.some(item => item.field === 'hostname'), false, 'legacy aliases must not override explicit non-Windows metadata');
   assert.ok(foreignProviderProposal.unmapped.some(item => item.fact === 'hostname'));
 
-  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', fields: [] }), true, 'the current Computer type remains eligible');
+  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', fields: [] }), false, 'an unconfigured type is not eligible based on its ID');
   assert.equal(Intake.isCompatibleEntityType({ id: 'custom-device', collection: { provider: 'windows', kind: 'computer' }, fields: [] }), true, 'explicit type metadata enables a configured Computer type');
-  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', collection: { provider: 'other', kind: 'computer' }, fields: [] }), false, 'explicit incompatible provider metadata wins over the legacy ID');
+  assert.equal(Intake.isCompatibleEntityType({ id: 'computer', collection: { provider: 'other', kind: 'computer' }, fields: [] }), false, 'incompatible provider metadata is not eligible');
   assert.equal(Intake.isCompatibleEntityType({ id: 'phone', fields: [] }), false);
+
+  const unscopedLegacyType = {
+    id: 'computer',
+    collection: { provider: 'windows', kind: 'computer' },
+    fields: [{ name: 'cpu', type: 'text' }]
+  };
+  const unscopedLegacyProposal = Intake.createDraftProposal(report, unscopedLegacyType, {});
+  assert.equal(unscopedLegacyProposal.mapped.length, 0, 'field names without collection metadata do not map collected facts');
 }
 
 function recommendedFieldTests() {
@@ -183,8 +193,8 @@ function recommendedFieldTests() {
   assert.ok(proposal.added.some(field => field.name === 'manufacturer'));
   assert.ok(proposal.added.some(field => field.name === 'model'));
   assert.ok(proposal.added.some(field => field.name === 'graphicsAdapters' && field.type === 'textarea'));
-  assert.equal(proposal.added.some(field => field.name === 'cpu'), false, 'existing legacy CPU alias remains authoritative');
-  assert.equal(proposal.added.some(field => field.name === 'ram'), false, 'existing legacy RAM alias remains authoritative');
+  assert.equal(proposal.added.some(field => field.name === 'processorSummary'), true, 'unscoped legacy CPU names do not claim a capability');
+  assert.equal(proposal.added.some(field => field.name === 'memorySummary'), true, 'unscoped legacy RAM names do not claim a capability');
   assert.equal(proposal.added.some(field => field.name === 'serialNumber'), false, 'an existing explicit capability must not be duplicated under a recommended name');
   assert.deepEqual(proposal.entityType.fields.slice(0, original.fields.length), original.fields, 'existing field definitions and order must be preserved');
   assert.equal(proposal.entityType.fields.every(field => field.required !== true || original.fields.includes(field)), true, 'recommended fields must be optional');
@@ -192,9 +202,14 @@ function recommendedFieldTests() {
 
   const unscoped = { id: 'computer', fields: [{ name: 'machineName', type: 'text', collection: { capability: 'computer.hostname' } }] };
   const unscopedProposal = Intake.addRecommendedWindowsFields(unscoped);
-  assert.equal(unscopedProposal.added.some(field => field.collection.capability === 'computer.hostname'), false, 'an unscoped existing Windows capability must not be duplicated');
+  assert.equal(unscopedProposal.added.some(field => field.collection.capability === 'computer.hostname'), true, 'provider-less collection metadata must not claim a Windows capability');
   const hostnameReport = Intake.parseReport(JSON.stringify(valid({ computer: { hostname: 'PC', windowsDomain: 'ACME' } })));
-  assert.deepEqual(Intake.createDraftProposal(hostnameReport, unscopedProposal.entityType, {}).mapped.map(item => item.field), ['machineName']);
+  assert.deepEqual(Intake.createDraftProposal(hostnameReport, unscopedProposal.entityType, {}).mapped.map(item => item.field), ['hostname']);
+
+  const namedButUnscoped = { id: 'computer', fields: [{ name: 'hostname', type: 'text' }] };
+  const namedButUnscopedProposal = Intake.addRecommendedWindowsFields(namedButUnscoped);
+  assert.equal(namedButUnscopedProposal.added.some(field => field.name === 'hostname'), false, 'an existing field name must not be duplicated when it lacks collection metadata');
+  assert.equal(namedButUnscopedProposal.entityType.fields.filter(field => field.name === 'hostname').length, 1, 'recommended fields must preserve unique entity field names');
 }
 
 parserTests();
