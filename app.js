@@ -484,12 +484,18 @@ const Storage = {
 
   async setAppDataForImport(data, identity) {
     if (backendClient) {
+      const generation = this._accountGeneration;
       if (!identity || !identity.userId || !identity.accessToken || this._cachedUserId !== identity.userId) throw new Error('Signed-in account identity could not be confirmed.');
       if (this._readOutbox(identity.userId).length) throw new Error('Unsynced local changes must be synced or resolved before restoring a full backup.');
       const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: data, expectedUpdatedAt: identity.expectedUpdatedAt ?? null }, authSession: { access_token: identity.accessToken } });
       if (!res || !res.ok) throw new Error((res && res.data && res.data.error) || 'Failed to save imported data');
       const row = res.data || {};
       if (!row.payload || !jsonValuesEqual(row.payload, data)) throw new Error('Imported data acknowledgement did not match the reviewed data.');
+      if (generation !== this._accountGeneration) {
+        const error = new Error('The signed-in account changed while the import was saved. Reload before continuing.');
+        error.accountInvalidated = true;
+        throw error;
+      }
       const updatedAt = row.updated_at ? row.updated_at : new Date().toISOString();
       try {
         this._cached = data;
@@ -7574,6 +7580,13 @@ ${removal}
           if (Storage.getOnboardingDone()) dataToSave.onboardingDone = true;
           if (await Storage.setAppDataForImport(dataToSave, importIdentity) !== true) throw new Error('Import persistence was not confirmed.');
         } catch (err) {
+          if (err.accountInvalidated) {
+            this._importDataPreview = null;
+            this._importPreviewIdentity = null;
+            this.closeModal('importModal');
+            this.showNotification(err.message, 'error');
+            return;
+          }
           if (err.remoteCommitted) {
             this.data = candidate;
             this._importDataPreview = null;

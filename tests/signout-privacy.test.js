@@ -310,12 +310,52 @@ async function testQueuedSaveCannotSendAfterCrossTabInvalidation() {
   });
 }
 
+async function testStaleImportAcknowledgementCannotRestoreAccountState() {
+  await withPages(async (first, second) => {
+    await second.evaluate(() => {
+      const current = { version: 'test', entities: { secretA: { name: 'Account A inventory' } } };
+      const candidate = { version: 'test', entities: { imported: { name: 'Imported inventory' } } };
+      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(current));
+      Storage._cached = structuredClone(current);
+      Storage._cachedUserId = 'account-a';
+      App.data = structuredClone(current);
+      backendClient = {};
+      window.ELISTLY_API_URL = '/mock';
+      window.__importStarted = new Promise(resolve => { window.__resolveImportStarted = resolve; });
+      window.fetch = async () => {
+        window.__resolveImportStarted();
+        return new Promise(resolve => { window.__releaseImport = () => resolve(new Response(JSON.stringify({ payload: candidate, updated_at: 'new' }), { status: 200 })); });
+      };
+      window.__pendingImport = Storage.setAppDataForImport(candidate, { userId: 'account-a', accessToken: 'test-token', expectedUpdatedAt: null }).catch(error => ({ accountInvalidated: error.accountInvalidated }));
+    });
+
+    await second.evaluate(() => window.__importStarted);
+    await first.evaluate(() => localStorage.removeItem('elistlyData:user:account-a'));
+    await second.waitForFunction(() => Storage._cached === null && Storage._cachedUserId === null);
+    const afterImport = await second.evaluate(async () => {
+      window.__releaseImport();
+      return {
+        result: await window.__pendingImport,
+        cache: localStorage.getItem('elistlyData:user:account-a'),
+        updatedAt: localStorage.getItem('elistlyData:userUpdated:account-a'),
+        entities: App.data.entities
+      };
+    });
+
+    assert.deepEqual(afterImport.result, { accountInvalidated: true }, 'a stale import acknowledgement must report invalidated account state');
+    assert.equal(afterImport.cache, null, 'a stale import acknowledgement must not recreate the removed account cache');
+    assert.equal(afterImport.updatedAt, null, 'a stale import acknowledgement must not recreate the removed account revision');
+    assert.deepEqual(afterImport.entities, {}, 'a stale import acknowledgement must not restore cleared runtime inventory');
+  });
+}
+
 async function run() {
   await testLateInventoryReadCannotUndoSignOutCleanup();
   await testSignOutInAnotherTabClearsStaleInMemoryInventory();
   await testStaleCrossTabRemovalCannotRestoreInFlightSaveState();
   await testStaleCrossTabSaveFailureCannotOverwriteClearedSyncState();
   await testQueuedSaveCannotSendAfterCrossTabInvalidation();
+  await testStaleImportAcknowledgementCannotRestoreAccountState();
   await testSignOutClearsDurableAccountDataWithoutCrossAccountHydration();
   await testPendingEditsBlockSignOutInsteadOfBeingDiscarded();
   await testFailedLocalCleanupDoesNotClaimSignOutIsSafe();
