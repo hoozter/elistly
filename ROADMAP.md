@@ -1,6 +1,6 @@
 # Elistly roadmap
 
-Last updated: 2026-09-17
+Last updated: 2026-09-19
 
 ## Product direction: earn a hosted subscription
 
@@ -49,7 +49,7 @@ David intends to complete the first managed computer and install scheduled devic
 
 Security and operational trust are baseline service qualities, not paid-tier restrictions. Continue bounded work that does not disrupt the reporting acceptance:
 
-- Verify current Neon Auth support for passkeys with user verification and/or MFA against authoritative documentation and an isolated test environment. Define strong enrollment, recovery and factor-removal behavior; never deploy an untested authentication cutover or lock David out.
+- Restore real authenticator-app MFA, recovery and server-enforced assurance while retaining Neon Postgres. Loss of MFA from Supabase violates the migration acceptance requirement; truthful disabling does not complete this outcome. The explicit architecture review is complete; implementation is held at the account-preservation gate below.
 - Review and harden token validation, expiry, issuer/audience rules, session revocation and sensitive-action reauthentication. Prove cross-account denial rather than trusting happy-path tests.
 - Review stored-XSS/browser policy protection, local inventory/outbox retention, logout cleanup and shared-device exposure without discarding unsynced changes.
   - Local retention/sign-out hardening, including storage-layer cross-tab invalidation and stale asynchronous save/import guards, is implemented and deterministically verified by the repository lifecycle suite. [Scope, exact coverage and residual risks](docs/local-retention-security.md) are recorded separately. Hosted provider-cookie/session acceptance remains open because no disposable provider environment was available; complete cross-tab lifecycle policy remains open. This is not a deployment or shared-browser safety claim.
@@ -57,7 +57,11 @@ Security and operational trust are baseline service qualities, not paid-tier res
 - Review per-device versus enrollment credential boundaries, rate/body limits, logging without secrets, recovery and audit needs. Do not broaden registration-only credentials.
 - Deliver verified fixes for bounded defects and a concise remaining-risk/decision list. No claims of zero risk; no backward-compatibility branches. Preserve dirty work and real records; no destructive tests on production.
 
-Neon Managed Auth currently does not provide the required MFA capability, and no imitation second-factor flow is authorized. A provider migration or self-hosted authentication design needs explicit review before implementation. The current database connection also cannot prove tenant isolation with RLS because the shared runtime role can forge application-supplied identity; choose a trusted identity boundary before any RLS migration.
+**Authentication review, 2026-09-19 — completed; MFA replacement blocked on migration evidence.** [Review, authoritative sources, proposed security contract and acceptance gates](docs/authentication-architecture-review.md). Current Neon documentation still lists MFA as coming soon. Self-hosted Better Auth in the existing Worker with Neon Postgres is the recommended single-authority replacement, but no safe account-preserving cutover is yet proven. Read-only database joins found two distinct owner identities without current auth users (two inventory rows, one profile row and one admin row); their provenance is unknown. Current password fields are readable and scrypt-shaped, but no provider-created known-password fixture proves portability. The managed schema has no MFA factor table, and prior Supabase factor material/disposition is unverified.
+
+**Exact first next action:** David/account owner must locate the prior identity migration record/provider backup and securely reconcile the two unmatched owner identities, then establish old-factor export/decryption availability or explicitly approve verified recovery/re-enrollment. Keep all records intact; do not infer ownership from email, recreate accounts or downgrade MFA. A disposable provider credential export must subsequently pass verification with the selected Better Auth release before an import is written. This is missing identity/provider evidence, not an invitation to repeat the same review. No runtime auth change, production mutation or deployment was made. The complete execution receipt is `.hermes/coordinator-mfa-report.md`.
+
+The current database connection also cannot prove tenant isolation with RLS because the shared runtime role can forge application-supplied identity; choose a trusted identity boundary before any RLS migration.
 
 This is an active roadmap outcome, not a reminder-only item. Use the existing portfolio coordinator for continuation rather than restoring obsolete Elistly workers. Major provider/migration decisions or required account-owner actions are escalations; lack of native Windows access does not block independent documentation, compatibility, testing or security work.
 

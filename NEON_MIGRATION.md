@@ -43,5 +43,5 @@ When an authenticated user's email matches `ELISTLY_ADMIN_EMAILS`, the Worker al
 ## Remaining backend work
 
 - Add production-grade password reset/email-change flows through Neon Auth.
-- Revisit MFA once Neon Auth MFA requirements are defined for this app.
+- Restore authenticator-app MFA, recovery and server-enforced assurance: this is an outstanding Supabase migration defect. The [2026-09-19 architecture review](docs/authentication-architecture-review.md) recommends self-hosted Better Auth on Neon, with implementation held pending verified ownership and credential/factor migration evidence. `ROADMAP.md` owns the exact resume action.
 - Add automated smoke tests for Worker auth, app data, profile, and admin routes.
