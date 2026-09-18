@@ -38,7 +38,7 @@ function loadServiceWorker({ fetch, keys = [], match }) {
       delete: async key => { deleted.push(key); return true; }
     },
     self: {
-      location: { origin: 'https://elistly.test' },
+      location: { origin: 'https://elistly.test', href: 'https://elistly.test/sw.js' },
       addEventListener: (type, listener) => { listeners[type] = listener; },
       skipWaiting: () => {},
       clients: { claim: () => {} }
@@ -58,6 +58,22 @@ async function testDoesNotCacheRuntimeConfiguration() {
   const harness = loadServiceWorker({ fetch: async () => response('window.ELISTLY_API_URL = "https://api.example";') });
   await dispatchFetch(harness, { method: 'GET', mode: 'no-cors', url: 'https://elistly.test/config.js' });
   assert.equal(harness.puts.length, 0, 'runtime configuration must remain network-only and never enter the shell cache');
+}
+
+async function testPrivateResponsesNeverEnterShellCache() {
+  for (const pathname of ['/app-data', '/users/me', '/get-session', '/device-reporting/devices', '/app.html?private=synthetic']) {
+    for (const mode of ['cors', 'navigate']) {
+      let cacheReads = 0;
+      const harness = loadServiceWorker({
+        fetch: async () => response('synthetic private response'),
+        match: () => { cacheReads += 1; return response('old private response'); }
+      });
+      const result = await dispatchFetch(harness, { method: 'GET', mode, url: `https://elistly.test${pathname}` });
+      assert.equal(result, undefined, 'non-shell requests must remain browser network requests');
+      assert.equal(harness.puts.length, 0, 'private responses must never be retained by the service worker');
+      assert.equal(cacheReads, 0, 'private requests must never receive old cached responses');
+    }
+  }
 }
 
 async function testNavigationPrefersFreshDocument() {
@@ -93,6 +109,12 @@ function testRegistrationWaitsForSafeReload() {
 }
 
 function testShellVersionMatchesLoadedBundles() {
+  for (const document of [appDocument, fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')]) {
+    for (const [, src] of document.matchAll(/<script src="([^"]+)"/g)) {
+      if (src === 'config.js' || src.startsWith('https://')) continue;
+      assert.ok(serviceWorker.includes(`'./${src}'`), `local shell dependency ${src} must remain available offline`);
+    }
+  }
   const shellVersion = /elistly-shell-v(\d+)/.exec(serviceWorker)[1];
   const appVersion = /app\.js\?v=(\d+)/.exec(appDocument)[1];
   const styleVersion = /styles\.css\?v=(\d+)/.exec(appDocument)[1];
@@ -106,6 +128,7 @@ function testShellVersionMatchesLoadedBundles() {
 
 (async () => {
   await testDoesNotCacheRuntimeConfiguration();
+  await testPrivateResponsesNeverEnterShellCache();
   await testNavigationPrefersFreshDocument();
   await testOfflineNavigationFallsBackToShell();
   await testActivationRetiresOnlyPriorElistlyShells();

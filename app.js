@@ -141,6 +141,7 @@ const Storage = {
   USER_CACHE_PREFIX: 'elistlyData:user:',
   USER_UPDATED_PREFIX: 'elistlyData:userUpdated:',
   USER_OUTBOX_PREFIX: 'elistlyData:outbox:',
+  _accountGeneration: 0,
   _cached: null,
   _cachedUserId: null,
   _isDirty: false,
@@ -201,6 +202,7 @@ const Storage = {
       throw new Error('Local account data could not be cleared. Sign out was not completed.');
     }
 
+    this._accountGeneration += 1;
     this._cached = null;
     this._cachedUserId = null;
     this._isDirty = false;
@@ -211,14 +213,14 @@ const Storage = {
   _readOutbox(userId) {
     try {
       const raw = localStorage.getItem(this._getUserOutboxKey(userId));
-      if (!raw) return [];
+      if (raw === null) return [];
       const outbox = JSON.parse(raw);
       if (!Array.isArray(outbox) || outbox.some(entry => !entry || typeof entry !== 'object' || !entry.id || !entry.payload || typeof entry.payload !== 'object' || Array.isArray(entry.payload))) throw new Error('Invalid outbox');
       return outbox;
     } catch (_) {
-      localStorage.removeItem(this._getUserOutboxKey(userId));
-      this._setSyncStatus('failed', 'Saved changes could not be read locally. They were not sent.');
-      return [];
+      const message = 'Local pending changes could not be read and were retained for recovery.';
+      this._setSyncStatus('failed', message);
+      throw new Error(message);
     }
   },
 
@@ -227,8 +229,7 @@ const Storage = {
   },
 
   async _saveNextOutboxEntry(userId) {
-    const pending = this._readOutbox(userId);
-    const next = pending[0];
+    const next = this._readOutbox(userId)[0];
     if (!next) return;
     const expectedUpdatedAt = this._readUserUpdatedAt(userId) || null;
     const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: next.payload, expectedUpdatedAt } });
@@ -236,7 +237,7 @@ const Storage = {
     const row = res.data || {};
     const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
     this._writeUserCache(userId, next.payload, updatedAt);
-    pending.shift();
+    const pending = this._readOutbox(userId).filter(entry => entry.id !== next.id);
     this._writeOutbox(userId, pending);
     this._isDirty = pending.length > 0;
     this._setSyncStatus(pending.length ? 'pending' : 'synced', pending.length ? 'Changes are waiting to sync.' : 'Changes are synced.');
@@ -308,10 +309,12 @@ const Storage = {
   },
 
   async getAppDataAsync(options = {}) {
+    const generation = this._accountGeneration;
     if (backendClient) {
       try {
         const onRemoteSync = typeof options.onRemoteSync === 'function' ? options.onRemoteSync : null;
         const user = await getAuthUser();
+        if (generation !== this._accountGeneration) throw new Error('Account changed while loading inventory.');
         if (!user) {
           const error = new Error('Signed-in account data could not be confirmed.');
           this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
@@ -338,6 +341,7 @@ const Storage = {
         }
 
         const res = await apiRequest('/app-data');
+        if (generation !== this._accountGeneration) throw new Error('Account changed while loading inventory.');
         if (!res.ok) {
           console.error('Storage.getAppData API error', res.data);
           const error = new Error((res.data && res.data.error) || 'Account data could not be loaded.');
@@ -351,7 +355,7 @@ const Storage = {
         return this._cached;
       } catch (e) {
         console.error('Storage.getAppData failed', e);
-        this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
+        if (generation === this._accountGeneration) this._setSyncStatus('failed', 'Account data could not be loaded. Local changes are retained.');
         throw e;
       }
     }
@@ -364,8 +368,10 @@ const Storage = {
   },
 
   async syncRemoteInBackground(userId, cachedUpdatedAt, onRemoteSync) {
+    const generation = this._accountGeneration;
     try {
       const res = await apiRequest('/app-data');
+      if (generation !== this._accountGeneration) return;
       if (!res.ok) {
         console.error('Storage.syncRemoteInBackground API error', res.data);
         this._setSyncStatus('failed', 'Account data could not be refreshed. Local changes are retained.');
@@ -387,7 +393,7 @@ const Storage = {
       if (changed && onRemoteSync) onRemoteSync(remotePayload);
     } catch (e) {
       console.error('Storage.syncRemoteInBackground failed', e);
-      this._setSyncStatus('failed', 'Account data could not be refreshed. Local changes are retained.');
+      if (generation === this._accountGeneration) this._setSyncStatus('failed', 'Account data could not be refreshed. Local changes are retained.');
     }
   },
 

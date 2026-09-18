@@ -1,15 +1,19 @@
 'use strict';
 
-const CACHE_NAME = 'elistly-shell-v30';
+const CACHE_NAME = 'elistly-shell-v31';
 const APP_SHELL = [
   './',
   './index.html',
   './app.html',
   './styles.css?v=19',
-  './app.js?v=38',
+  './app.js?v=39',
   './device-intake.js?v=3',
-  './lib/db.js?v=1',
+  './lib/db.js?v=2',
   './faq.js',
+  './pwa-register.js',
+  './landing-auth-redirect.js',
+  './vendor/qrcode-generator/qrcode.js',
+  './vendor/qrcode-generator/qrcode_UTF8.js',
   './sample-data.js',
   './setup-blank.js',
   './setup-library.js',
@@ -52,7 +56,8 @@ self.addEventListener('fetch', (event) => {
   const reqUrl = new URL(event.request.url);
   if (reqUrl.origin !== self.location.origin) return;
 
-  if (reqUrl.pathname.endsWith('/config.js') || reqUrl.pathname.endsWith('/config.example.js')) return;
+  // Only explicit public shell assets belong in Cache Storage, never API/auth data.
+  if (!APP_SHELL.some(asset => new URL(asset, self.location.href).href === reqUrl.href)) return;
 
   if (event.request.mode === 'navigate') {
     event.respondWith(

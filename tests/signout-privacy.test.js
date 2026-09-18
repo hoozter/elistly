@@ -23,6 +23,7 @@ async function withPage(run) {
   const server = await startStaticServer();
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  await page.route('**/config.js', route => route.fulfill({ contentType: 'application/javascript', body: 'window.ELISTLY_API_URL = "/mock"; window.NEON_AUTH_URL = "/mock-auth";' }));
   try {
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
     await run(page);
@@ -112,7 +113,41 @@ async function testFailedAuthSignOutIsReportedTruthfullyAfterCleanup() {
   });
 }
 
+async function testLateInventoryReadCannotUndoSignOutCleanup() {
+  for (const background of [false, true]) {
+    await withPage(async page => {
+      const observed = await page.evaluate(async background => {
+        backendClient = { auth: {
+          getUser: async () => ({ data: { user: { id: 'account-a' } } }),
+          getSession: async () => ({ data: { session: { access_token: 'test-token' } } })
+        } };
+        window.ELISTLY_API_URL = '/mock';
+        let release, started;
+        const waiting = new Promise(resolve => { started = resolve; });
+        window.fetch = async () => {
+          started();
+          await new Promise(resolve => { release = resolve; });
+          return new Response(JSON.stringify({ payload: { entities: { secret: true } }, updated_at: 'new' }));
+        };
+        let callbacks = 0;
+        const loading = background
+          ? Storage.syncRemoteInBackground('account-a', '', () => { callbacks += 1; })
+          : Storage.getAppData().catch(() => null);
+        await waiting;
+        await Storage.prepareForSignOut();
+        release();
+        await loading;
+        return { cached: Storage._cached, keys: Object.keys(localStorage).filter(key => key.startsWith('elistlyData')), callbacks };
+      }, background);
+      assert.equal(observed.cached, null, 'a late inventory response must not restore signed-out account memory');
+      assert.deepEqual(observed.keys, [], 'a late inventory response must not recreate durable account data');
+      assert.equal(observed.callbacks, 0, 'a late inventory response must not render signed-out inventory');
+    });
+  }
+}
+
 async function run() {
+  await testLateInventoryReadCannotUndoSignOutCleanup();
   await testSignOutClearsDurableAccountDataWithoutCrossAccountHydration();
   await testPendingEditsBlockSignOutInsteadOfBeingDiscarded();
   await testFailedLocalCleanupDoesNotClaimSignOutIsSafe();

@@ -26,6 +26,7 @@ async function withPage(run, setup) {
   const server = await startStaticServer();
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  await page.route('**/config.js', route => route.fulfill({ contentType: 'application/javascript', body: 'window.ELISTLY_API_URL = "https://api.elistly.test"; window.NEON_AUTH_URL = "/mock-auth";' }));
   try {
     if (setup) await setup(page);
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
@@ -334,12 +335,49 @@ async function testMalformedOutboxFailsSafely() {
   await withPage(async page => {
     const observed = await page.evaluate(() => {
       localStorage.setItem('elistlyData:outbox:user-1', '{not-json');
-      return { outbox: Storage._readOutbox('user-1'), persisted: localStorage.getItem('elistlyData:outbox:user-1'), status: Storage.getSyncStatus() };
+      let error;
+      try { Storage._readOutbox('user-1'); } catch (caught) { error = caught.message; }
+      return { error, persisted: localStorage.getItem('elistlyData:outbox:user-1'), status: Storage.getSyncStatus() };
     });
 
-    assert.deepEqual(observed.outbox, [], 'malformed outbox data must not be used as a save request');
-    assert.equal(observed.persisted, null, 'malformed outbox data must be removed rather than retried');
+    assert.match(observed.error || '', /retained/, 'unreadable pending changes must stop the caller instead of looking like an empty queue');
+    assert.equal(observed.persisted, '{not-json', 'unreadable pending changes must remain available for recovery');
     assert.equal(observed.status.state, 'failed', 'malformed outbox data must be visible as a failure');
+  });
+}
+
+async function testAcknowledgementPreservesEditsQueuedDuringSave() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'queue-user' } } }),
+        getSession: async () => ({ data: { session: { access_token: 'test-token' } } })
+      } };
+      window.ELISTLY_API_URL = '/mock';
+      let release, started;
+      const waiting = new Promise(resolve => { started = resolve; });
+      const requests = [];
+      window.fetch = async (_url, options) => {
+        requests.push(JSON.parse(options.body));
+        if (requests.length === 1) {
+          started();
+          await new Promise(resolve => { release = resolve; });
+        }
+        return new Response(JSON.stringify({ updated_at: `revision-${requests.length}` }), { status: 200 });
+      };
+      const first = Storage.setAppData({ entities: { first: true } });
+      await waiting;
+      const second = Storage.setAppData({ entities: { second: true } });
+      await Promise.resolve();
+      await Promise.resolve();
+      release();
+      await Promise.all([first, second]);
+      return { requests, cache: Storage._readUserCache('queue-user'), outbox: Storage._readOutbox('queue-user') };
+    });
+    assert.equal(observed.requests.length, 2, 'acknowledging an older save must not silently discard a newer queued edit');
+    assert.deepEqual(observed.requests[1], { payload: { entities: { second: true } }, expectedUpdatedAt: 'revision-1' });
+    assert.deepEqual(observed.cache, { entities: { second: true } });
+    assert.deepEqual(observed.outbox, []);
   });
 }
 
@@ -526,7 +564,7 @@ async function testWorkspaceOnlyAccountDataSurvivesInitNamingSaveAndReload() {
     return { afterHydration, persistedAfterNamingSave, afterReload };
   }, async page => {
     await page.addInitScript(fakeToken => localStorage.setItem('elistly_token', fakeToken), token);
-    await page.route('https://elistly-api.royal-poetry-e390.workers.dev/**', async route => {
+    await page.route('https://api.elistly.test/**', async route => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
       if (pathname === '/admin/me') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ admin: false }) });
@@ -589,7 +627,7 @@ async function testEmptyActiveWorkspaceHydratesInactiveWorkspaceAndAccountSettin
     return { hydrated, persisted: structuredClone(remote), reloaded: await page.evaluate(() => structuredClone(App.data)) };
   }, async page => {
     await page.addInitScript(fakeToken => localStorage.setItem('elistly_token', fakeToken), token);
-    await page.route('https://elistly-api.royal-poetry-e390.workers.dev/**', async route => {
+    await page.route('https://api.elistly.test/**', async route => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
       if (pathname === '/admin/me') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ admin: false }) });
@@ -739,6 +777,7 @@ async function run() {
   await testConcurrentReconnectsSerializeOnePendingReplay();
   await testOnlineReconnectRetriesPendingSave();
   await testMalformedOutboxFailsSafely();
+  await testAcknowledgementPreservesEditsQueuedDuringSave();
   await testFailedAccountHydrationDoesNotStartAnEmptyAccount();
   await testFailedBackgroundHydrationPreservesCachedData();
   await testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible();
