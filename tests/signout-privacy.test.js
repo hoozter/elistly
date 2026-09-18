@@ -188,9 +188,134 @@ async function testSignOutInAnotherTabClearsStaleInMemoryInventory() {
   });
 }
 
+async function testStaleCrossTabRemovalCannotRestoreInFlightSaveState() {
+  await withPages(async (first, second) => {
+    await second.evaluate(() => {
+      const accountA = { version: 'test', entities: { secretA: { name: 'Account A inventory' } } };
+      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(accountA));
+      localStorage.setItem('elistlyData:outbox:account-a', JSON.stringify([{ id: 'pending', payload: accountA }]));
+      Storage._cached = structuredClone(accountA);
+      Storage._cachedUserId = 'account-a';
+      App.data = structuredClone(accountA);
+      window.ELISTLY_API_URL = '/mock';
+      window.__saveStarted = new Promise(resolve => { window.__resolveSaveStarted = resolve; });
+      window.fetch = async () => {
+        window.__resolveSaveStarted();
+        return new Promise(resolve => {
+          window.__releaseSave = () => resolve(new Response(JSON.stringify({ updated_at: 'new' }), { status: 200 }));
+        });
+      };
+      window.__pendingSave = Storage._saveNextOutboxEntry('account-a');
+    });
+
+    await second.evaluate(() => window.__saveStarted);
+    await first.evaluate(() => localStorage.removeItem('elistlyData:user:account-a'));
+    await second.waitForFunction(() => Storage._cached === null && Storage._cachedUserId === null);
+    const afterSave = await second.evaluate(async () => {
+      window.__releaseSave();
+      await window.__pendingSave;
+      return {
+        cached: Storage._cached,
+        cachedUserId: Storage._cachedUserId,
+        entities: App.data.entities,
+        cache: localStorage.getItem('elistlyData:user:account-a'),
+        updatedAt: localStorage.getItem('elistlyData:userUpdated:account-a'),
+        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:account-a')),
+        syncStatus: Storage.getSyncStatus()
+      };
+    });
+
+    assert.equal(afterSave.cached, null, 'a stale save acknowledgement must not restore cleared account memory');
+    assert.equal(afterSave.cachedUserId, null, 'a stale save acknowledgement must not restore the cleared account binding');
+    assert.deepEqual(afterSave.entities, {}, 'a stale save acknowledgement must not restore cleared runtime inventory');
+    assert.equal(afterSave.cache, null, 'a stale save acknowledgement must not recreate the removed account cache');
+    assert.equal(afterSave.updatedAt, null, 'a stale save acknowledgement must not recreate the removed account revision');
+    assert.deepEqual(afterSave.outbox, [{ id: 'pending', payload: { version: 'test', entities: { secretA: { name: 'Account A inventory' } } } }], 'a stale save acknowledgement must retain the unconfirmed local edit for recovery');
+    assert.equal(afterSave.syncStatus.state, 'idle', 'a stale save acknowledgement must not overwrite the cleared tab sync state');
+  });
+}
+
+async function testStaleCrossTabSaveFailureCannotOverwriteClearedSyncState() {
+  await withPages(async (first, second) => {
+    await second.evaluate(() => {
+      const accountA = { version: 'test', entities: { secretA: { name: 'Account A inventory' } } };
+      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(accountA));
+      Storage._cached = structuredClone(accountA);
+      Storage._cachedUserId = 'account-a';
+      App.data = structuredClone(accountA);
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'account-a' } } }),
+        getSession: async () => ({ data: { session: { access_token: 'test-token' } } })
+      } };
+      window.ELISTLY_API_URL = '/mock';
+      window.__saveStarted = new Promise(resolve => { window.__resolveSaveStarted = resolve; });
+      window.fetch = async () => {
+        window.__resolveSaveStarted();
+        return new Promise((_, reject) => { window.__rejectSave = () => reject(new Error('network unavailable')); });
+      };
+      window.__pendingSave = Storage.setAppDataAsync(accountA).catch(() => null);
+    });
+
+    await second.evaluate(() => window.__saveStarted);
+    await first.evaluate(() => localStorage.removeItem('elistlyData:user:account-a'));
+    await second.waitForFunction(() => Storage._cached === null && Storage._cachedUserId === null);
+    const afterFailure = await second.evaluate(async () => {
+      window.__rejectSave();
+      await window.__pendingSave;
+      return { isDirty: Storage._isDirty, syncStatus: Storage.getSyncStatus() };
+    });
+
+    assert.equal(afterFailure.isDirty, false, 'a stale save failure must not mark cleared account state as dirty');
+    assert.equal(afterFailure.syncStatus.state, 'idle', 'a stale save failure must not overwrite the cleared tab sync state');
+  });
+}
+
+async function testQueuedSaveCannotSendAfterCrossTabInvalidation() {
+  await withPages(async (first, second) => {
+    await second.evaluate(() => {
+      const firstPayload = { version: 'test', entities: { first: { name: 'First edit' } } };
+      const secondPayload = { version: 'test', entities: { second: { name: 'Second edit' } } };
+      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(firstPayload));
+      Storage._cached = structuredClone(firstPayload);
+      Storage._cachedUserId = 'account-a';
+      App.data = structuredClone(firstPayload);
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'account-a' } } }),
+        getSession: async () => ({ data: { session: { access_token: 'test-token' } } })
+      } };
+      window.ELISTLY_API_URL = '/mock';
+      window.__requestCount = 0;
+      window.__saveStarted = new Promise(resolve => { window.__resolveSaveStarted = resolve; });
+      window.fetch = async () => {
+        window.__requestCount += 1;
+        if (window.__requestCount > 1) return new Response(JSON.stringify({ updated_at: 'newer' }), { status: 200 });
+        window.__resolveSaveStarted();
+        return new Promise(resolve => { window.__releaseSave = () => resolve(new Response(JSON.stringify({ updated_at: 'new' }), { status: 200 })); });
+      };
+      window.__firstSave = Storage.setAppDataAsync(firstPayload);
+      window.__secondSave = Storage.setAppDataAsync(secondPayload);
+    });
+
+    await second.evaluate(() => window.__saveStarted);
+    await second.waitForFunction(() => Storage._readOutbox('account-a').length === 2);
+    await first.evaluate(() => localStorage.removeItem('elistlyData:user:account-a'));
+    await second.waitForFunction(() => Storage._cached === null && Storage._cachedUserId === null);
+    const requestCount = await second.evaluate(async () => {
+      window.__releaseSave();
+      await Promise.all([window.__firstSave, window.__secondSave]);
+      return window.__requestCount;
+    });
+
+    assert.equal(requestCount, 1, 'a queued save must not send after cross-tab invalidation');
+  });
+}
+
 async function run() {
   await testLateInventoryReadCannotUndoSignOutCleanup();
   await testSignOutInAnotherTabClearsStaleInMemoryInventory();
+  await testStaleCrossTabRemovalCannotRestoreInFlightSaveState();
+  await testStaleCrossTabSaveFailureCannotOverwriteClearedSyncState();
+  await testQueuedSaveCannotSendAfterCrossTabInvalidation();
   await testSignOutClearsDurableAccountDataWithoutCrossAccountHydration();
   await testPendingEditsBlockSignOutInsteadOfBeingDiscarded();
   await testFailedLocalCleanupDoesNotClaimSignOutIsSafe();

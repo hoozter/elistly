@@ -245,12 +245,14 @@ const Storage = {
     localStorage.setItem(this._getUserOutboxKey(userId), JSON.stringify(outbox));
   },
 
-  async _saveNextOutboxEntry(userId) {
+  async _saveNextOutboxEntry(userId, generation = this._accountGeneration) {
+    if (generation !== this._accountGeneration) return;
     const next = this._readOutbox(userId)[0];
     if (!next) return;
     const expectedUpdatedAt = this._readUserUpdatedAt(userId) || null;
     const res = await apiRequest('/app-data', { method: 'PUT', body: { payload: next.payload, expectedUpdatedAt } });
     if (!res.ok) throw new Error((res.data && res.data.error) || 'Failed to save app data');
+    if (generation !== this._accountGeneration) return;
     const row = res.data || {};
     const updatedAt = row && row.updated_at ? row.updated_at : new Date().toISOString();
     this._writeUserCache(userId, next.payload, updatedAt);
@@ -426,8 +428,9 @@ const Storage = {
 
   async setAppDataAsync(data) {
     if (backendClient) {
+      const generation = this._accountGeneration;
       const user = await getAuthUser();
-      if (!user) return;
+      if (!user || generation !== this._accountGeneration) return;
       this._cached = data;
       this._cachedUserId = user.id;
       this._isDirty = true;
@@ -438,10 +441,12 @@ const Storage = {
       this._setSyncStatus('pending', 'Changes are syncing.');
       const previous = this._saveChains[user.id] || Promise.resolve();
       const save = previous.catch(() => {}).then(async () => {
-        await this._saveNextOutboxEntry(user.id);
+        await this._saveNextOutboxEntry(user.id, generation);
       }).catch(error => {
-        this._isDirty = true;
-        this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+        if (generation === this._accountGeneration) {
+          this._isDirty = true;
+          this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+        }
         throw error;
       });
       this._saveChains[user.id] = save;
@@ -456,18 +461,21 @@ const Storage = {
 
   async retryPendingSaves() {
     if (!backendClient) return;
+    const generation = this._accountGeneration;
     const user = await getAuthUser();
-    if (!user) return;
+    if (!user || generation !== this._accountGeneration) return;
     const pending = this._readOutbox(user.id);
     if (!pending.length) return;
     this._isDirty = true;
     this._setSyncStatus('pending', 'Changes are syncing.');
     const previous = this._saveChains[user.id] || Promise.resolve();
     const save = previous.catch(() => {}).then(async () => {
-      if (this._readOutbox(user.id).length) await this._saveNextOutboxEntry(user.id);
+      if (this._readOutbox(user.id).length) await this._saveNextOutboxEntry(user.id, generation);
     }).catch(error => {
-      this._isDirty = true;
-      this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+      if (generation === this._accountGeneration) {
+        this._isDirty = true;
+        this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+      }
       throw error;
     });
     this._saveChains[user.id] = save;
