@@ -33,6 +33,24 @@ async function withPage(run) {
   }
 }
 
+async function withPages(run) {
+  const server = await startStaticServer();
+  const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
+  const context = await browser.newContext();
+  const first = await context.newPage();
+  const second = await context.newPage();
+  for (const page of [first, second]) {
+    await page.route('**/config.js', route => route.fulfill({ contentType: 'application/javascript', body: 'window.ELISTLY_API_URL = "/mock"; window.NEON_AUTH_URL = "/mock-auth";' }));
+    await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
+  }
+  try {
+    await run(first, second);
+  } finally {
+    await browser.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
 async function testSignOutClearsDurableAccountDataWithoutCrossAccountHydration() {
   await withPage(async page => {
     const observed = await page.evaluate(async () => {
@@ -146,8 +164,33 @@ async function testLateInventoryReadCannotUndoSignOutCleanup() {
   }
 }
 
+async function testSignOutInAnotherTabClearsStaleInMemoryInventory() {
+  await withPages(async (first, second) => {
+    await second.evaluate(() => {
+      const accountA = { version: 'test', entities: { secretA: { name: 'Account A inventory' } } };
+      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(accountA));
+      Storage._cached = structuredClone(accountA);
+      Storage._cachedUserId = 'account-a';
+      App.data = structuredClone(accountA);
+    });
+
+    await first.evaluate(() => Storage.prepareForSignOut());
+    await second.waitForFunction(() => Storage._cached === null && Storage._cachedUserId === null);
+    const staleState = await second.evaluate(() => ({
+      cached: Storage._cached,
+      cachedUserId: Storage._cachedUserId,
+      entities: App.data.entities
+    }));
+
+    assert.equal(staleState.cached, null, 'a sign-out in another tab must clear stale in-memory inventory');
+    assert.equal(staleState.cachedUserId, null, 'a sign-out in another tab must clear the stale account binding');
+    assert.deepEqual(staleState.entities, {}, 'a sign-out in another tab must remove the signed-out account inventory from the receiving tab');
+  });
+}
+
 async function run() {
   await testLateInventoryReadCannotUndoSignOutCleanup();
+  await testSignOutInAnotherTabClearsStaleInMemoryInventory();
   await testSignOutClearsDurableAccountDataWithoutCrossAccountHydration();
   await testPendingEditsBlockSignOutInsteadOfBeingDiscarded();
   await testFailedLocalCleanupDoesNotClaimSignOutIsSafe();

@@ -11,6 +11,7 @@ Source-only hardening of the managed-service trust roadmap, using isolated brows
 - Acknowledging a queued write now removes only that acknowledged entry from the current queue. Edits appended while the request is in flight survive.
 - Existing sign-out preparation refuses cleanup when any account has pending or unverifiable writes. Successful cleanup removes durable inventory, revision and outbox keys and clears the storage layer's in-memory cache. Cleanup errors remain visible rather than claiming success.
 - Inventory requests started before successful local sign-out cleanup cannot repopulate the cache afterward, including the background refresh path.
+- When another tab removes an account cache, revision or outbox key during sign-out, open tabs clear their in-memory inventory before it can be rendered or saved under a subsequent account.
 - The service worker now intercepts only explicitly listed public shell URLs. API, auth, runtime configuration and arbitrary query-bearing URLs bypass Cache Storage. Activation removes prior Elistly shell caches, not unrelated applications' caches. Local script dependencies are explicitly included to preserve the offline shell.
 
 ## Authentication lifecycle
@@ -21,7 +22,7 @@ Late session-refresh results cannot restore a removed or replaced token. Concurr
 
 ## Remaining risks and exact decisions
 
-1. This is not a shared-browser isolation guarantee. Other already-open tabs can retain rendered inventory or race writes; generation guards are per-page, not cross-tab locks. A future cross-tab lifecycle design must preserve unsynced edits while deciding whether to lock or hide other tabs. Until then, use separate OS/browser profiles for different people and close all application tabs before handing over a device.
+1. This is not a shared-browser isolation guarantee. Open tabs clear storage-layer inventory after cross-tab sign-out, but may retain already-rendered inventory or race writes; generation guards are per-page, not cross-tab locks. A future cross-tab lifecycle design must preserve unsynced edits while deciding whether to lock or hide other tabs. Until then, use separate OS/browser profiles for different people and close all application tabs before handing over a device.
 2. Failed revocation can leave a provider cookie active. Failed sign-out leaves the current page visible with a warning; it is not a privacy lock screen. Stalled authentication requests can keep sign-out pending. Provider cookie rotation, expiry and revocation need an approved synthetic-account hosted test, not assertions derived from local mocks. No real-provider revocation was exercised here.
 3. Persistent-login duration, optional session-only storage, auto-lock and cross-tab UX need an explicit product policy. Local inventory and tokens remain readable to same-origin script and anyone with browser-profile access. Encryption with keys in that same profile is not represented as a solution.
 4. No age-based purge or quota eviction was introduced. Automatic deletion of unsynced work is not authorized. Recovery/export UX for unreadable queues and limits or expiry for synced inventories require a preservation-first policy. Existing local-only inventory and explicit reset/account-deletion flows were not redesigned.
@@ -30,4 +31,4 @@ Late session-refresh results cannot restore a removed or replaced token. Concurr
 
 ## Verification
 
-Regressions cover unreadable outbox preservation, enqueue-during-save, stale foreground/background inventory completion after cleanup, sign-out failure reporting, token-refresh ordering, pending login/signup/verification ordering, cancellation reporting, private-response cache exclusion and offline shell dependencies. Authentication ordering uses synthetic fetch responses; inventory/privacy tests use isolated browser fixtures. Focused regressions were run before the proportional repository suite. Final command outcomes are recorded in the task handoff.
+Regressions cover unreadable outbox preservation, enqueue-during-save, stale foreground/background inventory completion after cleanup, cross-tab sign-out invalidation, sign-out failure reporting, token-refresh ordering, pending login/signup/verification ordering, cancellation reporting, private-response cache exclusion and offline shell dependencies. Authentication ordering uses synthetic fetch responses; inventory/privacy tests use isolated browser fixtures. Focused regressions were run before the proportional repository suite. Final command outcomes are recorded in the task handoff.

@@ -177,6 +177,28 @@ const Storage = {
     localStorage.removeItem(key);
   },
 
+  _clearInMemoryAccountState() {
+    this._accountGeneration += 1;
+    this._cached = null;
+    this._cachedUserId = null;
+    this._isDirty = false;
+    this._saveChains = {};
+    this._setSyncStatus('idle', '');
+  },
+
+  handleExternalDurableRemoval(key) {
+    const userId = this._cachedUserId;
+    if (key === null || key === this.KEY || (userId && [
+      this._getUserCacheKey(userId),
+      this._getUserUpdatedKey(userId),
+      this._getUserOutboxKey(userId)
+    ].includes(key))) {
+      this._clearInMemoryAccountState();
+      return true;
+    }
+    return false;
+  },
+
   async prepareForSignOut() {
     const keys = this._getDurableAccountKeys();
     for (const key of keys.filter(key => key.startsWith(this.USER_OUTBOX_PREFIX))) {
@@ -202,12 +224,7 @@ const Storage = {
       throw new Error('Local account data could not be cleared. Sign out was not completed.');
     }
 
-    this._accountGeneration += 1;
-    this._cached = null;
-    this._cachedUserId = null;
-    this._isDirty = false;
-    this._saveChains = {};
-    this._setSyncStatus('idle', '');
+    this._clearInMemoryAccountState();
   },
 
   _readOutbox(userId) {
@@ -511,6 +528,10 @@ window.addEventListener('online', () => {
   Storage.retryPendingSaves().catch(() => {});
 });
 
+window.addEventListener('storage', event => {
+  if (event.storageArea === localStorage && event.newValue === null && Storage.handleExternalDurableRemoval(event.key)) App.clearAccountRuntime();
+});
+
 // Setups: add preset IDs here; each setup-<id>.js registers into window.ELISTLY_PRESETS (loaded before app.js)
 const SETUP_IDS = ['blank', 'library', 'it', 'staff', 'property'];
 const PRESETS = (function () {
@@ -551,6 +572,17 @@ const App = {
   _presets: PRESETS,
   _isReady: false,
   _pendingRemoteData: null,
+
+  clearAccountRuntime() {
+    this._pendingRemoteData = null;
+    this.data = {
+      version: CURRENT_VERSION,
+      settings: { defaultView: 'dashboard', materialIcons: MATERIAL_ICONS },
+      categories: {},
+      entityTypes: {},
+      entities: {}
+    };
+  },
       
       async init() {
         this._isReady = false;
