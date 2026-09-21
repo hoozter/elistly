@@ -1,6 +1,6 @@
 # Elistly roadmap
 
-Last updated: 2026-09-19
+Last updated: 2026-09-21
 
 ## Product direction: earn a hosted subscription
 
@@ -30,6 +30,7 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Credentialed CORS restricted to configured exact origins; malformed authentication, oversized bodies, internal failures, owner/admin boundaries and destructive routes have source tests.
 - Whole-document revision preconditions with explicit stale-write conflict responses.
 - Durable local outbox, ordered replay, dirty-state protection and safe PWA shell activation.
+- Remote-authoritative startup compares a pending local snapshot with the account endpoint before rendering. A divergent local copy remains durable, is exportable from visible recovery UI, and cannot overwrite the server copy until explicitly reconciled.
 - Versioned full-account backup envelope and bounded round-trip restore with validation before mutation.
 - Bounded category CSV export/import with preview and authoritative save behavior.
 - Advanced field/association filtering, compatible-field sorting and selected-item CSV export.

@@ -146,6 +146,7 @@ const Storage = {
   _cachedUserId: null,
   _isDirty: false,
   _saveChains: {},
+  _conflictRecovery: null,
   _syncStatus: { state: 'idle', message: '' },
 
   _getUserCacheKey(userId) {
@@ -183,6 +184,7 @@ const Storage = {
     this._cachedUserId = null;
     this._isDirty = false;
     this._saveChains = {};
+    this._conflictRecovery = null;
     this._setSyncStatus('idle', '');
   },
 
@@ -274,6 +276,10 @@ const Storage = {
     return { ...this._syncStatus };
   },
 
+  getConflictRecovery() {
+    return this._conflictRecovery ? structuredClone(this._conflictRecovery) : null;
+  },
+
   _readUserCache(userId) {
     try {
       const raw = localStorage.getItem(this._getUserCacheKey(userId));
@@ -343,11 +349,44 @@ const Storage = {
         const outbox = this._readOutbox(user.id);
         if (outbox.length) {
           const pending = outbox[outbox.length - 1].payload;
-          this._cached = pending;
+          let res;
+          try {
+            res = await apiRequest('/app-data');
+          } catch (_) {
+            this._cached = pending;
+            this._cachedUserId = user.id;
+            this._isDirty = true;
+            this._setSyncStatus('pending', 'Changes are waiting to sync.');
+            return pending;
+          }
+          if (!res.ok) {
+            this._cached = pending;
+            this._cachedUserId = user.id;
+            this._isDirty = true;
+            this._setSyncStatus('pending', 'Changes are waiting to sync.');
+            return pending;
+          }
+          const remote = res.data || {};
+          const remotePayload = remote.payload || {};
+          this._cached = remotePayload;
           this._cachedUserId = user.id;
+          this._writeUserCache(user.id, remotePayload, remote.updated_at || '');
+          if (jsonValuesEqual(pending, remotePayload)) {
+            this._conflictRecovery = null;
+            this._isDirty = true;
+            this._setSyncStatus('pending', 'Changes are waiting to sync.');
+            return remotePayload;
+          }
+          this._conflictRecovery = {
+            userId: user.id,
+            localPayload: pending,
+            remotePayload,
+            remoteUpdatedAt: remote.updated_at || '',
+            detectedAt: new Date().toISOString()
+          };
           this._isDirty = true;
-          this._setSyncStatus('pending', 'Changes are waiting to sync.');
-          return pending;
+          this._setSyncStatus('conflict', 'Local changes conflict with newer account data. Both copies are preserved.');
+          return remotePayload;
         }
         const cachedPayload = this._readUserCache(user.id);
         const cachedUpdatedAt = this._readUserUpdatedAt(user.id);
@@ -431,6 +470,7 @@ const Storage = {
       const generation = this._accountGeneration;
       const user = await getAuthUser();
       if (!user || generation !== this._accountGeneration) return;
+      if (this._conflictRecovery && this._conflictRecovery.userId === user.id) throw new Error('Resolve the preserved local changes before saving account data.');
       this._cached = data;
       this._cachedUserId = user.id;
       this._isDirty = true;
@@ -464,6 +504,7 @@ const Storage = {
     const generation = this._accountGeneration;
     const user = await getAuthUser();
     if (!user || generation !== this._accountGeneration) return;
+    if (this._conflictRecovery && this._conflictRecovery.userId === user.id) throw new Error('Resolve the preserved local changes before syncing.');
     const pending = this._readOutbox(user.id);
     if (!pending.length) return;
     this._isDirty = true;
@@ -842,7 +883,7 @@ const App = {
         const schemaChanged = this.normalizeEntityTypeSchema();
         document.documentElement.setAttribute('data-font-size', this.getSafeFontSize());
         if (componentsChanged || schemaChanged) dataMutatedDuringInit = true;
-        if (dataMutatedDuringInit) this.saveData();
+        if (dataMutatedDuringInit && !Storage.getConflictRecovery()) this.saveData();
         this.buildIconGrid();
         this.renderSidebar();
         this.loadView('dashboard');
@@ -863,6 +904,7 @@ const App = {
         this.setupEventListeners();
         this.setupMobileNav();
         this._isReady = true;
+        this.showSyncConflictRecovery();
         if (this._pendingRemoteData) {
           this.applyRemoteSyncData(this._pendingRemoteData);
           this._pendingRemoteData = null;
@@ -880,6 +922,45 @@ const App = {
           modal.style.display = 'flex';
           modal.classList.add('show');
         }
+      },
+
+      showSyncConflictRecovery() {
+        const recovery = Storage.getConflictRecovery();
+        if (!recovery || document.getElementById('syncRecoveryModal')) return;
+        const modal = document.createElement('div');
+        modal.id = 'syncRecoveryModal';
+        modal.className = 'modal-overlay hidden';
+        const card = document.createElement('div');
+        card.className = 'modal-content';
+        const title = document.createElement('h3');
+        title.textContent = 'Local changes need review';
+        const message = document.createElement('p');
+        message.textContent = 'Both copies are preserved. Elistly is showing the account data from the server and will not overwrite it. Download the saved local changes before deciding how to reconcile them.';
+        const actions = document.createElement('div');
+        actions.className = 'modal-actions';
+        const download = document.createElement('button');
+        download.type = 'button';
+        download.className = 'btn btn-primary';
+        download.textContent = 'Download local backup';
+        download.onclick = () => {
+          const blob = new Blob([JSON.stringify(recovery.localPayload, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'elistly-local-changes-backup.json';
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+        };
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'btn btn-secondary';
+        close.textContent = 'Keep both copies';
+        close.onclick = () => this.closeModal(modal.id);
+        actions.append(download, close);
+        card.append(title, message, actions);
+        modal.append(card);
+        document.body.append(modal);
+        this.showModal(modal.id);
       },
 
       ensureMainContentScrollable() {

@@ -200,7 +200,7 @@ async function testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave()
   });
 }
 
-async function testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration() {
+async function testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline() {
   await withPage(async page => {
     const observed = await page.evaluate(async () => {
       const localEdit = { version: 'test', entities: { local: true } };
@@ -230,8 +230,8 @@ async function testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration() {
     });
 
     assert.equal(observed.outbox.length, 1, 'a failed write must remain in the durable outbox');
-    assert.deepEqual(observed.reloaded, { version: 'test', entities: { local: true } }, 'reload must restore queued local data');
-    assert.equal(observed.requests, 1, 'reload must not hydrate over queued local data');
+    assert.deepEqual(observed.reloaded, { version: 'test', entities: { local: true } }, 'reload must restore queued local data when the account cannot be read');
+    assert.equal(observed.requests, 2, 'reload must attempt the account bootstrap before retaining offline pending data');
     assert.deepEqual(observed.status, { state: 'pending', message: 'Changes are waiting to sync.' }, 'queued local data must report pending sync status');
   });
 }
@@ -772,7 +772,7 @@ async function run() {
   await testBackgroundSyncDoesNotReplaceDirtyData();
   await testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave();
   await testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave();
-  await testFailedSavePersistsItsOutboxEntryForReloadWithoutHydration();
+  await testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline();
   await testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision();
   await testConcurrentReconnectsSerializeOnePendingReplay();
   await testOnlineReconnectRetriesPendingSave();
