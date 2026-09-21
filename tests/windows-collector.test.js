@@ -76,13 +76,13 @@ assert.match(historicalReview, /Do not download or install the retired split-flo
 assert.doesNotMatch(historicalReview, /Download from Elistly:.*Windows device registration|After approval, install from an elevated PowerShell session/is, 'historical review must not instruct a new split-flow download or install');
 assert.doesNotMatch(app, /deviceCollectorDownload/, 'the retired collector download must not remain in Settings');
 assert.match(readme, /shortcut.*fallback|fallback.*shortcut/i);
-assert.match(appHtml, /styles\.css\?v=19/);
+assert.match(appHtml, /styles\.css\?v=20/);
 assert.match(appHtml, /device-intake\.js\?v=3/);
-assert.match(appHtml, /app\.js\?v=39/, 'app shell must request the current application bundle');
-assert.match(serviceWorker, /elistly-shell-v31/);
-assert.match(serviceWorker, /styles\.css\?v=19/);
+assert.match(appHtml, /app\.js\?v=40/, 'app shell must request the current application bundle');
+assert.match(serviceWorker, /elistly-shell-v32/);
+assert.match(serviceWorker, /styles\.css\?v=20/);
 assert.match(serviceWorker, /device-intake\.js\?v=3/);
-assert.match(serviceWorker, /app\.js\?v=39/);
+assert.match(serviceWorker, /app\.js\?v=40/);
 for (const [name, content] of [['README', readme], ['candidate metadata', candidate], ['package script', packageScript]]) {
   assert.match(content, /Elistly-Windows-Device-Intake-v1\.0\.3|Collector 1\.0\.2/i, `${name} must reference collector package 1.0.3 or collector 1.0.2`);
 }

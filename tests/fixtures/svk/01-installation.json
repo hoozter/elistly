@@ -1,0 +1,26 @@
+{
+  "schema": "svk.device-inventory.v1",
+  "reportId": "aaaaaaaa-1111-4111-8111-111111111111",
+  "collectedAt": "2026-09-21T09:00:00.0000000Z",
+  "collector": {"name": "SVK Provision local inventory", "formatVersion": 1, "provisionVersion": "0.3.6"},
+  "collection": {"context": "installation", "mode": "local-file", "networkUsed": false, "userObservation": "not-collected", "unavailable": []},
+  "hardwareIdentity": "d6a5b309b08bbfac47872d0252b3fe03efc907841179e34dfde5f0a776cdf1fd",
+  "identityStatus": "stable",
+  "hostname": "SVK-DEMO-001",
+  "serialNumber": "DEMO-SERIAL-001",
+  "manufacturer": "Example Manufacturer",
+  "model": "Example Laptop",
+  "windowsEdition": "Microsoft Windows 11 Enterprise",
+  "inventorySnapshot": {
+    "schemaVersion": "svk.windows-installation-snapshot.v1",
+    "collectedAt": "2026-09-21T09:00:00.0000000Z",
+    "device": {"manufacturer": "Example Manufacturer", "model": "Example Laptop", "serialNumber": "DEMO-SERIAL-001", "uuid": "11111111-2222-4333-8444-555555555555"},
+    "windows": {"edition": "Microsoft Windows 11 Enterprise", "version": "10.0.26200", "build": "26200"},
+    "cpu": {"model": "Example CPU", "cores": 4, "logicalProcessors": 8},
+    "ramBytes": 17179869184,
+    "graphicsAdapters": ["Example Graphics"],
+    "biosVersion": "Demo BIOS 1.0",
+    "lastInteractiveUser": null
+  },
+  "provisioning": {"coreVerified": true, "phase": "before-finish-cleanup", "finished": null}
+}

@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { PGlite } from '../worker/node_modules/@electric-sql/pglite/dist/index.js';
+import { createWorker } from '../worker/src/index.js';
+const db = new PGlite();
+await db.exec(fs.readFileSync(new URL('../neon/schema.sql',import.meta.url),'utf8'));
+const report=JSON.parse(fs.readFileSync(new URL('./fixtures/svk/01-installation.json',import.meta.url)));
+const account={currentWorkspaceId:'main',workspaces:{main:{name:'Synthetic workspace',categories:{devices:{id:'devices',label:'Devices'}},entityTypes:{computer:{id:'computer',label:'Computer',category:'devices',fields:[],associations:[]}},entities:{}}}};
+await db.query('INSERT INTO app_data(user_id,payload) VALUES ($1,$2::jsonb)',['owner',JSON.stringify(account)]);
+let interrupt=false, corruptRead=false;
+const sql=async(strings,...values)=>{
+ const query=strings.reduce((s,v,i)=>s+v+(i<values.length?'$'+(i+1):''),'');
+ const rows=(await db.query(query,values)).rows;
+ if (interrupt && query.includes('INSERT INTO inventory_import_reports')) {interrupt=false;throw new Error('connection lost after commit');}
+ if(corruptRead && query.includes('SELECT report_id, content_digest') && rows.length) return [{...rows[0],report:{...rows[0].report,hostname:'corrupted'}}];
+ return rows;
+};
+const env={ELISTLY_ALLOWED_ORIGINS:'https://test.example'};
+const worker=createWorker({createSql:()=>sql,authenticate:async req=>req.headers.get('Authorization')==='Bearer owner-test' ? {id:'owner'} : req.headers.get('Authorization')==='Bearer other-test' ? {id:'other'} : null});
+const request=(path,body,token='owner-test',method=body?'POST':'GET')=>worker.fetch(new Request('https://api.test'+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}),env);
+const file=(r=report,filename='DEPLOYDATA/Inventory/report.json')=>({filename,content:JSON.stringify(r)});
+const batch=(files,preview=false,workspaceId='main')=>({workspaceId,preview,files});
+const send=async body=>{const r=await request('/inventory-import',body); assert.equal(r.status,200,await r.clone().text());return (await r.json()).results;};
+assert.equal((await request('/inventory-import',batch([file()]),'invalid')).status,401);
+assert.equal((await request('/inventory-import',batch([file()]),'other-test')).status,404);
+assert.equal((await request('/inventory-import',batch([file()],false,'absent'))).status,404);
+let results=await send(batch([file()],true));assert.equal(results[0].disposition,'New');assert.equal(results[0].safe,false);
+assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,0);
+results=await send(batch([file(),{filename:'bad.json',content:'bad'},file(report,'unfinished.pending')]));
+assert.deepEqual(results.map(r=>r.safe),[true,false,false]);assert.ok(results[0].importedAt);
+const device=results[0].deviceId;
+assert.equal((await send(batch([file()])))[0].disposition,'Already imported');
+let changed=structuredClone(report);changed.hostname='changed';
+assert.match((await send(batch([file(changed)])))[0].reason,/different content/);
+// Distinct concurrent reports share one device. Same-ID retries converge on one receipt.
+const newer=structuredClone(report);newer.reportId=crypto.randomUUID();newer.collectedAt='2026-09-21T09:01:00.0000001Z';newer.inventorySnapshot.collectedAt=newer.collectedAt;
+const newer2=structuredClone(newer);newer2.reportId=crypto.randomUUID();
+const concurrent=await Promise.all([send(batch([file(newer)])),send(batch([file(newer)])),send(batch([file(newer2)]))]);
+assert.ok(concurrent.every(r=>r[0].safe),JSON.stringify(concurrent));
+assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,3);
+let row=(await request('/app-data').then(r=>r.json()));
+assert.equal(Object.keys(row.payload.workspaces.main.entities).length,1);
+Object.assign(row.payload.workspaces.main.entities[device],{name:'Manual name',notes:'Keep',assignedTo:'person-1',location:'Room 2'});
+// An ordinary save can remove any imported JSON metadata without losing receipts.
+const saved=await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT');assert.equal(saved.status,200);
+assert.equal((await send(batch([file()])))[0].safe,true);
+const older=structuredClone(report);older.reportId=crypto.randomUUID();older.collectedAt='2026-09-20T09:00:00.0000000Z';older.inventorySnapshot.collectedAt=older.collectedAt;older.model=null;older.inventorySnapshot.device.model=null;older.inventorySnapshot.ramBytes=null;
+assert.equal((await send(batch([file(older)])))[0].safe,true);
+row=await request('/app-data').then(r=>r.json());
+assert.equal(row.payload.workspaces.main.entities[device].name,'Manual name');assert.equal(row.payload.workspaces.main.entities[device].model,'Example Laptop');assert.equal(row.payload.workspaces.main.entities[device].assignedTo,'person-1');
+const equal=structuredClone(newer);equal.reportId=crypto.randomUUID();equal.inventorySnapshot.ramBytes=1;
+assert.match((await send(batch([file(equal)])))[0].reason,/same collection time/);
+const future=structuredClone(report);future.reportId=crypto.randomUUID();future.collectedAt='2099-01-01T00:00:00Z';future.inventorySnapshot.collectedAt=future.collectedAt;
+assert.match((await send(batch([file(future)])))[0].reason,/Future/);
+const interrupted=structuredClone(newer);interrupted.reportId=crypto.randomUUID();interrupt=true;
+assert.equal((await send(batch([file(interrupted)])))[0].safe,false);
+assert.equal((await send(batch([file(interrupted)])))[0].safe,true);
+corruptRead=true;assert.equal((await send(batch([file(interrupted)])))[0].safe,false);corruptRead=false;
+const observations=await request('/inventory-import/observations?workspaceId=main&deviceId='+device).then(r=>r.json());
+assert.equal(observations.observations.length,5);assert.ok(observations.observations.some(r=>r.report.inventorySnapshot.ramBytes===null));assert.ok(observations.observations.some(r=>r.report.inventorySnapshot.ramBytes===17179869184));
+assert.equal((await request('/inventory-import/observations?workspaceId=main&deviceId='+device,null,'other-test')).status,404);
+// Failed authoritative readback after a successful write is never safe.
+const unread=structuredClone(newer);unread.reportId=crypto.randomUUID();corruptRead=true;
+assert.equal((await send(batch([file(unread)])))[0].safe,false);corruptRead=false;
+assert.equal((await send(batch([file(unread)])))[0].safe,true);
+// Equivalent normalized BIOS identifiers with different legacy hashes require review.
+const normalized=structuredClone(newer);normalized.reportId=crypto.randomUUID();
+normalized.inventorySnapshot.device.uuid=normalized.inventorySnapshot.device.uuid.toUpperCase();
+normalized.serialNumber=normalized.serialNumber.toLowerCase();normalized.inventorySnapshot.device.serialNumber=normalized.serialNumber;
+normalized.hardwareIdentity=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(normalized.inventorySnapshot.device.uuid+'|'+normalized.serialNumber)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+assert.match((await send(batch([file(normalized)])))[0].reason,/normalization mismatch/);
+assert.equal((await request('/inventory-import',batch(Array(11).fill(file())))).status,422);
+assert.equal((await request('/inventory-import',{...batch([file()]),ownerUserId:'someone'})).status,422);
+// A failure in the receipt insert rolls back the entity mutation too.
+await db.exec(`ALTER TABLE inventory_import_reports ADD CONSTRAINT synthetic_failure CHECK (report->>'hostname' <> 'FAIL-SAVE')`);
+const broken=structuredClone(newer);broken.reportId=crypto.randomUUID();broken.hostname='FAIL-SAVE';broken.collectedAt='2026-09-21T09:02:00Z';broken.inventorySnapshot.collectedAt=broken.collectedAt;
+const before=await request('/app-data').then(r=>r.json());
+assert.equal((await send(batch([file(broken)])))[0].safe,false);
+assert.deepEqual(await request('/app-data').then(r=>r.json()),before);
+console.log('PASS: real PostgreSQL schema/SQL, preview, scoped auth, mixed batch, concurrent retries, manual fields, old/null history, equal/future conflict, commit interruption, receipt corruption, atomic rollback, history readback');
+await db.close();

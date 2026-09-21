@@ -1,0 +1,26 @@
+{
+  "schema": "svk.device-inventory.v1",
+  "reportId": "bbbbbbbb-2222-4222-8222-222222222222",
+  "collectedAt": "2026-09-21T10:00:00.0000000Z",
+  "collector": {"name": "SVK Provision local inventory", "formatVersion": 1, "provisionVersion": "unknown"},
+  "collection": {"context": "service", "mode": "local-file", "networkUsed": false, "userObservation": "not-collected", "unavailable": ["Win32_BIOS", "Win32_ComputerSystemProduct", "Win32_VideoController"]},
+  "hardwareIdentity": null,
+  "identityStatus": "manual-review-required",
+  "hostname": "SVK-DEMO-002",
+  "serialNumber": null,
+  "manufacturer": "Example Manufacturer",
+  "model": "Example Desktop",
+  "windowsEdition": "Microsoft Windows 10 Enterprise",
+  "inventorySnapshot": {
+    "schemaVersion": "svk.windows-installation-snapshot.v1",
+    "collectedAt": "2026-09-21T10:00:00.0000000Z",
+    "device": {"manufacturer": "Example Manufacturer", "model": "Example Desktop", "serialNumber": null, "uuid": null},
+    "windows": {"edition": "Microsoft Windows 10 Enterprise", "version": "10.0.19045", "build": "19045"},
+    "cpu": {"model": "Example CPU", "cores": 4, "logicalProcessors": 8},
+    "ramBytes": 8589934592,
+    "graphicsAdapters": [],
+    "biosVersion": null,
+    "lastInteractiveUser": null
+  },
+  "provisioning": {"coreVerified": false, "phase": "service-observation", "finished": null}
+}

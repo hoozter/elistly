@@ -12,6 +12,7 @@
  */
 
 import { neon } from "@neondatabase/serverless";
+import { importSvkBatch, InventoryError } from "./svk-inventory.js";
 
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
@@ -662,6 +663,22 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
       if (!user) return jsonResponse({ error: "Unauthorized" }, 401, origin);
       const sql = createSql(env.NEON_DATABASE_URL);
 
+      if (path === "/inventory-import" && req.method === "POST") {
+        return jsonResponse(await importSvkBatch(sql, user.id, await readJsonBody(req)), 200, origin);
+      }
+      if (path === "/inventory-import/observations" && req.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        const deviceId = url.searchParams.get("deviceId");
+        const offset = Number(url.searchParams.get("offset") || 0);
+        if (!workspaceId || !deviceId || !Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) throw new InventoryError("Invalid history request", 400);
+        const [account] = await sql`SELECT payload FROM app_data WHERE user_id = ${user.id}`;
+        if (!Object.hasOwn(account?.payload?.workspaces || {}, workspaceId)) return jsonResponse({error:"Workspace not found"}, 404, origin);
+        const rows = await sql`SELECT report_id, report, imported_at::text AS imported_at FROM inventory_import_reports
+          WHERE owner_user_id = ${user.id} AND workspace_id = ${workspaceId} AND device_id = ${deviceId}
+          ORDER BY collected_key DESC, report_id LIMIT 20 OFFSET ${offset}`;
+        return jsonResponse({observations:rows}, 200, origin);
+      }
+
       if (path === "/me" && req.method === "GET") {
         return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, 200, origin);
       }
@@ -881,7 +898,7 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
 
       return jsonResponse({ error: "Not found" }, 404, origin);
     } catch (error) {
-      if (error instanceof RequestBodyError) {
+      if (error instanceof RequestBodyError || error instanceof InventoryError) {
         return jsonResponse({ error: error.message }, error.status, origin);
       }
       console.error("Unhandled Worker error");

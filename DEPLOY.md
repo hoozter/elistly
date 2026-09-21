@@ -33,6 +33,10 @@ The registration endpoint accepts no inventory-reading, editing, profile, or adm
 
 Before first use, apply the current `neon/schema.sql`, deploy the Worker and Pages together, then create a fresh registration script from the deployed app. Test the PSD step against a non-production computer first.
 
+## SVK offline inventory import
+
+The SVK import adds `inventory_import_reports` and its indexes in `neon/schema.sql`. Apply this additive schema before releasing the API/frontend. The table retains source reports independently of editable inventory JSON and must be included in database backups. Account deletion cascades to it. See [SVK import](docs/svk-offline-import.md) for local verification and the operator workflow. Do not deploy without the verified issuer/audience settings below; existing installed reporting contracts are unchanged.
+
 ## Frontend Config
 
 For local development, copy `config.example.js` to `config.js` and set:

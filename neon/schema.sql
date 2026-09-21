@@ -85,3 +85,29 @@ create table if not exists public.admin_users (
   user_id    text        primary key,
   created_at timestamptz not null default now()
 );
+
+-- Immutable offline reports and idempotency receipts. Ordinary app-data saves,
+-- device deletion, and workspace edits cannot erase source observations.
+-- Account deletion cascades for privacy; restoring app JSON is not a history restore.
+create table if not exists public.inventory_import_reports (
+  owner_user_id text not null references public.app_data(user_id) on delete cascade,
+  workspace_id text not null,
+  report_id text not null,
+  content_digest text not null check (content_digest ~ '^[a-f0-9]{64}$'),
+  hardware_identity text not null check (hardware_identity ~ '^[a-f0-9]{64}$'),
+  serial_key text not null,
+  uuid_key text not null,
+  collected_key text not null,
+  device_id text not null,
+  report jsonb not null,
+  imported_at timestamptz not null default clock_timestamp(),
+  primary key (owner_user_id, workspace_id, report_id)
+);
+create index if not exists inventory_import_identity_idx
+  on public.inventory_import_reports(owner_user_id, workspace_id, hardware_identity);
+create index if not exists inventory_import_serial_idx
+  on public.inventory_import_reports(owner_user_id, workspace_id, serial_key);
+create index if not exists inventory_import_uuid_idx
+  on public.inventory_import_reports(owner_user_id, workspace_id, uuid_key);
+create index if not exists inventory_import_history_idx
+  on public.inventory_import_reports(owner_user_id, workspace_id, device_id, collected_key desc, report_id);

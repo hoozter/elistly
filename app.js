@@ -588,6 +588,8 @@ const App = {
   _pendingRemoteData: null,
 
   clearAccountRuntime() {
+    document.getElementById('svkImportModal')?.remove();
+    document.getElementById('svkHistoryModal')?.remove();
     this._pendingRemoteData = null;
     this.data = {
       version: CURRENT_VERSION,
@@ -2554,6 +2556,14 @@ const App = {
         return (w && w.name) || (this.data.currentWorkspaceId === 'default' ? 'Default' : 'Inventory');
       },
 
+      async showSvkInventoryImport() {
+        return window.ElistlySvkInventory.open(this, apiRequest, Storage, await getAuthSession());
+      },
+
+      async showSvkInventoryHistory(deviceId) {
+        return window.ElistlySvkInventory.history(this, apiRequest, Storage, await getAuthSession(), deviceId);
+      },
+
       async showDeviceRegistrationModal() {
         const workspaceId = this.data.currentWorkspaceId;
         if (!workspaceId) return this.showNotification('Choose a workspace first.', 'error');
@@ -3913,6 +3923,10 @@ ${removal}
                           <span class="material-icons">table_view</span>
                           Import CSV
                         </button>
+                        <button class="btn btn-secondary" onclick="App.showSvkInventoryImport()">
+                          <span class="material-icons">folder_open</span>
+                          Import inventory from folder
+                        </button>
                         <div class="device-collector-card">
                           <strong>Windows device collector</strong>
                           <p class="help-text">Create one workspace-bound PowerShell script to register a Windows computer. Choose Keep updated automatically to install scheduled reporting too. No automatic expiry by default; choose an expiry or revoke the collector when finished.</p>
@@ -4038,13 +4052,13 @@ ${removal}
 
                 <section class="profile-section profile-section-data">
                   <h4 class="profile-section-heading">Data &amp; account</h4>
-                  <p class="profile-help">Export all your data (inventory, settings, theme). Reset clears only app data. Delete account removes your account and all data permanently.</p>
+                  <p class="profile-help">Back up inventory, settings and theme. Offline source reports and receipts are stored separately and are not included; keep the original files. Reset clears editable inventory, while saved reports remain. Delete account removes everything permanently.</p>
                   <div class="profile-inline-actions profile-data-actions">
                     <button type="button" class="btn btn-secondary" id="profileExportAllBtn">
-                      <span class="material-icons">download</span> Export all data
+                      <span class="material-icons">download</span> Export inventory backup
                     </button>
                     <button type="button" class="btn btn-secondary" id="profileRestoreAllBtn">
-                      <span class="material-icons">upload</span> Restore full backup
+                      <span class="material-icons">upload</span> Restore inventory backup
                     </button>
                     <button type="button" class="btn btn-secondary" id="profileResetDataBtn">
                       <span class="material-icons">refresh</span> Reset data
@@ -4238,6 +4252,15 @@ ${removal}
           card.appendChild(properties);
           view.appendChild(card);
           content.appendChild(view);
+        }
+        if (entityType === 'computer') {
+          const inventory = makeElement('button', 'btn btn-secondary', isEdit ? 'Saved offline observations' : 'Import inventory from folder');
+          inventory.type = 'button';
+          inventory.onclick = () => {
+            if (isEdit) this.showSvkInventoryHistory(entityId);
+            else { this.closeModal('entityModal'); this.showSvkInventoryImport(); }
+          };
+          content.append(inventory);
         }
         const form = makeElement('form');
         form.id = 'entityForm';
@@ -5948,7 +5971,7 @@ ${removal}
                 <div role="tabpanel" id="noticesPanel" aria-labelledby="noticesTab" hidden>
                 <section class="legal-section">
                   <p>Full third-party copyright and license notices for the shipped browser assets and production Worker dependencies.</p>
-                  <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=9ec1f915882700b3d1d9bb9a0f9a9231e298d1fb7f55ee08da04dce3845b63a7" title="Full third-party notices"></iframe>
+                  <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=652590665d5e9baba36d973d16969c4d158de09209c70dbfcdebccdb05ae5e02" title="Full third-party notices"></iframe>
                 </section>
                 </div>
               </div>
@@ -6236,7 +6259,7 @@ ${removal}
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        this.showSnackbar('Full backup downloaded.');
+        this.showSnackbar('Inventory backup downloaded.');
         return true;
       },
 
@@ -6539,9 +6562,9 @@ ${removal}
           <div class="modal" id="fullBackupRestoreModal" data-persistent>
             <div class="modal-content modal-content-narrow">
               <button class="modal-close" onclick="App.closeModal('fullBackupRestoreModal')"><span class="material-icons">close</span></button>
-              <div class="modal-header"><h3>Restore full backup</h3></div>
+              <div class="modal-header"><h3>Restore inventory backup</h3></div>
               <div class="modal-body">
-                <p>Select an Elistly full-backup v1 file. The preview is read-only. Replacing data cannot be undone.</p>
+                <p>Select an Elistly full-backup v1 file. The preview is read-only. Replacing inventory cannot be undone. Saved offline reports and receipts remain separate and are not replaced.</p>
                 <input type="file" id="fullBackupRestoreInput" accept="application/json,.json">
                 <div id="fullBackupRestorePreview" class="import-preview-area u-mt-100"></div>
               </div>
