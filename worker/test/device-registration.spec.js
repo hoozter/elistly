@@ -1,6 +1,6 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { addRegisteredDevice, createWorker, validateRegistrationFacts } from "../src/index.js";
+import { addRegisteredDevice, createWorker, updateReportedDevice, validateRegistrationFacts } from "../src/index.js";
 
 const identity = "a".repeat(64);
 const snapshot = {
@@ -72,6 +72,78 @@ describe("device registration boundary", () => {
     expect(initial.workspaces.default.entities).toEqual({});
   });
 
+  it("projects collected processor, RAM, and graphics facts into configured Computer fields", () => {
+    const initial = payload();
+    initial.workspaces.default.entityTypes.computer.fields = [
+      { name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } },
+      { name: "installedRam", type: "text", collection: { provider: "windows", capability: "memory.total" } },
+      { name: "graphicsCard", type: "text", collection: { provider: "windows", capability: "graphics.adapters" } },
+    ];
+    const reportedFacts = {
+      ...facts,
+      inventorySnapshot: { ...snapshot, graphicsAdapters: ["Example Graphics"] },
+    };
+
+    const { entity } = addRegisteredDevice(initial, "default", reportedFacts);
+
+    expect(entity.processor).toBe("Example CPU");
+    expect(entity.installedRam).toBe("32 GB");
+    expect(entity.graphicsCard).toBe("Example Graphics");
+  });
+
+  it("uses the one matching configured dropdown value instead of creating a new value", () => {
+    const initial = payload();
+    initial.workspaces.default.entityTypes.computer.fields = [
+      { name: "ram", type: "dropdown", options: [{ value: "16GB" }, { value: "32GB" }], collection: { provider: "windows", capability: "memory.total" } },
+    ];
+
+    const { entity } = addRegisteredDevice(initial, "default", facts);
+
+    expect(entity.ram).toBe("32GB");
+  });
+
+  it("leaves configured fields absent when the collector has no available fact", () => {
+    const initial = payload();
+    initial.workspaces.default.entityTypes.computer.fields = [
+      { name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } },
+      { name: "installedRam", type: "text", collection: { provider: "windows", capability: "memory.total" } },
+      { name: "graphicsCard", type: "textarea", collection: { provider: "windows", capability: "graphics.adapters" } },
+    ];
+    const unavailableFacts = { ...facts, inventorySnapshot: { ...snapshot, cpu: { ...snapshot.cpu, model: null }, ramBytes: null, graphicsAdapters: [] } };
+
+    const { entity } = addRegisteredDevice(initial, "default", unavailableFacts);
+
+    expect(entity).not.toHaveProperty("processor");
+    expect(entity).not.toHaveProperty("installedRam");
+    expect(entity).not.toHaveProperty("graphicsCard");
+  });
+
+  it("refreshes configured reported Computer fields without assigning a person", () => {
+    const initial = payload();
+    initial.workspaces.default.entityTypes.computer.fields = [
+      { name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } },
+      { name: "installedRam", type: "text", collection: { provider: "windows", capability: "memory.total" } },
+    ];
+    const created = addRegisteredDevice(initial, "default", facts);
+    const deviceId = created.entity.id;
+    const updatedFacts = {
+      ...facts,
+      inventorySnapshot: {
+        ...snapshot,
+        collectedAt: "2026-01-02T00:00:00.000Z",
+        cpu: { ...snapshot.cpu, model: "Updated CPU" },
+        ramBytes: 17179869184,
+      },
+    };
+
+    const updated = updateReportedDevice(created.payload, "default", deviceId, updatedFacts);
+    const device = updated.workspaces.default.entities[deviceId];
+
+    expect(device.processor).toBe("Updated CPU");
+    expect(device.installedRam).toBe("16 GB");
+    expect(device.assignedTo).toBeUndefined();
+  });
+
   it("keeps an identical identity isolated to its selected workspace", () => {
     const first = addRegisteredDevice(payload(), "default", facts);
     const second = addRegisteredDevice(first.payload, "other", facts);
@@ -104,6 +176,9 @@ describe("device registration boundary", () => {
 
   it("serves the registration HTTP path through the SQL seam and preserves a 409 manual collision", async () => {
     const initial = payload();
+    initial.workspaces.default.entityTypes.computer.fields = [
+      { name: "graphicsCard", type: "textarea", collection: { provider: "windows", capability: "graphics.adapters" } },
+    ];
     const calls = [];
     const sql = async (strings, ...values) => {
       const query = strings.join(" ");
@@ -116,13 +191,16 @@ describe("device registration boundary", () => {
     const worker = createWorker({ createSql: () => sql, authenticate: async () => null });
     const token = `dr_${"A".repeat(43)}`;
     const headers = { ...registrationAuthorization(token), "Content-Type": "application/json" };
-    const response = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify(facts) });
+    const reportedFacts = { ...facts, inventorySnapshot: { ...snapshot, graphicsAdapters: ["Integrated GPU", "Discrete GPU"] } };
+    const response = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify(reportedFacts) });
     expect(response.status).toBe(201);
     expect((await response.json()).created).toBe(true);
     const appDataWrites = calls.filter(call => call.query.includes("UPDATE app_data"));
     expect(appDataWrites).toHaveLength(1);
     const writtenPayload = JSON.parse(appDataWrites[0].values.find(value => typeof value === "string" && value.startsWith("{")));
-    expect(Object.values(writtenPayload.workspaces.default.entities)[0]._elistlyRegistration.inventorySnapshot).toEqual(snapshot);
+    const registered = Object.values(writtenPayload.workspaces.default.entities)[0];
+    expect(registered._elistlyRegistration.inventorySnapshot).toEqual(reportedFacts.inventorySnapshot);
+    expect(registered.graphicsCard).toBe("Integrated GPU; Discrete GPU");
 
     const retry = await fetchRegistration(worker, "/device-registration/register", { method: "POST", headers, body: JSON.stringify({ ...facts, inventorySnapshot: { ...snapshot, collectedAt: "2026-02-01T00:00:00.000Z" } }) });
     expect(retry.status).toBe(200);

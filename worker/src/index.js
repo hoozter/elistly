@@ -83,7 +83,7 @@ function randomBase64url(bytes = 32) {
 
 const MAX_REGISTRATION_PAYLOAD_BYTES = 64 * 1024;
 const registrationFields = new Set(["hardwareIdentity", "hostname", "serialNumber", "manufacturer", "model", "windowsEdition", "inventorySnapshot"]);
-const snapshotFields = new Set(["schemaVersion", "collectedAt", "device", "windows", "cpu", "ramBytes", "fixedDisks", "networkAdapters", "biosVersion", "tpm", "secureBoot", "bitLockerProtectionStatus", "battery", "lastBootAt", "uptimeSeconds", "lastInteractiveUser", "availability"]);
+const snapshotFields = new Set(["schemaVersion", "collectedAt", "device", "windows", "cpu", "ramBytes", "graphicsAdapters", "fixedDisks", "networkAdapters", "biosVersion", "tpm", "secureBoot", "bitLockerProtectionStatus", "battery", "lastBootAt", "uptimeSeconds", "lastInteractiveUser", "availability"]);
 
 function requireExactKeys(value, allowed, label) {
   if (!isJsonObject(value)) throw new RequestBodyError(400, `${label} must be an object`);
@@ -100,6 +100,43 @@ function nullableBoolean(value, label) {
 }
 function nullableTimestamp(value, label) {
   if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) throw new RequestBodyError(400, `${label} must be null or an ISO timestamp`);
+}
+
+function formatRam(bytes) {
+  if (!Number.isSafeInteger(bytes) || bytes <= 0) return null;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${units[unit]}`;
+}
+
+function dropdownKey(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/\((?:r|tm)\)/g, "").replace(/[^a-z0-9]+/g, "");
+}
+
+function compatibleReportedValue(field, value, supportedTypes) {
+  if (!supportedTypes.includes(field.type)) return null;
+  if (field.type !== "dropdown") return value;
+  const matches = (field.options || []).filter(option => dropdownKey(typeof option === "object" && option !== null ? option.value : option) === dropdownKey(value));
+  if (matches.length !== 1) return null;
+  const match = matches[0];
+  return typeof match === "object" && match !== null ? match.value : match;
+}
+
+function projectReportedComputerFields(entity, entityType, snapshot) {
+  const facts = {
+    "processor.summary": { value: snapshot.cpu?.model, supportedTypes: ["text", "textarea", "dropdown"] },
+    "memory.total": { value: formatRam(snapshot.ramBytes), supportedTypes: ["text", "textarea", "dropdown"] },
+    "graphics.adapters": { value: Array.isArray(snapshot.graphicsAdapters) && snapshot.graphicsAdapters.length ? snapshot.graphicsAdapters.join("; ") : null, supportedTypes: ["text", "textarea"] },
+  };
+  for (const [capability, { value, supportedTypes }] of Object.entries(facts)) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    const fields = (entityType.fields || []).filter(field => field?.collection?.provider === "windows" && field.collection.capability === capability);
+    if (fields.length !== 1) continue;
+    const compatible = compatibleReportedValue(fields[0], value, supportedTypes);
+    if (compatible !== null) entity[fields[0].name] = compatible;
+  }
 }
 
 export function validateRegistrationFacts(body) {
@@ -120,6 +157,10 @@ export function validateRegistrationFacts(body) {
   for (const [label, value] of Object.entries({ ...snapshot.device, ...snapshot.windows, "cpu.model": snapshot.cpu.model, biosVersion: snapshot.biosVersion, bitLockerProtectionStatus: snapshot.bitLockerProtectionStatus })) nullableString(value, label);
   nullableTimestamp(snapshot.windows.installDate, "windows.installDate");
   nullableInteger(snapshot.cpu.cores, "cpu.cores"); nullableInteger(snapshot.cpu.logicalProcessors, "cpu.logicalProcessors"); nullableInteger(snapshot.ramBytes, "ramBytes");
+  if (snapshot.graphicsAdapters !== undefined) {
+    if (!Array.isArray(snapshot.graphicsAdapters) || snapshot.graphicsAdapters.length > 8) throw new RequestBodyError(400, "graphicsAdapters must contain at most 8 adapters");
+    for (const adapter of snapshot.graphicsAdapters) nullableString(adapter, "graphicsAdapters item", 255);
+  }
   if (!Array.isArray(snapshot.fixedDisks) || snapshot.fixedDisks.length > 32) throw new RequestBodyError(400, "fixedDisks must contain at most 32 disks");
   for (const disk of snapshot.fixedDisks) { requireExactKeys(disk, new Set(["capacityBytes", "freeBytes"]), "fixedDisks item"); nullableInteger(disk.capacityBytes, "fixedDisks.capacityBytes"); nullableInteger(disk.freeBytes, "fixedDisks.freeBytes"); }
   if (!Array.isArray(snapshot.networkAdapters) || snapshot.networkAdapters.length > 32) throw new RequestBodyError(400, "networkAdapters must contain at most 32 adapters");
@@ -155,6 +196,7 @@ export function addRegisteredDevice(payload, workspaceId, facts) {
   const id = `device_${randomBase64url(12)}`;
   const entity = { id, type: "computer", name: facts.hostname.trim(), hostname: facts.hostname.trim(), _elistlyRegistration: { hardwareIdentity: facts.hardwareIdentity, registeredAt: new Date().toISOString(), inventorySnapshot: structuredClone(facts.inventorySnapshot) } };
   for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) if (typeof facts[field] === "string" && facts[field].trim()) entity[field] = facts[field].trim();
+  projectReportedComputerFields(entity, workspace.entityTypes.computer, facts.inventorySnapshot);
   const nextPayload = structuredClone(payload);
   nextPayload.workspaces[workspaceId].entities[id] = entity;
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
@@ -195,6 +237,7 @@ export function updateReportedDevice(payload, workspaceId, deviceId, facts) {
   registration.lastReportedAt = new Date().toISOString();
   registration.lastObservedAt = facts.inventorySnapshot.collectedAt;
   if (typeof username === "string" && username.trim()) registration.lastObservedUsername = username.trim();
+  projectReportedComputerFields(nextPayload.workspaces[workspaceId].entities[deviceId], found.workspace.entityTypes.computer, facts.inventorySnapshot);
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
   return nextPayload;
 }

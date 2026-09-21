@@ -26,6 +26,7 @@ assert.match(report, /device-reporting\/report/);
 assert.doesNotMatch(report, /device-registration\/register/);
 assert.match(report, /TimeoutSec 45/);
 assert.match(report, /last-result.json/);
+assert.match(report, /graphicsAdapters/, 'generated scheduled reports must include collected graphics adapters');
 fs.writeFileSync('/tmp/elistly-install-reporting-test.ps1', installer);
 fs.writeFileSync('/tmp/elistly-reporting-test.ps1', report);
 console.log('PASS scheduled reporting installer and report generation');

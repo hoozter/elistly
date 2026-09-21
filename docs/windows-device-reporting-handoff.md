@@ -34,7 +34,7 @@ This is not proof that a real Windows task has executed or that a credentialed p
 ### Device identity and payload
 
 - Hardware identity is lowercase SHA-256 of `BIOS UUID|BIOS serial number`. Generic/placeholder serials or UUIDs stop collection before a request.
-- The report POST is bounded to 64 KiB. Its schema is `elistly.windows-device-registration.v1` and includes hostname; serial/manufacturer/model/Windows edition; BIOS UUID/version; Windows release/build/install and boot time; CPU and RAM; up to 32 fixed disks; up to 32 active physical adapters with bounded IP addresses; TPM, Secure Boot, BitLocker and battery availability; uptime; and one current interactive-user observation when Windows exposes it.
+- The report POST is bounded to 64 KiB. Its schema is `elistly.windows-device-registration.v1` and includes hostname; serial/manufacturer/model/Windows edition; BIOS UUID/version; Windows release/build/install and boot time; CPU, RAM, and up to eight graphics-adapter names; up to 32 fixed disks; up to 32 active physical adapters with bounded IP addresses; TPM, Secure Boot, BitLocker and battery availability; uptime; and one current interactive-user observation when Windows exposes it. Earlier installed reporters may omit `graphicsAdapters`; the Worker accepts that established payload and leaves the graphics fact unavailable.
 - It does not read browser data, documents, passwords, product keys, Wi-Fi secrets, or scan the network. Collection failures for optional Windows facilities become null/availability messages where possible.
 - A successful report refreshes only the bound registration’s inventory snapshot and reporting timestamps. It preserves ordinary inventory fields such as name and assignment.
 

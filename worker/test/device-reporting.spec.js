@@ -18,7 +18,7 @@ const facts = { hardwareIdentity: identity, hostname: "PC-01", serialNumber: "SE
 const env = { ELISTLY_ALLOWED_ORIGINS: "https://app.example.test", NEON_DATABASE_URL: "unused" };
 
 function account({ hardwareIdentity = identity, snapshot: priorSnapshot = { ...snapshot, collectedAt: "2026-01-01T00:00:00.000Z", lastInteractiveUser: { ...snapshot.lastInteractiveUser, username: "prior-user" } }, workspace = "main" } = {}) {
-  return { currentWorkspaceId: workspace, workspaces: { [workspace]: { entityTypes: { computer: {} }, entities: { "device-1": { id: "device-1", type: "computer", name: "Manual name", assignedTo: "Alice", _elistlyRegistration: { hardwareIdentity, inventorySnapshot: priorSnapshot, lastObservedUsername: "prior-user" } } } }, other: { entityTypes: { computer: {} }, entities: {} } }, entities: {} };
+  return { currentWorkspaceId: workspace, workspaces: { [workspace]: { entityTypes: { computer: { fields: [{ name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } }, { name: "ram", type: "text", collection: { provider: "windows", capability: "memory.total" } }] } }, entities: { "device-1": { id: "device-1", type: "computer", name: "Manual name", assignedTo: "Alice", _elistlyRegistration: { hardwareIdentity, inventorySnapshot: priorSnapshot, lastObservedUsername: "prior-user" } } } }, other: { entityTypes: { computer: {} }, entities: {} } }, entities: {} };
 }
 
 async function request(worker, path, { method = "POST", body, authorization } = {}) {
@@ -52,11 +52,31 @@ describe("per-device reporting", () => {
     const device = saved.workspaces.main.entities["device-1"];
     expect(device.name).toBe("Manual name");
     expect(device.assignedTo).toBe("Alice");
+    expect(device.processor).toBe("CPU");
+    expect(device.ram).toBe("1 B");
     expect(device._elistlyRegistration.inventorySnapshot).toEqual(snapshot);
     expect(device._elistlyRegistration.lastObservedUsername).toBe("prior-user");
     expect(write.query).toContain("revoked_at IS NULL");
     expect(write.query).toContain("FOR UPDATE");
     expect(write.query).toContain("AND updated_at =");
+  });
+
+  it("refreshes a configured graphics field from a multi-GPU report", async () => {
+    const state = account();
+    state.workspaces.main.entityTypes.computer.fields.push({ name: "graphicsCard", type: "textarea", collection: { provider: "windows", capability: "graphics.adapters" } });
+    const reportedFacts = { ...facts, inventorySnapshot: { ...snapshot, graphicsAdapters: ["Integrated GPU", "Discrete GPU"] } };
+    const { sql, calls } = reportingSql({ state });
+    const worker = createWorker({ createSql: () => sql, authenticate: async () => null });
+
+    const response = await request(worker, "/device-reporting/report", { body: reportedFacts, authorization: token });
+
+    expect(response.status).toBe(200);
+    const write = calls.find(call => call.query.includes("WITH active_token"));
+    const saved = JSON.parse(write.values.find(value => typeof value === "string" && value.startsWith("{")));
+    const device = saved.workspaces.main.entities["device-1"];
+    expect(device.graphicsCard).toBe("Integrated GPU; Discrete GPU");
+    expect(device._elistlyRegistration.inventorySnapshot.graphicsAdapters).toEqual(["Integrated GPU", "Discrete GPU"]);
+    expect(device.assignedTo).toBe("Alice");
   });
 
   it("rejects stale reports, wrong identities, deleted or moved targets, revoked tokens, and CAS conflicts", async () => {
