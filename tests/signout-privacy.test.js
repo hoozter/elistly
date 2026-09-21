@@ -149,7 +149,9 @@ async function testLateInventoryReadCannotUndoSignOutCleanup() {
         };
         let callbacks = 0;
         const loading = background
-          ? Storage.syncRemoteInBackground('account-a', '', () => { callbacks += 1; })
+          ? Storage.syncRemoteInBackground('account-a', '', () => { callbacks += 1; }).catch(error => {
+              if (error.message !== 'Account changed while loading inventory.') throw error;
+            })
           : Storage.getAppData().catch(() => null);
         await waiting;
         await Storage.prepareForSignOut();
@@ -193,7 +195,7 @@ async function testStaleCrossTabRemovalCannotRestoreInFlightSaveState() {
     await second.evaluate(() => {
       const accountA = { version: 'test', entities: { secretA: { name: 'Account A inventory' } } };
       localStorage.setItem('elistlyData:user:account-a', JSON.stringify(accountA));
-      localStorage.setItem('elistlyData:outbox:account-a', JSON.stringify([{ id: 'pending', payload: accountA }]));
+      localStorage.setItem('elistlyData:outbox:account-a', JSON.stringify([{ id: 'pending', payload: accountA, expectedUpdatedAt: null }]));
       Storage._cached = structuredClone(accountA);
       Storage._cachedUserId = 'account-a';
       App.data = structuredClone(accountA);
@@ -230,7 +232,7 @@ async function testStaleCrossTabRemovalCannotRestoreInFlightSaveState() {
     assert.deepEqual(afterSave.entities, {}, 'a stale save acknowledgement must not restore cleared runtime inventory');
     assert.equal(afterSave.cache, null, 'a stale save acknowledgement must not recreate the removed account cache');
     assert.equal(afterSave.updatedAt, null, 'a stale save acknowledgement must not recreate the removed account revision');
-    assert.deepEqual(afterSave.outbox, [{ id: 'pending', payload: { version: 'test', entities: { secretA: { name: 'Account A inventory' } } } }], 'a stale save acknowledgement must retain the unconfirmed local edit for recovery');
+    assert.deepEqual(afterSave.outbox, [{ id: 'pending', payload: { version: 'test', entities: { secretA: { name: 'Account A inventory' } } }, expectedUpdatedAt: null }], 'a stale save acknowledgement must retain the unconfirmed local edit for recovery');
     assert.equal(afterSave.syncStatus.state, 'idle', 'a stale save acknowledgement must not overwrite the cleared tab sync state');
   });
 }

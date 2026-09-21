@@ -42,6 +42,7 @@ Worker secrets:
 - `NEON_DATABASE_URL` = Neon pooled Postgres connection string
 - `NEON_AUTH_URL` = Neon Auth URL
 - `NEON_AUTH_JWKS_URL` = Neon Auth JWKS URL
+- `NEON_AUTH_JWT_ISSUER` and `NEON_AUTH_JWT_AUDIENCE` = exact claims from a current access token whose signature has been verified against this deployment's JWKS (see `DEPLOY.md`). Missing values reject bearer requests.
 
 Optional Worker secret:
 

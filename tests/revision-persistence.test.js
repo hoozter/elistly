@@ -183,7 +183,9 @@ async function testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave()
         if ((options.method || 'GET') === 'GET') return new Promise(resolve => { finishBackgroundRead = resolve; });
         return Promise.resolve(new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:02:00.000Z' }), { status: 200 }));
       };
-      await Storage.getAppData();
+      Storage._cached = structuredClone(cached);
+      Storage._cachedUserId = 'user-1';
+      const refreshing = Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z');
       await Storage.setAppData(localEdit);
       finishBackgroundRead(new Response(JSON.stringify({ payload: staleRemote, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -221,6 +223,7 @@ async function testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline() {
       Storage._cachedUserId = null;
       Storage._isDirty = false;
       const reloaded = await Storage.getAppData();
+      await Storage._refreshPromise.catch(() => {});
       return {
         outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
         reloaded,
@@ -232,7 +235,7 @@ async function testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline() {
     assert.equal(observed.outbox.length, 1, 'a failed write must remain in the durable outbox');
     assert.deepEqual(observed.reloaded, { version: 'test', entities: { local: true } }, 'reload must restore queued local data when the account cannot be read');
     assert.equal(observed.requests, 2, 'reload must attempt the account bootstrap before retaining offline pending data');
-    assert.deepEqual(observed.status, { state: 'pending', message: 'Changes are waiting to sync.' }, 'queued local data must report pending sync status');
+    assert.deepEqual(observed.status, { state: 'failed', message: 'Refresh failed. Showing unverified local data; local changes are retained. Reload to retry.' }, 'failed refresh must be honest about retained local data');
   });
 }
 
@@ -243,8 +246,8 @@ async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
       const second = { version: 'test', entities: { second: true } };
       localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
       localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([
-        { id: 'first', payload: first },
-        { id: 'second', payload: second }
+        { id: 'first', payload: first, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' },
+        { id: 'second', payload: second, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }
       ]));
       backendClient = {
         auth: {
@@ -253,8 +256,9 @@ async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
         }
       };
       window.ELISTLY_API_URL = '/mock';
-      window.fetch = async () => new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
-      await Storage.retryPendingSaves();
+      let attempts = 0;
+      window.fetch = async () => ++attempts === 1 ? new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }) : new Response(JSON.stringify({error:'App data changed since preview'}),{status:409});
+      try { await Storage.retryPendingSaves(); } catch (_) {}
       return {
         outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
         revision: localStorage.getItem('elistlyData:userUpdated:user-1'),
@@ -262,9 +266,9 @@ async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
       };
     });
 
-    assert.deepEqual(observed.outbox, [{ id: 'second', payload: { version: 'test', entities: { second: true } } }], 'retry must clear only the acknowledged entry');
+    assert.deepEqual(observed.outbox, [{ id: 'second', payload: { version: 'test', entities: { second: true } }, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }], 'retry must clear only the acknowledged entry');
     assert.equal(observed.revision, '2026-08-12T00:01:00.000Z', 'successful retry must advance the cached revision');
-    assert.equal(observed.status.state, 'pending', 'remaining queued changes must remain visible as pending');
+    assert.equal(observed.status.state, 'conflict', 'the unacknowledged stale entry remains visible as a conflict');
   });
 }
 
@@ -273,7 +277,7 @@ async function testConcurrentReconnectsSerializeOnePendingReplay() {
     const observed = await page.evaluate(async () => {
       const localEdit = { version: 'test', entities: { local: true } };
       localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit }]));
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }]));
       backendClient = {
         auth: {
           getUser: async () => ({ data: { user: { id: 'user-1' } } }),
@@ -307,7 +311,7 @@ async function testOnlineReconnectRetriesPendingSave() {
     const observed = await page.evaluate(async () => {
       const localEdit = { version: 'test', entities: { local: true } };
       localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit }]));
+      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }]));
       backendClient = {
         auth: {
           getUser: async () => ({ data: { user: { id: 'user-1' } } }),
@@ -429,7 +433,7 @@ async function testFailedBackgroundHydrationPreservesCachedData() {
       Storage._cached = structuredClone(cached);
       Storage._cachedUserId = 'user-1';
       Storage._isDirty = false;
-      await Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z');
+      await Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z').catch(() => {});
       return {
         cache: JSON.parse(localStorage.getItem('elistlyData:user:user-1')),
         outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
