@@ -853,8 +853,9 @@ h3 {
   align-items: center;
 }
 
-/* Buttons */
-.btn {
+/* Buttons, including native file pickers used by import and restore. */
+.btn,
+input[type="file"]::file-selector-button {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -874,9 +875,21 @@ h3 {
   background: var(--button-primary-bg);
   color: var(--button-primary-text);
 }
-.btn-secondary {
+.btn-secondary,
+input[type="file"]::file-selector-button {
   background: var(--button-secondary-bg);
   color: var(--button-secondary-text);
+}
+input[type="file"] {
+  max-width: 100%;
+  color: var(--text-secondary);
+  font: inherit;
+}
+input[type="file"]::file-selector-button { margin-right: 0.75rem; }
+input[type="file"]:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
+  border-radius: var(--radius);
 }
 .btn-danger {
   background: var(--danger-color);
@@ -1244,12 +1257,14 @@ h3 {
 .profile-checkbox-row .profile-help {
   margin-left: 1.75rem;
 }
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled),
+input[type="file"]:not(:disabled)::file-selector-button:hover {
   transform: translateY(-1px);
   filter: brightness(1.1);
   box-shadow: 0 4px 8px var(--shadow-color);
 }
-.btn:disabled {
+.btn:disabled,
+input[type="file"]:disabled::file-selector-button {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
