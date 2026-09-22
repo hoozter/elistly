@@ -45,14 +45,19 @@ test('creates one computer and leaves manual values untouched on observations', 
  assert.equal(next.disposition,'Update observations'); assert.deepEqual(next.payload,before);
  assert.deepEqual(p,payload());
 });
-test('refuses ambiguous, manual, legacy and deleted identity matches',async()=>{
+test('refuses ambiguous, manual and legacy identity matches but restores a deleted historical device',async()=>{
  const v=await validate(fixture);
  for (const entities of [
   {a:{id:'a',type:'computer',serialNumber:fixture.serialNumber}},
   {a:{id:'a',type:'computer',_elistlyRegistration:{hardwareIdentity:'other',inventorySnapshot:fixture.inventorySnapshot}}},
   {a:{id:'a',type:'computer',_elistlyRegistration:{hardwareIdentity:fixture.hardwareIdentity}},b:{id:'b',type:'computer',_elistlyRegistration:{hardwareIdentity:fixture.hardwareIdentity}}},
  ]) {const p=payload(); p.workspaces.main.entities=entities; assert.throws(()=>planSvkImport(p,'main',v,[]),/review|collision|multiple/i);}
- assert.throws(()=>planSvkImport(payload(),'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:fixture}]),/deleted|missing/i);
+ const contradictory=structuredClone(fixture);contradictory.hostname='different';
+ assert.throws(()=>planSvkImport(payload(),'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:contradictory}]),/same collection time/i);
+ const restored=planSvkImport(payload(),'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:fixture}]);
+ assert.equal(restored.disposition,'Restore deleted device');assert.ok(restored.payload.workspaces.main.entities.gone);
+ const collision=payload();collision.workspaces.main.entities.live={id:'live',type:'computer',serialNumber:fixture.serialNumber};
+ assert.throws(()=>planSvkImport(collision,'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:fixture}]),/collision|review/i);
  assert.throws(()=>planSvkImport(payload(),'other',v,[]),/workspace/i);
 });
 test('equal-time contradictory observations require attention; older reports remain history',async()=>{

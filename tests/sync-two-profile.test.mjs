@@ -130,6 +130,20 @@ try {
   assert.deepEqual(await row(),accountBefore);
   assert.equal(await ui.locator('#mainContent').evaluate(el=>el.inert),false);
  }
+ // Removing the recovery archive must clear the notice, but never delete account inventory.
+ await ui.setViewportSize({width:1280,height:720});
+ await ui.getByRole('button',{name:'Review preserved local changes'}).click();
+ const backupEvent=ui.waitForEvent('download');
+ await ui.getByRole('button',{name:'Download local backup',exact:true}).click();
+ const backup=await backupEvent;
+ const archive=JSON.parse(fs.readFileSync(await backup.path(),'utf8'));
+ assert.deepEqual(archive.records,JSON.parse(recoveryBefore));
+ await ui.getByRole('button',{name:'Remove downloaded browser copy',exact:true}).click();
+ await ui.getByRole('button',{name:'I saved the archive — remove browser copy',exact:true}).click();
+ await ui.locator('#syncRecoveryModal').waitFor({state:'detached'});
+ assert.equal(await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner')),null);
+ assert.equal(await ui.getByRole('button',{name:'Review preserved local changes'}).count(),0);
+ assert.deepEqual(await row(),accountBefore);
  // Empty cache must not offer destructive setup before or after populated refresh.
  const emptyContext=await browser.newContext();
  await emptyContext.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());

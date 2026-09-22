@@ -101,6 +101,28 @@ try {
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:process.env.SVK_SCREENSHOT.replace(/\.png$/, '-mobile.png')});
  }
+ // Deleting the computer and explicitly importing the same file must restore its visible record.
+ await page.reload();
+ await page.waitForFunction(id=>App.data.entities[id]?.hostname && !ElistlyStorage._isDirty,device.id);
+ await page.evaluate(id=>App.deleteEntity(id),device.id);
+ await page.locator('#confirmDeleteModal').getByRole('button',{name:'Delete',exact:true}).click();
+ await page.waitForFunction(id=>!App.data.entities[id] && !ElistlyStorage._isDirty && !ElistlyStorage._readOutbox('browser-owner').length,device.id);
+ assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id],undefined);
+ await page.evaluate(()=>App.showSvkInventoryImport());
+ await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.locator('#svkFiles').setInputFiles([nextPath]);
+ await modal.getByText('Preview only.',{exact:false}).waitFor();
+ assert.match(await modal.locator('#svkPreview').textContent(),/Restore deleted device/);
+ assert.equal(await page.evaluate(id=>!!App.data.entities[id],device.id),false);
+ await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();
+ await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ await page.waitForFunction(id=>App.data.entities[id]?.hostname,device.id);
+ assert.equal(await page.evaluate(()=>Object.keys(App.data.entities).length),1);
+ assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,2);
+ await page.reload();
+ await page.waitForFunction(id=>App.data.entities[id]?.hostname,device.id);
+ await page.evaluate(()=>App.showSvkInventoryImport());
+ await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
  await page.evaluate(()=>{ElistlyStorage._clearInMemoryAccountState();App.clearAccountRuntime();});
  assert.equal(await page.locator('#svkImportModal').count(),0);
  console.log('PASS: real folder input and multi-file fallback, preview without writes, persisted import/reload/history, two filename lists, hostile text, downloadable receipt, lost response and confirmed retry');

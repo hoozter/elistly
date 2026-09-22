@@ -90,12 +90,18 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   if (!object(workspace?.entities) || !object(workspace?.entityTypes?.computer)) fail('Workspace requires a Computer entity type');
   const {report:r, serialKey, uuidKey, collectedKey} = validated;
   const matches = new Set();
+  let deletedDeviceId;
   for (const row of history) {
     if (row.hardware_identity !== r.hardwareIdentity) fail('Identity normalization mismatch or hardware collision requires review');
-    const e = workspace.entities[row.device_id];
-    if (!e || e.type !== 'computer') fail('Previously imported device is missing or deleted; review required');
-    matches.add(row.device_id);
     if (timestampKey(row.report.collectedAt) === collectedKey && !sameObservation(row.report, r)) fail('Contradictory reports at the same collection time require review');
+    const e = workspace.entities[row.device_id];
+    if (!e) {
+      if (deletedDeviceId && deletedDeviceId !== row.device_id) fail('Multiple deleted matching devices require review');
+      deletedDeviceId = row.device_id;
+      continue;
+    }
+    if (e.type !== 'computer') fail('Previously imported device has an incompatible type; review required');
+    matches.add(row.device_id);
   }
   for (const [id, entity] of Object.entries(workspace.entities)) {
     if (!object(entity) || entity.type !== 'computer') continue;
@@ -111,7 +117,8 @@ export function planSvkImport(payload, workspaceId, validated, history) {
     } else if ((sameSerial || sameUuid) && !matches.has(id)) fail('Manual serial collision or legacy identity mismatch requires review');
   }
   if (matches.size > 1) fail('Multiple matching devices require review');
-  const deviceId = [...matches][0] || `device_${crypto.randomUUID()}`;
+  if (deletedDeviceId && matches.size) fail('Deleted historical device conflicts with a live device; review required');
+  const deviceId = [...matches][0] || deletedDeviceId || `device_${crypto.randomUUID()}`;
   const next = structuredClone(payload);
   if (!matches.size) {
     const entity = {id:deviceId, type:'computer', name:r.hostname, hostname:r.hostname};
@@ -119,7 +126,7 @@ export function planSvkImport(payload, workspaceId, validated, history) {
     next.workspaces[workspaceId].entities[deviceId] = entity;
     if (next.currentWorkspaceId === workspaceId) next.entities = {...next.workspaces[workspaceId].entities};
   }
-  return {payload:next, deviceId, disposition:matches.size ? 'Update observations' : 'New'};
+  return {payload:next, deviceId, disposition:deletedDeviceId ? 'Restore deleted device' : matches.size ? 'Update observations' : 'New'};
 }
 
 async function receipt(sql, owner, workspace, id) {
@@ -139,7 +146,8 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
     const saved = await receipt(sql, owner, workspace, v.reportId);
     if (saved) {
       if (!await verifiedReceipt(saved, v)) fail('Report ID already exists with different content; keep this file for review');
-      return {safe:!preview, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
+      const entity = current.payload.workspaces[workspace].entities?.[saved.device_id];
+      if (entity?.type === 'computer') return {safe:!preview, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
     }
     const history = await sql`SELECT DISTINCT ON (device_id) device_id, hardware_identity, report
       FROM inventory_import_reports WHERE owner_user_id = ${owner} AND workspace_id = ${workspace}
@@ -149,8 +157,17 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
     const plan = planSvkImport(current.payload, workspace, v, history);
     if (preview) return {safe:false, disposition:plan.disposition, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
     if (new TextEncoder().encode(JSON.stringify(plan.payload)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
-    // One SQL statement commits the revision and immutable receipt together.
-    // The app_data CAS also serializes identity matching across different report IDs.
+    // The app_data CAS serializes restoration and identity matching across imports.
+    // Existing immutable receipts are retained while their deleted device is restored.
+    if (saved) {
+      const restored = await sql`UPDATE app_data SET payload = ${JSON.stringify(plan.payload)}::jsonb, updated_at = clock_timestamp()
+        WHERE user_id = ${owner} AND updated_at = ${current.updated_at}::timestamptz RETURNING user_id`;
+      if (!restored.length) continue;
+      const readback = await receipt(sql, owner, workspace, v.reportId);
+      if (!await verifiedReceipt(readback, v) || readback.device_id !== plan.deviceId) fail('Save could not be verified; retry this file before archiving');
+      return {safe:true, disposition:plan.disposition, deviceId:readback.device_id, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest};
+    }
+    // One SQL statement commits a new revision and immutable receipt together.
     const inserted = await sql`WITH saved AS (
       UPDATE app_data SET payload = ${JSON.stringify(plan.payload)}::jsonb, updated_at = clock_timestamp()
       WHERE user_id = ${owner} AND updated_at = ${current.updated_at}::timestamptz RETURNING user_id

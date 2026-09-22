@@ -77,5 +77,24 @@ const broken=structuredClone(newer);broken.reportId=crypto.randomUUID();broken.h
 const before=await request('/app-data').then(r=>r.json());
 assert.equal((await send(batch([file(broken)])))[0].safe,false);
 assert.deepEqual(await request('/app-data').then(r=>r.json()),before);
-console.log('PASS: real PostgreSQL schema/SQL, preview, scoped auth, mixed batch, concurrent retries, manual fields, old/null history, equal/future conflict, commit interruption, receipt corruption, atomic rollback, history readback');
+// Receipts survive an editable-device deletion and explicitly restore the same device ID.
+row=await request('/app-data').then(r=>r.json());
+delete row.payload.workspaces.main.entities[device];
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+results=await send(batch([file()],true));
+assert.equal(results[0].disposition,'Restore deleted device');assert.equal(results[0].safe,false);
+assert.equal((await request('/app-data').then(r=>r.json())).payload.workspaces.main.entities[device],undefined);
+results=(await Promise.all([send(batch([file()])),send(batch([file()]))])).map(r=>r[0]);
+assert.ok(results.every(r=>r.safe));assert.ok(results.some(r=>r.disposition==='Restore deleted device'));assert.ok(results.every(r=>r.deviceId===device));
+row=await request('/app-data').then(r=>r.json());
+assert.equal(row.payload.workspaces.main.entities[device].hostname,report.hostname);assert.equal(row.payload.workspaces.main.entities[device].notes,undefined);
+// A later report for the deleted historical device also restores that same device and adds one receipt.
+delete row.payload.workspaces.main.entities[device];
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+const recovery=structuredClone(newer);recovery.reportId=crypto.randomUUID();recovery.collectedAt='2026-09-21T09:03:00Z';recovery.inventorySnapshot.collectedAt=recovery.collectedAt;
+assert.equal((await send(batch([file(recovery)],true)))[0].disposition,'Restore deleted device');
+results=await send(batch([file(recovery)]));
+assert.equal(results[0].disposition,'Restore deleted device');assert.equal(results[0].deviceId,device);assert.equal(results[0].safe,true);
+assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,7);
+console.log('PASS: real PostgreSQL schema/SQL, preview, scoped auth, mixed batch, concurrent retries, manual fields, old/null history, equal/future conflict, commit interruption, receipt corruption, atomic rollback, history readback, deleted-device receipt and new-report restoration');
 await db.close();
