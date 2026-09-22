@@ -12,7 +12,8 @@ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'elistly-svk-browser-'));
 const db=new PGlite(); await db.exec(fs.readFileSync(path.join(root,'neon/schema.sql'),'utf8'));
 const fixture=JSON.parse(fs.readFileSync(path.join(root,'tests/fixtures/svk/01-installation.json')));
 fixture.hostname='<img src=x onerror=window.__svkXss=1>';
-fixture.inventorySnapshot.cpu.model='Intel(R) Core(TM) i5-1335U';
+fixture.inventorySnapshot.cpu.model='Intel(R) Core(TM) Ultra 5 125U';
+fixture.inventorySnapshot.ramBytes=16619384832;
 const filename='<img onerror=alert(1)>.json';
 fs.mkdirSync(path.join(dir,'Inventory'));fs.writeFileSync(path.join(dir,'Inventory',filename),JSON.stringify(fixture));
 fs.copyFileSync(path.join(root,'tests/fixtures/svk/02-service-missing-identity.json'),path.join(dir,'Inventory','missing.json'));
@@ -51,6 +52,9 @@ try {
   for(const capability of ['computer.manufacturer','computer.model','processor.summary','memory.total','graphics.adapters','windows.edition','windows.version','windows.build','bios.serial-number']){
    if(!computer.fields.some(field=>field.collection?.provider==='windows'&&field.collection.capability===capability)) computer.fields.push({name:`reported_${capability.replaceAll('.','_')}`,label:capability,type:'text',collection:{provider:'windows',capability}});
   }
+  computer.presetIds=['it'];
+  // Stored pre-mapping IT schemas lack these annotations; do not idealize the fixture.
+  for (const field of computer.fields.filter(field=>['cpu','ram'].includes(field.name))) delete field.collection;
   return {version:'1.12.1',onboardingDone:true,currentWorkspaceId:'main',settings:App.normalizeSettings({}),workspaces:{main:{name:'Synthetic lab',categories:preset.categories,entityTypes:preset.entityTypes,entities:{}}}};
  });
  await db.query('INSERT INTO app_data(user_id,payload) VALUES ($1,$2::jsonb)',['browser-owner',JSON.stringify(payload)]);
@@ -73,7 +77,7 @@ try {
  const computerType=stored.payload.workspaces.main.entityTypes.computer;
  const device=Object.values(stored.payload.workspaces.main.entities)[0];assert.equal(device.hostname,fixture.hostname);
  const mapped=capability=>device[computerType.fields.find(field=>field.collection?.provider==='windows'&&field.collection.capability===capability)?.name];
- assert.equal(mapped('computer.manufacturer'),fixture.manufacturer);assert.equal(mapped('computer.model'),fixture.model);assert.equal(mapped('processor.summary'),'Intel Core i5');assert.equal(mapped('memory.total'),'16GB');assert.equal(mapped('graphics.adapters'),'Example Graphics');assert.equal(mapped('windows.edition'),fixture.windowsEdition);assert.equal(mapped('windows.version'),'10.0.26200');assert.equal(mapped('windows.build'),'26200');assert.equal(mapped('bios.serial-number'),fixture.serialNumber);
+ assert.equal(mapped('computer.manufacturer'),fixture.manufacturer);assert.equal(mapped('computer.model'),fixture.model);assert.equal(mapped('processor.summary'),'Intel Core Ultra 5');assert.equal(mapped('memory.total'),'16GB');assert.equal(mapped('graphics.adapters'),'Example Graphics');assert.equal(mapped('windows.edition'),fixture.windowsEdition);assert.equal(mapped('windows.version'),'10.0.26200');assert.equal(mapped('windows.build'),'26200');assert.equal(mapped('bios.serial-number'),fixture.serialNumber);
  assert.ok(device.autoName);assert.equal(device.name,undefined);
  const downloadPromise=page.waitForEvent('download');await modal.getByRole('button',{name:'Download receipt'}).click();
  const downloaded=await downloadPromise;const receipt=JSON.parse(fs.readFileSync(await downloaded.path(),'utf8'));
@@ -83,6 +87,25 @@ try {
  await page.locator('#svkHistoryModal').getByText('Last inventoried:',{exact:false}).waitFor();
  assert.match(await page.locator('#svkHistoryModal').textContent(),/2026-09-21T09:00:00.0000000Z/);
  await page.locator('#svkHistoryModal').getByRole('button',{name:'Close',exact:true}).click();
+ // Re-import repairs an existing prefix-only record without deleting it or changing its receipt.
+ const stale=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload;
+ const staleWorkspace=stale.workspaces.main;
+ delete staleWorkspace.entities[device.id].cpu;delete staleWorkspace.entities[device.id].ram;
+ staleWorkspace.entities[device.id].autoName='PC';
+ for(const field of staleWorkspace.entityTypes.computer.fields.filter(field=>['cpu','ram'].includes(field.name))) delete field.collection;
+ staleWorkspace.entityTypes.computer.fields.find(field=>field.name==='cpu').options=staleWorkspace.entityTypes.computer.fields.find(field=>field.name==='cpu').options.filter(option=>option.value!=='Intel Core Ultra 5');
+ stale.entities=structuredClone(staleWorkspace.entities);stale.entityTypes=structuredClone(staleWorkspace.entityTypes);
+ await db.query('UPDATE app_data SET payload=$1::jsonb,updated_at=clock_timestamp() WHERE user_id=$2',[JSON.stringify(stale),'browser-owner']);
+ await page.reload();await page.waitForFunction(id=>App.data.entities[id]?.autoName==='PC'&&!ElistlyStorage._isDirty,device.id);
+ await page.evaluate(()=>App.showSvkInventoryImport());await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.locator('#svkFiles').setInputFiles([path.join(dir,'Inventory',filename)]);
+ await modal.getByText('Preview only.',{exact:false}).waitFor();
+ assert.match(await modal.locator('#svkPreview').textContent(),/Repair/i);
+ assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id].autoName,'PC');
+ await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ await page.reload();await page.waitForFunction(id=>App.data.entities[id]?.autoName==='PC5U16',device.id);
+ assert.deepEqual(await page.evaluate(id=>({cpu:App.data.entities[id].cpu,ram:App.data.entities[id].ram}),device.id),{cpu:'Intel Core Ultra 5',ram:'16GB'});
+ assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,1);
  // Multi-file fallback; interrupted POST stays attention, retry confirms receipt.
  const next=structuredClone(fixture);next.reportId=crypto.randomUUID();next.collectedAt='2026-09-21T09:01:00.0000000Z';next.inventorySnapshot.collectedAt=next.collectedAt;
  const nextPath=path.join(dir,'next.json');fs.writeFileSync(nextPath,JSON.stringify(next));

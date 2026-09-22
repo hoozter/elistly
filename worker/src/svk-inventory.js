@@ -1,5 +1,5 @@
 // Offline observations are immutable receipts, independent of editable app JSON.
-import { createImportedComputer } from './computer-import.js';
+import { createImportedComputer, migrateKnownItWindowsSchema, repairImportedComputer } from './computer-import.js';
 export class InventoryError extends Error {
   constructor(message, status = 422) { super(message); this.status = status; }
 }
@@ -121,11 +121,22 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   if (deletedDeviceId && matches.size) fail('Deleted historical device conflicts with a live device; review required');
   const deviceId = [...matches][0] || deletedDeviceId || `device_${crypto.randomUUID()}`;
   const next = structuredClone(payload);
+  const schemaChanged = migrateKnownItWindowsSchema(next.workspaces[workspaceId].entityTypes.computer, r);
   if (!matches.size) {
-    const entity = createImportedComputer({id:deviceId, entityType:workspace.entityTypes.computer, entities:workspace.entities, report:r});
+    const entity = createImportedComputer({id:deviceId, entityType:next.workspaces[workspaceId].entityTypes.computer, entities:next.workspaces[workspaceId].entities, report:r});
 
     next.workspaces[workspaceId].entities[deviceId] = entity;
-    if (next.currentWorkspaceId === workspaceId) next.entities = {...next.workspaces[workspaceId].entities};
+    if (next.currentWorkspaceId === workspaceId) {
+      next.entities = {...next.workspaces[workspaceId].entities};
+      next.entityTypes = {...next.workspaces[workspaceId].entityTypes};
+    }
+  } else {
+    const entity = next.workspaces[workspaceId].entities[deviceId];
+    const entityChanged = repairImportedComputer({entity, entityType:next.workspaces[workspaceId].entityTypes.computer, entities:next.workspaces[workspaceId].entities, report:r});
+    if ((schemaChanged || entityChanged) && next.currentWorkspaceId === workspaceId) {
+      next.entities = {...next.workspaces[workspaceId].entities};
+      next.entityTypes = {...next.workspaces[workspaceId].entityTypes};
+    }
   }
   return {payload:next, deviceId, disposition:deletedDeviceId ? 'Restore deleted device' : matches.size ? 'Update observations' : 'New'};
 }
@@ -148,7 +159,31 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
     if (saved) {
       if (!await verifiedReceipt(saved, v)) fail('Report ID already exists with different content; keep this file for review');
       const entity = current.payload.workspaces[workspace].entities?.[saved.device_id];
-      if (entity?.type === 'computer') return {safe:!preview, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
+      if (entity?.type === 'computer') {
+        if (preview) {
+          const candidate = structuredClone(current.payload);
+          const candidateWorkspace = candidate.workspaces[workspace];
+          const schemaChanged = migrateKnownItWindowsSchema(candidateWorkspace.entityTypes.computer, v.report);
+          const entityChanged = repairImportedComputer({entity:candidateWorkspace.entities[saved.device_id], entityType:candidateWorkspace.entityTypes.computer, entities:candidateWorkspace.entities, report:v.report});
+          return {safe:false, disposition:schemaChanged || entityChanged ? 'Repair imported device' : 'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
+        }
+        const repaired = structuredClone(current.payload);
+        const workspacePayload = repaired.workspaces[workspace];
+        const schemaChanged = migrateKnownItWindowsSchema(workspacePayload.entityTypes.computer, v.report);
+        const entityChanged = repairImportedComputer({entity:workspacePayload.entities[saved.device_id], entityType:workspacePayload.entityTypes.computer, entities:workspacePayload.entities, report:v.report});
+        if (!schemaChanged && !entityChanged) return {safe:true, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
+        if (repaired.currentWorkspaceId === workspace) {
+          repaired.entities = {...workspacePayload.entities};
+          repaired.entityTypes = {...workspacePayload.entityTypes};
+        }
+        if (new TextEncoder().encode(JSON.stringify(repaired)).length > 4 * 1024 * 1024) fail('Account inventory is too large to repair safely');
+        const updated = await sql`UPDATE app_data SET payload = ${JSON.stringify(repaired)}::jsonb, updated_at = clock_timestamp()
+          WHERE user_id = ${owner} AND updated_at = ${current.updated_at}::timestamptz RETURNING user_id`;
+        if (!updated.length) continue;
+        const readback = await receipt(sql, owner, workspace, v.reportId);
+        if (!await verifiedReceipt(readback, v) || readback.device_id !== saved.device_id) fail('Repair could not be verified; retry this file before archiving');
+        return {safe:true, disposition:'Repaired import', deviceId:readback.device_id, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
+      }
     }
     const history = await sql`SELECT DISTINCT ON (device_id) device_id, hardware_identity, report
       FROM inventory_import_reports WHERE owner_user_id = ${owner} AND workspace_id = ${workspace}

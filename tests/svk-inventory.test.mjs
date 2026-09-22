@@ -86,6 +86,41 @@ test('uses the ordinary Computer projection and generated name when restoring a 
  });
  assert.equal(entity.assignedTo,undefined);assert.equal(Object.keys(restored.payload.workspaces.main.entities).length,1);
 });
+test('projects the actual unannotated Computer schema and CPU/RAM name components',async()=>{
+ const actual=structuredClone(fixture);
+ actual.hostname='SVK-PF5EQWQ5';actual.model='21M7002HMX';actual.inventorySnapshot.device.model=actual.model;
+ actual.inventorySnapshot.cpu={model:'Intel(R) Core(TM) Ultra 5 125U',cores:12,logicalProcessors:14};
+ actual.inventorySnapshot.ramBytes=16619384832;
+ const p=payload();
+ p.workspaces.main.entityTypes.computer={
+  presetIds:['it'],
+  enableNameGen:true,
+  nameGen:{prefix:'LER',prefixEnabled:true,suffixType:'number',componentsOrder:[{type:'field',name:'indexYear'},{type:'field',name:'cpu'},{type:'field',name:'ram'}]},
+  // This is the affected account's stored schema: its preset fields have no collection metadata.
+  fields:[
+   {name:'indexYear',label:'Year',type:'dropdown',required:true,partOfName:true,options:[{value:'2025',nameValue:'Y5'}]},
+   {name:'cpu',label:'CPU',type:'dropdown',required:true,partOfName:true,options:[{value:'Intel Core i5',nameValue:'5'},{value:'Intel Core i7',nameValue:'7'},{value:'Intel Core i9',nameValue:'9'},{value:'Intel Core 7 Ultra',nameValue:'7U'},{value:'Intel Core 9 Ultra',nameValue:'9U'}]},
+   {name:'ram',label:'RAM',type:'dropdown',required:true,partOfName:true,options:[{value:'8GB',nameValue:'8'},{value:'16GB',nameValue:'16'},{value:'32GB',nameValue:'32'},{value:'64GB',nameValue:'64'}]},
+   {name:'processorDescription',label:'Processor details',type:'textarea'},
+   {name:'graphicsAdapters',label:'Graphics adapters',type:'textarea'},
+   {name:'windowsVersion',label:'Windows version',type:'text'},
+   {name:'windowsBuild',label:'Windows build',type:'text'},
+  ]
+ };
+ const planned=planSvkImport(p,'main',await validate(actual),[]);
+ const entity=planned.payload.workspaces.main.entities[planned.deviceId];
+ assert.deepEqual({cpu:entity.cpu,ram:entity.ram,autoName:entity.autoName},{cpu:'Intel Core Ultra 5',ram:'16GB',autoName:'LER5U16'});
+ assert.deepEqual(planned.payload.entityTypes,planned.payload.workspaces.main.entityTypes);
+ assert.equal(planned.payload.workspaces.main.entityTypes.computer.fields.find(field=>field.name==='cpu').collection.capability,'processor.summary');
+ assert.deepEqual(planned.payload.workspaces.main.entityTypes.computer.fields.find(field=>field.name==='cpu').options.at(-1),{value:'Intel Core Ultra 5',nameValue:'5U'});
+ const existing=payload();existing.workspaces.main.entityTypes.computer=p.workspaces.main.entityTypes.computer;
+ existing.workspaces.main.entities.imported={id:'imported',type:'computer',hostname:actual.hostname,autoName:'LER'};
+ const repaired=planSvkImport(existing,'main',await validate(actual),[{device_id:'imported',hardware_identity:actual.hardwareIdentity,report:actual}]).payload.workspaces.main.entities.imported;
+ assert.deepEqual({cpu:repaired.cpu,ram:repaired.ram,autoName:repaired.autoName},{cpu:'Intel Core Ultra 5',ram:'16GB',autoName:'LER5U16'});
+ existing.workspaces.main.entities.imported={id:'imported',type:'computer',hostname:actual.hostname,cpu:'Intel Core i7',autoName:'MANUAL'};
+ const preserved=planSvkImport(existing,'main',await validate(actual),[{device_id:'imported',hardware_identity:actual.hardwareIdentity,report:actual}]).payload.workspaces.main.entities.imported;
+ assert.deepEqual({cpu:preserved.cpu,ram:preserved.ram,autoName:preserved.autoName},{cpu:'Intel Core i7',ram:'16GB',autoName:'MANUAL'});
+});
 test('equal-time contradictory observations require attention; older reports remain history',async()=>{
  const v=await validate(fixture),p=payload(); p.workspaces.main.entities.a={id:'a',type:'computer'};
  const old=structuredClone(fixture); old.inventorySnapshot.ramBytes=null;

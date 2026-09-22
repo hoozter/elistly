@@ -28,7 +28,7 @@ function processorFamilyKey(value, exact = false) {
   return null;
 }
 
-function compatibleValue(field, value, supportedTypes, processor = false) {
+function compatibleValue(field, value, supportedTypes, processor = false, memory = false) {
   if (!supportedTypes.includes(field.type)) return null;
   if (field.type !== 'dropdown') return value;
   const options = Array.isArray(field.options) ? field.options : [];
@@ -37,12 +37,58 @@ function compatibleValue(field, value, supportedTypes, processor = false) {
     const family = processorFamilyKey(value);
     matches = options.filter(option => family && processorFamilyKey(typeof option === 'object' && option !== null ? option.value : option, true) === family);
   }
+  // Windows reports usable memory; choose a nominal GB option only when it is
+  // unambiguously within ten percent of the measured capacity.
+  if (!matches.length && memory) {
+    const memoryBytes = memory => {
+      const match = /^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)$/i.exec(String(memory).trim());
+      const units = {B:0, KB:1, MB:2, GB:3, TB:4};
+      return match ? Number(match[1]) * (1024 ** units[match[2].toUpperCase()]) : null;
+    };
+    const measured = memoryBytes(value);
+    const candidates = options.map(option => {
+      const optionValue = typeof option === 'object' && option !== null ? option.value : option;
+      const nominal = memoryBytes(optionValue);
+      return { option, nominal, difference: Math.abs(nominal - measured) };
+    }).filter(candidate => Number.isFinite(measured) && Number.isFinite(candidate.nominal) && candidate.nominal > 0 && candidate.difference / candidate.nominal <= 0.1);
+    const nearest = candidates.sort((a, b) => a.difference - b.difference);
+    if (nearest.length === 1 || (nearest.length > 1 && nearest[0].difference < nearest[1].difference)) matches = [nearest[0].option];
+  }
   if (matches.length !== 1) return null;
   const match = matches[0];
   return typeof match === 'object' && match !== null ? match.value : match;
 }
 
-export function projectWindowsComputerFields(entity, entityType, report, { capabilities = null } = {}) {
+const knownItWindowsFields = {
+  hostname: ['Hostname', 'computer.hostname'],
+  manufacturer: ['Manufacturer', 'computer.manufacturer'],
+  model: ['Model', 'computer.model'],
+  cpu: ['CPU', 'processor.summary'],
+  processorDescription: ['Processor details', 'processor.description'],
+  ram: ['RAM', 'memory.total'],
+  graphicsAdapters: ['Graphics adapters', 'graphics.adapters'],
+  windowsEdition: ['Windows edition', 'windows.edition'],
+  windowsVersion: ['Windows version', 'windows.version'],
+  windowsBuild: ['Windows build', 'windows.build'],
+  serialNumber: ['Serial number', 'bios.serial-number'],
+};
+
+export function migrateKnownItWindowsSchema(entityType, report) {
+  if (!entityType?.presetIds?.includes('it')) return false;
+  let changed = false;
+  for (const [name, [label, capability]] of Object.entries(knownItWindowsFields)) {
+    const field = entityType.fields?.find(candidate => candidate?.name === name && candidate.label === label);
+    if (field && !field.collection) { field.collection = {provider:'windows', capability}; changed = true; }
+  }
+  const cpu = entityType.fields?.find(field => field?.name === 'cpu' && field.label === 'CPU' && field.type === 'dropdown');
+  if (/Intel\(R\) Core\(TM\) Ultra 5\b/i.test(report.inventorySnapshot?.cpu?.model || '') && cpu && !cpu.options?.some(option => processorFamilyKey(typeof option === 'object' && option !== null ? option.value : option, true) === 'intelcoreultra5')) {
+    cpu.options = [...(Array.isArray(cpu.options) ? cpu.options : []), {value:'Intel Core Ultra 5',nameValue:'5U'}];
+    changed = true;
+  }
+  return changed;
+}
+
+export function projectWindowsComputerFields(entity, entityType, report, { capabilities = null, overwrite = true } = {}) {
   const snapshot = report.inventorySnapshot;
   const facts = {
     'computer.hostname': { value: report.hostname, supportedTypes: ['text', 'textarea'] },
@@ -50,20 +96,20 @@ export function projectWindowsComputerFields(entity, entityType, report, { capab
     'computer.model': { value: report.model, supportedTypes: ['text', 'textarea'] },
     'processor.summary': { value: snapshot.cpu?.model, supportedTypes: ['text', 'textarea', 'dropdown'], processor: true },
     'processor.description': { value: processorDescription(snapshot.cpu), supportedTypes: ['text', 'textarea'] },
-    'memory.total': { value: formatRam(snapshot.ramBytes), supportedTypes: ['text', 'textarea', 'dropdown'] },
+    'memory.total': { value: formatRam(snapshot.ramBytes), supportedTypes: ['text', 'textarea', 'dropdown'], memory: true },
     'graphics.adapters': { value: Array.isArray(snapshot.graphicsAdapters) && snapshot.graphicsAdapters.length ? snapshot.graphicsAdapters.join('; ') : null, supportedTypes: ['text', 'textarea'] },
     'windows.edition': { value: report.windowsEdition ?? snapshot.windows?.edition, supportedTypes: ['text', 'textarea', 'dropdown'] },
     'windows.version': { value: snapshot.windows?.version, supportedTypes: ['text', 'textarea'] },
     'windows.build': { value: snapshot.windows?.build, supportedTypes: ['text', 'textarea'] },
     'bios.serial-number': { value: report.serialNumber, supportedTypes: ['text', 'textarea'] },
   };
-  for (const [capability, { value, supportedTypes, processor }] of Object.entries(facts)) {
+  for (const [capability, { value, supportedTypes, processor, memory }] of Object.entries(facts)) {
     if (capabilities && !capabilities.has(capability)) continue;
     if (typeof value !== 'string' || !value.trim()) continue;
     const fields = (entityType.fields || []).filter(field => field?.collection?.provider === 'windows' && field.collection.capability === capability);
     if (fields.length !== 1) continue;
-    const compatible = compatibleValue(fields[0], value, supportedTypes, processor);
-    if (compatible !== null) entity[fields[0].name] = compatible;
+    const compatible = compatibleValue(fields[0], value, supportedTypes, processor, memory);
+    if (compatible !== null && (overwrite || entity[fields[0].name] == null || entity[fields[0].name] === '')) entity[fields[0].name] = compatible;
   }
 }
 
@@ -118,4 +164,15 @@ export function createImportedComputer({ id, entityType, entities, report }) {
     delete entity.name;
   }
   return entity;
+}
+
+// Receipts can outlive a projection fix. Fill only absent generated fields, and
+// regenerate a title only when it is still exactly the old generated title.
+export function repairImportedComputer({ entity, entityType, entities, report }) {
+  if (entity?.type !== 'computer') return false;
+  const generatedBefore = entityType.enableNameGen && entity.autoName === generatedComputerName(entityType, entity, entities);
+  const before = structuredClone(entity);
+  projectWindowsComputerFields(entity, entityType, report, { overwrite: false });
+  if (generatedBefore) entity.autoName = generatedComputerName(entityType, entity, entities);
+  return JSON.stringify(before) !== JSON.stringify(entity);
 }

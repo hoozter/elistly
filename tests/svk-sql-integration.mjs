@@ -96,5 +96,50 @@ assert.equal((await send(batch([file(recovery)],true)))[0].disposition,'Restore 
 results=await send(batch([file(recovery)]));
 assert.equal(results[0].disposition,'Restore deleted device');assert.equal(results[0].deviceId,device);assert.equal(results[0].safe,true);
 assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,7);
-console.log('PASS: real PostgreSQL schema/SQL, preview, scoped auth, mixed batch, concurrent retries, manual fields, old/null history, equal/future conflict, commit interruption, receipt corruption, atomic rollback, history readback, deleted-device receipt and new-report restoration');
+// An exact existing receipt repairs the observed production IT schema without
+// changing preview state, and keeps later manual choices intact.
+const actual=structuredClone(report);
+actual.reportId=crypto.randomUUID();actual.collectedAt='2026-09-21T09:04:00Z';actual.inventorySnapshot.collectedAt=actual.collectedAt;actual.hostname='SVK-PF5EQWQ5';actual.model='21M7002HMX';actual.inventorySnapshot.device.model=actual.model;
+actual.inventorySnapshot.cpu={model:'Intel(R) Core(TM) Ultra 5 125U',cores:12,logicalProcessors:14};actual.inventorySnapshot.ramBytes=16619384832;
+const actualSchema=()=>({id:'computer',label:'Computer',category:'devices',presetIds:['it'],enableNameGen:true,nameGen:{prefix:'LER',prefixEnabled:true,suffixType:'number',componentsOrder:[{type:'field',name:'indexYear'},{type:'field',name:'cpu'},{type:'field',name:'ram'}]},fields:[
+ {name:'indexYear',label:'Year',type:'dropdown',required:true,partOfName:true,options:[{value:'2025',nameValue:'Y5'}]},
+ {name:'cpu',label:'CPU',type:'dropdown',required:true,partOfName:true,options:[{value:'Intel Core i5',nameValue:'5'},{value:'Intel Core i7',nameValue:'7'},{value:'Intel Core i9',nameValue:'9'},{value:'Intel Core 7 Ultra',nameValue:'7U'},{value:'Intel Core 9 Ultra',nameValue:'9U'}]},
+ {name:'ram',label:'RAM',type:'dropdown',required:true,partOfName:true,options:[{value:'8GB',nameValue:'8'},{value:'16GB',nameValue:'16'},{value:'32GB',nameValue:'32'},{value:'64GB',nameValue:'64'}]},
+ {name:'processorDescription',label:'Processor details',type:'textarea'}, {name:'graphicsAdapters',label:'Graphics adapters',type:'textarea'}, {name:'windowsVersion',label:'Windows version',type:'text'}, {name:'windowsBuild',label:'Windows build',type:'text'},
+],associations:[]});
+row=await request('/app-data').then(r=>r.json());
+row.payload.workspaces.main.entityTypes.computer=actualSchema();
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+assert.equal((await send(batch([file(actual)])))[0].safe,true);
+row=await request('/app-data').then(r=>r.json());
+row.payload.workspaces.main.entityTypes.computer=actualSchema();
+row.payload.workspaces.main.entities[device]={id:device,type:'computer',hostname:actual.hostname,autoName:'LER'};
+delete row.payload.entities;delete row.payload.entityTypes;
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+const beforeRepair=await request('/app-data').then(r=>r.json());
+results=await send(batch([file(actual)],true));assert.equal(results[0].disposition,'Repair imported device');assert.equal(results[0].safe,false);
+assert.deepEqual(await request('/app-data').then(r=>r.json()),beforeRepair);
+results=await send(batch([file(actual)]));assert.equal(results[0].disposition,'Repaired import');assert.equal(results[0].safe,true);
+row=await request('/app-data').then(r=>r.json());
+assert.deepEqual({cpu:row.payload.workspaces.main.entities[device].cpu,ram:row.payload.workspaces.main.entities[device].ram,autoName:row.payload.workspaces.main.entities[device].autoName},{cpu:'Intel Core Ultra 5',ram:'16GB',autoName:'LER5U16'});
+assert.equal(row.payload.workspaces.main.entityTypes.computer.fields.find(field=>field.name==='cpu').collection.capability,'processor.summary');
+assert.deepEqual(row.payload.entityTypes,row.payload.workspaces.main.entityTypes);
+assert.equal((await send(batch([file(actual)],true)))[0].disposition,'Already imported');
+assert.equal((await send(batch([file(actual)])))[0].disposition,'Already imported');
+row=await request('/app-data').then(r=>r.json());row.payload.workspaces.main.entities[device].cpu='Intel Core i7';delete row.payload.workspaces.main.entities[device].ram;row.payload.workspaces.main.entities[device].autoName='MANUAL';
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+assert.equal((await send(batch([file(actual)],true)))[0].disposition,'Repair imported device');
+assert.equal((await send(batch([file(actual)])))[0].disposition,'Repaired import');
+row=await request('/app-data').then(r=>r.json());assert.deepEqual({cpu:row.payload.workspaces.main.entities[device].cpu,ram:row.payload.workspaces.main.entities[device].ram,autoName:row.payload.workspaces.main.entities[device].autoName},{cpu:'Intel Core i7',ram:'16GB',autoName:'MANUAL'});
+// A schema-only migration is still a repair and must be persisted and synced.
+for (const field of row.payload.workspaces.main.entityTypes.computer.fields) delete field.collection;
+delete row.payload.entityTypes;
+assert.equal((await request('/app-data',{payload:row.payload,expectedUpdatedAt:row.updated_at},'owner-test','PUT')).status,200);
+assert.equal((await send(batch([file(actual)],true)))[0].disposition,'Repair imported device');
+assert.equal((await send(batch([file(actual)])))[0].disposition,'Repaired import');
+row=await request('/app-data').then(r=>r.json());
+assert.equal(row.payload.workspaces.main.entityTypes.computer.fields.find(field=>field.name==='ram').collection.capability,'memory.total');
+assert.deepEqual(row.payload.entityTypes,row.payload.workspaces.main.entityTypes);
+assert.equal((await send(batch([file(actual)])))[0].disposition,'Already imported');
+console.log('PASS: real PostgreSQL schema/SQL, preview, scoped auth, mixed batch, concurrent retries, manual fields, old/null history, equal/future conflict, commit interruption, receipt corruption, atomic rollback, history readback, deleted-device restoration, exact-receipt schema repair, nonmutating repair preview, idempotence, manual field preservation, and schema-only repair persistence');
 await db.close();
