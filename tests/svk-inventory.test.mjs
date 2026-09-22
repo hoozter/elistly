@@ -60,6 +60,32 @@ test('refuses ambiguous, manual and legacy identity matches but restores a delet
  assert.throws(()=>planSvkImport(collision,'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:fixture}]),/collision|review/i);
  assert.throws(()=>planSvkImport(payload(),'other',v,[]),/workspace/i);
 });
+test('uses the ordinary Computer projection and generated name when restoring a deleted report',async()=>{
+ const v=await validate(fixture),p=payload();
+ p.workspaces.main.entityTypes.computer={
+  enableNameGen:true,
+  nameGen:{prefix:'PC',prefixEnabled:true,suffixType:'number',componentsOrder:[{type:'field',name:'cpu'},{type:'field',name:'ram'}]},
+  fields:[
+   {name:'hostname',type:'text',collection:{provider:'windows',capability:'computer.hostname'}},
+   {name:'maker',type:'text',collection:{provider:'windows',capability:'computer.manufacturer'}},
+   {name:'modelName',type:'text',collection:{provider:'windows',capability:'computer.model'}},
+   {name:'cpu',type:'dropdown',partOfName:true,options:[{value:'Example CPU',nameValue:'C'}],collection:{provider:'windows',capability:'processor.summary'}},
+   {name:'ram',type:'dropdown',partOfName:true,options:[{value:'16GB',nameValue:'16'}],collection:{provider:'windows',capability:'memory.total'}},
+   {name:'gpu',type:'textarea',collection:{provider:'windows',capability:'graphics.adapters'}},
+   {name:'edition',type:'text',collection:{provider:'windows',capability:'windows.edition'}},
+   {name:'version',type:'text',collection:{provider:'windows',capability:'windows.version'}},
+   {name:'build',type:'text',collection:{provider:'windows',capability:'windows.build'}},
+   {name:'serial',type:'text',collection:{provider:'windows',capability:'bios.serial-number'}},
+  ]
+ };
+ const restored=planSvkImport(p,'main',v,[{device_id:'gone',hardware_identity:fixture.hardwareIdentity,report:fixture}]);
+ const entity=restored.payload.workspaces.main.entities.gone;
+ assert.equal(restored.disposition,'Restore deleted device');assert.equal(entity.autoName,'PCC16');assert.equal(entity.name,undefined);
+ assert.deepEqual(Object.fromEntries(['hostname','maker','modelName','cpu','ram','gpu','edition','version','build','serial'].map(key=>[key,entity[key]])),{
+  hostname:fixture.hostname,maker:fixture.manufacturer,modelName:fixture.model,cpu:'Example CPU',ram:'16GB',gpu:'Example Graphics',edition:fixture.windowsEdition,version:'10.0.26200',build:'26200',serial:fixture.serialNumber
+ });
+ assert.equal(entity.assignedTo,undefined);assert.equal(Object.keys(restored.payload.workspaces.main.entities).length,1);
+});
 test('equal-time contradictory observations require attention; older reports remain history',async()=>{
  const v=await validate(fixture),p=payload(); p.workspaces.main.entities.a={id:'a',type:'computer'};
  const old=structuredClone(fixture); old.inventorySnapshot.ramBytes=null;

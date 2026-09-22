@@ -1,4 +1,5 @@
 // Offline observations are immutable receipts, independent of editable app JSON.
+import { createImportedComputer } from './computer-import.js';
 export class InventoryError extends Error {
   constructor(message, status = 422) { super(message); this.status = status; }
 }
@@ -121,8 +122,8 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   const deviceId = [...matches][0] || deletedDeviceId || `device_${crypto.randomUUID()}`;
   const next = structuredClone(payload);
   if (!matches.size) {
-    const entity = {id:deviceId, type:'computer', name:r.hostname, hostname:r.hostname};
-    for (const field of ['serialNumber','manufacturer','model','windowsEdition']) if (r[field] !== null) entity[field] = r[field];
+    const entity = createImportedComputer({id:deviceId, entityType:workspace.entityTypes.computer, entities:workspace.entities, report:r});
+
     next.workspaces[workspaceId].entities[deviceId] = entity;
     if (next.currentWorkspaceId === workspaceId) next.entities = {...next.workspaces[workspaceId].entities};
   }
