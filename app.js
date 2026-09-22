@@ -965,7 +965,7 @@ const App = {
         if (!recovery || document.getElementById('syncRecoveryModal')) return;
         const modal = document.createElement('div');
         modal.id = 'syncRecoveryModal';
-        modal.className = 'modal-overlay hidden';
+        modal.className = 'modal hidden';
         const card = document.createElement('div');
         card.className = 'modal-content';
         const title = document.createElement('h3');

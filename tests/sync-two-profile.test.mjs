@@ -111,6 +111,25 @@ try {
  assert.equal(writes,beforeRefreshWrites,'cache display must not save normalized stale data');
  const freshMs=Date.now()-refreshStart;adminGate=null;releaseAdmin();
  await ui.screenshot({path:path.join(root,'.hermes/sync-repair-warm.png')});
+ // Recovery review must actually overlay the viewport, close, and reopen without changing either copy.
+ await ui.evaluate(recovery=>{
+  localStorage.setItem(Storage.USER_RECOVERY_PREFIX+'owner',JSON.stringify([recovery]));
+  Storage._conflictRecovery=recovery;
+  App.renderSyncStatus();
+ },recovery);
+ const recoveryBefore=await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner'));
+ const accountBefore=await row();
+ for (const viewport of [{width:1280,height:720},{width:390,height:844}]) {
+  await ui.setViewportSize(viewport);
+  await ui.getByRole('button',{name:'Review preserved local changes'}).click();
+  const dialog=ui.locator('#syncRecoveryModal');
+  assert.equal(await dialog.evaluate(el=>getComputedStyle(el).position),'fixed','recovery review must overlay the app, not render below its viewport');
+  await dialog.getByRole('button',{name:'Keep both copies'}).click({timeout:2000});
+  await dialog.waitFor({state:'detached'});
+  assert.equal(await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner')),recoveryBefore);
+  assert.deepEqual(await row(),accountBefore);
+  assert.equal(await ui.locator('#mainContent').evaluate(el=>el.inert),false);
+ }
  // Empty cache must not offer destructive setup before or after populated refresh.
  const emptyContext=await browser.newContext();
  await emptyContext.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
