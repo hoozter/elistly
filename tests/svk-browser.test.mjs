@@ -46,7 +46,13 @@ await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.
 try {
  // Seed the actual IT preset into an isolated database before authenticating.
  await page.goto(`http://127.0.0.1:${server.address().port}/app.html`);
- const payload=await page.evaluate(()=>({version:'1.12.1',onboardingDone:true,currentWorkspaceId:'main',settings:App.normalizeSettings({}),workspaces:{main:{name:'Synthetic lab',categories:window.ELISTLY_PRESETS.it.categories,entityTypes:window.ELISTLY_PRESETS.it.entityTypes,entities:{}}}}));
+ const payload=await page.evaluate(()=>{
+  const preset=structuredClone(window.ELISTLY_PRESETS.it);const computer=preset.entityTypes.computer;
+  for(const capability of ['computer.manufacturer','computer.model','processor.summary','memory.total','graphics.adapters','windows.edition','windows.version','windows.build','bios.serial-number']){
+   if(!computer.fields.some(field=>field.collection?.provider==='windows'&&field.collection.capability===capability)) computer.fields.push({name:`reported_${capability.replaceAll('.','_')}`,label:capability,type:'text',collection:{provider:'windows',capability}});
+  }
+  return {version:'1.12.1',onboardingDone:true,currentWorkspaceId:'main',settings:App.normalizeSettings({}),workspaces:{main:{name:'Synthetic lab',categories:preset.categories,entityTypes:preset.entityTypes,entities:{}}}};
+ });
  await db.query('INSERT INTO app_data(user_id,payload) VALUES ($1,$2::jsonb)',['browser-owner',JSON.stringify(payload)]);
  await page.evaluate(token=>localStorage.setItem('elistly_token',token),token);await page.reload();
  await page.waitForFunction(()=>App.data.currentWorkspaceId==='main' && !ElistlyStorage._isDirty);
@@ -67,7 +73,7 @@ try {
  const computerType=stored.payload.workspaces.main.entityTypes.computer;
  const device=Object.values(stored.payload.workspaces.main.entities)[0];assert.equal(device.hostname,fixture.hostname);
  const mapped=capability=>device[computerType.fields.find(field=>field.collection?.provider==='windows'&&field.collection.capability===capability)?.name];
- assert.equal(mapped('processor.summary'),'Intel Core i5');assert.equal(mapped('memory.total'),'16GB');
+ assert.equal(mapped('computer.manufacturer'),fixture.manufacturer);assert.equal(mapped('computer.model'),fixture.model);assert.equal(mapped('processor.summary'),'Intel Core i5');assert.equal(mapped('memory.total'),'16GB');assert.equal(mapped('graphics.adapters'),'Example Graphics');assert.equal(mapped('windows.edition'),fixture.windowsEdition);assert.equal(mapped('windows.version'),'10.0.26200');assert.equal(mapped('windows.build'),'26200');assert.equal(mapped('bios.serial-number'),fixture.serialNumber);
  assert.ok(device.autoName);assert.equal(device.name,undefined);
  const downloadPromise=page.waitForEvent('download');await modal.getByRole('button',{name:'Download receipt'}).click();
  const downloaded=await downloadPromise;const receipt=JSON.parse(fs.readFileSync(await downloaded.path(),'utf8'));
@@ -123,6 +129,7 @@ try {
  await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
  await page.waitForFunction(id=>App.data.entities[id]?.hostname,device.id);
  assert.equal(await page.evaluate(()=>Object.keys(App.data.entities).length),1);
+ assert.equal(await page.evaluate(id=>App.data.entities[id].name,device.id),undefined);assert.ok(await page.evaluate(id=>App.data.entities[id].autoName,device.id));assert.equal(await page.evaluate(id=>App.data.entities[id].assignedTo,device.id),undefined);
  assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,2);
  await page.reload();
  await page.waitForFunction(id=>App.data.entities[id]?.hostname,device.id);

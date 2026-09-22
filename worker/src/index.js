@@ -13,6 +13,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import { importSvkBatch, InventoryError } from "./svk-inventory.js";
+import { projectWindowsComputerFields } from "./computer-import.js";
 
 const AUTH_COOKIE_NAME = "__Secure-neon-auth.session_token";
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
@@ -102,43 +103,6 @@ function nullableTimestamp(value, label) {
   if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) throw new RequestBodyError(400, `${label} must be null or an ISO timestamp`);
 }
 
-function formatRam(bytes) {
-  if (!Number.isSafeInteger(bytes) || bytes <= 0) return null;
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
-  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value)} ${units[unit]}`;
-}
-
-function dropdownKey(value) {
-  return String(value ?? "").trim().toLowerCase().replace(/\((?:r|tm)\)/g, "").replace(/[^a-z0-9]+/g, "");
-}
-
-function compatibleReportedValue(field, value, supportedTypes) {
-  if (!supportedTypes.includes(field.type)) return null;
-  if (field.type !== "dropdown") return value;
-  const matches = (field.options || []).filter(option => dropdownKey(typeof option === "object" && option !== null ? option.value : option) === dropdownKey(value));
-  if (matches.length !== 1) return null;
-  const match = matches[0];
-  return typeof match === "object" && match !== null ? match.value : match;
-}
-
-function projectReportedComputerFields(entity, entityType, snapshot) {
-  const facts = {
-    "processor.summary": { value: snapshot.cpu?.model, supportedTypes: ["text", "textarea", "dropdown"] },
-    "memory.total": { value: formatRam(snapshot.ramBytes), supportedTypes: ["text", "textarea", "dropdown"] },
-    "graphics.adapters": { value: Array.isArray(snapshot.graphicsAdapters) && snapshot.graphicsAdapters.length ? snapshot.graphicsAdapters.join("; ") : null, supportedTypes: ["text", "textarea"] },
-  };
-  for (const [capability, { value, supportedTypes }] of Object.entries(facts)) {
-    if (typeof value !== "string" || !value.trim()) continue;
-    const fields = (entityType.fields || []).filter(field => field?.collection?.provider === "windows" && field.collection.capability === capability);
-    if (fields.length !== 1) continue;
-    const compatible = compatibleReportedValue(fields[0], value, supportedTypes);
-    if (compatible !== null) entity[fields[0].name] = compatible;
-  }
-}
-
 export function validateRegistrationFacts(body) {
   if (!isJsonObject(body)) throw new RequestBodyError(400, "JSON object required");
   requireExactKeys(body, registrationFields, "registration");
@@ -196,7 +160,7 @@ export function addRegisteredDevice(payload, workspaceId, facts) {
   const id = `device_${randomBase64url(12)}`;
   const entity = { id, type: "computer", name: facts.hostname.trim(), hostname: facts.hostname.trim(), _elistlyRegistration: { hardwareIdentity: facts.hardwareIdentity, registeredAt: new Date().toISOString(), inventorySnapshot: structuredClone(facts.inventorySnapshot) } };
   for (const field of ["serialNumber", "manufacturer", "model", "windowsEdition"]) if (typeof facts[field] === "string" && facts[field].trim()) entity[field] = facts[field].trim();
-  projectReportedComputerFields(entity, workspace.entityTypes.computer, facts.inventorySnapshot);
+  projectWindowsComputerFields(entity, workspace.entityTypes.computer, facts);
   const nextPayload = structuredClone(payload);
   nextPayload.workspaces[workspaceId].entities[id] = entity;
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
@@ -237,7 +201,10 @@ export function updateReportedDevice(payload, workspaceId, deviceId, facts) {
   registration.lastReportedAt = new Date().toISOString();
   registration.lastObservedAt = facts.inventorySnapshot.collectedAt;
   if (typeof username === "string" && username.trim()) registration.lastObservedUsername = username.trim();
-  projectReportedComputerFields(nextPayload.workspaces[workspaceId].entities[deviceId], found.workspace.entityTypes.computer, facts.inventorySnapshot);
+  // The deployed scheduled reporter refreshes only this established, safe subset.
+  projectWindowsComputerFields(nextPayload.workspaces[workspaceId].entities[deviceId], found.workspace.entityTypes.computer, facts, {
+    capabilities: new Set(['processor.summary', 'memory.total', 'graphics.adapters']),
+  });
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
   return nextPayload;
 }

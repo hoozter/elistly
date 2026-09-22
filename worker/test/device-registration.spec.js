@@ -123,9 +123,13 @@ describe("device registration boundary", () => {
     initial.workspaces.default.entityTypes.computer.fields = [
       { name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } },
       { name: "installedRam", type: "text", collection: { provider: "windows", capability: "memory.total" } },
+      { name: "manufacturer", type: "text", collection: { provider: "windows", capability: "computer.manufacturer" } },
+      { name: "windowsVersion", type: "text", collection: { provider: "windows", capability: "windows.version" } },
     ];
     const created = addRegisteredDevice(initial, "default", facts);
     const deviceId = created.entity.id;
+    created.payload.workspaces.default.entities[deviceId].manufacturer = "Manual manufacturer";
+    created.payload.workspaces.default.entities[deviceId].windowsVersion = "Manual version";
     const updatedFacts = {
       ...facts,
       inventorySnapshot: {
@@ -141,6 +145,8 @@ describe("device registration boundary", () => {
 
     expect(device.processor).toBe("Updated CPU");
     expect(device.installedRam).toBe("16 GB");
+    expect(device.manufacturer).toBe("Manual manufacturer");
+    expect(device.windowsVersion).toBe("Manual version");
     expect(device.assignedTo).toBeUndefined();
   });
 

@@ -35,7 +35,7 @@ This roadmap names product outcomes. Design notes and historical plans are const
 - Bounded category CSV export/import with preview and authoritative save behavior.
 - Advanced field/association filtering, compatible-field sorting and selected-item CSV export.
 - Local first-party QR generation with bounded input and no third-party QR request.
-- Source-complete Windows Device Intake draft flow: bounded local report, compatible existing fields only, explicit draft conflicts, no inferred Person, and normal Save.
+- Source-complete Windows Device Intake draft flow: bounded local report, compatible existing fields only, explicit draft conflicts, no inferred Person, and normal Save. Offline report restoration uses the same configured Computer projection and naming behavior.
 - Checksummed Windows collector candidate with disclosed local-only behavior.
 - Integrated selected-item deletion requires exact-count confirmation and uses the existing revision/outbox save path once. The `/` / `Ctrl+K` / `Cmd+K` search-focus shortcut remains outside editable controls and retains accessible key metadata.
 - The built-in entity-type catalog is materialized for every workspace and remains visible in management while default-disabled. Presets enable catalog entries explicitly; they do not control whether entries exist or can be discovered.

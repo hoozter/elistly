@@ -42,7 +42,7 @@ function compatibleValue(field, value, supportedTypes, processor = false) {
   return typeof match === 'object' && match !== null ? match.value : match;
 }
 
-export function projectWindowsComputerFields(entity, entityType, report) {
+export function projectWindowsComputerFields(entity, entityType, report, { capabilities = null } = {}) {
   const snapshot = report.inventorySnapshot;
   const facts = {
     'computer.hostname': { value: report.hostname, supportedTypes: ['text', 'textarea'] },
@@ -58,6 +58,7 @@ export function projectWindowsComputerFields(entity, entityType, report) {
     'bios.serial-number': { value: report.serialNumber, supportedTypes: ['text', 'textarea'] },
   };
   for (const [capability, { value, supportedTypes, processor }] of Object.entries(facts)) {
+    if (capabilities && !capabilities.has(capability)) continue;
     if (typeof value !== 'string' || !value.trim()) continue;
     const fields = (entityType.fields || []).filter(field => field?.collection?.provider === 'windows' && field.collection.capability === capability);
     if (fields.length !== 1) continue;
