@@ -1,12 +1,12 @@
 'use strict';
 
-const CACHE_NAME = 'elistly-shell-v35';
+const CACHE_NAME = 'elistly-shell-v36';
 const APP_SHELL = [
   './',
   './index.html',
   './app.html',
   './styles.css?v=21',
-  './app.js?v=42',
+  './app.js?v=43',
   './device-intake.js?v=3',
   './svk-import.js?v=1',
   './lib/db.js?v=2',

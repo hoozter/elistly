@@ -482,7 +482,10 @@ const Storage = {
   },
 
   async setAppDataAsync(data) {
-    data = structuredClone(data);
+    // Account data crosses JSON persistence boundaries (outbox, cache, and API).
+    // Keep the in-memory payload in that same representable shape so omitted
+    // optional fields cannot make an acknowledgement look unrelated.
+    data = JSON.parse(JSON.stringify(data));
     if (backendClient) {
       if (this._accountVerified === false) throw new Error('Account data is still unverified. Wait for refresh or reload before editing.');
       const generation = this._accountGeneration;

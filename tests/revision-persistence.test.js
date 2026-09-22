@@ -770,6 +770,108 @@ async function testFullBackupRestoreDoesNotReplaceAQueuedLocalChange() {
   });
 }
 
+async function testRapidOptionalFieldEditsUseTheAcknowledgedRevision() {
+  await withPage(async page => {
+    const observed = await page.evaluate(async () => {
+      const first = { version: 'test', entities: { device: { name: 'Desk 2025', year: '2025', info: 'First edit', optionalField: undefined } } };
+      const second = { version: 'test', entities: { device: { name: 'Desk 2026', year: '2026', info: 'Second edit', optionalField: undefined } } };
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'revision-0');
+      const recovery = [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } }, expectedUpdatedAt: null }] }];
+      localStorage.setItem('elistlyData:recovery:user-1', JSON.stringify(recovery));
+      Storage._conflictRecovery = recovery[0];
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+        getSession: async () => ({ data: { session: { access_token: 'token' } } })
+      } };
+      window.ELISTLY_API_URL = '/mock';
+      const requests = [];
+      let releaseFirst;
+      window.fetch = (_url, options) => {
+        requests.push(JSON.parse(options.body));
+        if (requests.length === 1) return new Promise(resolve => { releaseFirst = resolve; });
+        return Promise.resolve(new Response(JSON.stringify({ updated_at: 'revision-2' }), { status: 200 }));
+      };
+      const firstSave = Storage.setAppData(first);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const secondSave = Storage.setAppData(second);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      releaseFirst(new Response(JSON.stringify({ updated_at: 'revision-1' }), { status: 200 }));
+      await Promise.all([firstSave, secondSave]);
+      return { requests, cached: Storage._cached, revision: Storage._cachedUpdatedAt, outbox: Storage._readOutbox('user-1'), recovery: Storage._readRecovery('user-1') };
+    });
+    assert.deepEqual(observed.requests.map(request => request.expectedUpdatedAt), ['revision-0', 'revision-1'], 'a JSON-omitted optional field must not prevent the next edit from using the prior acknowledgement');
+    assert.equal(observed.cached.entities.device.name, 'Desk 2026');
+    assert.equal(observed.revision, 'revision-2');
+    assert.deepEqual(observed.outbox, []);
+    assert.deepEqual(observed.recovery, [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } }, expectedUpdatedAt: null }] }], 'successful current edits must not alter archived recovery');
+  });
+}
+
+async function testBrowserEntityEditsPersistWithArchivedRecovery() {
+  await withPage(async page => {
+    await page.evaluate(() => {
+      const data = {
+        settings: {}, categories: { devices: { id: 'devices', label: 'Devices' } },
+        entityTypes: { device: { id: 'device', label: 'Device', categories: ['devices'], fields: [
+          { name: 'name', label: 'Device name', type: 'text' },
+          { name: 'year', label: 'Year', type: 'text' },
+          { name: 'info', label: 'Information', type: 'textarea' }
+        ] } },
+        entities: { device: { id: 'device', type: 'device', name: 'Before', year: '2024', info: 'Old information' } },
+        workspaces: {}, currentWorkspaceId: ''
+      };
+      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(data));
+      localStorage.setItem('elistlyData:userUpdated:user-1', 'revision-0');
+      const recovery = [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } } }] }];
+      localStorage.setItem('elistlyData:recovery:user-1', JSON.stringify(recovery));
+      Storage._cached = structuredClone(data);
+      Storage._cachedUserId = 'user-1';
+      Storage._cachedUpdatedAt = 'revision-0';
+      Storage._conflictRecovery = recovery[0];
+      backendClient = { auth: {
+        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
+        getSession: async () => ({ data: { session: { access_token: 'token' } } })
+      } };
+      window.ELISTLY_API_URL = '/mock';
+      window.entityEditRequests = [];
+      window.fetch = async (_url, options) => {
+        window.entityEditRequests.push(JSON.parse(options.body));
+        return new Response(JSON.stringify({ updated_at: `revision-${window.entityEditRequests.length}` }), { status: 200 });
+      };
+      App.data = data;
+      App.showEntityForm('device', 'device');
+    });
+    await page.locator('#entityModal button').filter({ hasText: /^editEdit$/ }).click();
+    await page.locator('#entityModal [name="name"]').fill('David workstation');
+    await page.locator('#entityModal [name="year"]').fill('2025');
+    await page.locator('#entityModal [name="info"]').fill('Updated device information');
+    await page.locator('#entityModal button[type="submit"]').click();
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+    await page.waitForFunction(() => window.entityEditRequests.length === 1);
+    await page.evaluate(() => App.showEntityForm('device', 'device'));
+    await page.locator('#entityModal button').filter({ hasText: /^editEdit$/ }).click();
+    await page.locator('#entityModal [name="name"]').fill('David workstation 2');
+    await page.locator('#entityModal [name="year"]').fill('2026');
+    await page.locator('#entityModal [name="info"]').fill('Second normal edit');
+    await page.locator('#entityModal button[type="submit"]').click();
+    await page.locator('#entityModal').waitFor({ state: 'detached' });
+    await page.waitForFunction(() => window.entityEditRequests.length === 2);
+    const browserSaves = await page.evaluate(() => window.entityEditRequests);
+    assert.deepEqual(browserSaves.map(request => request.expectedUpdatedAt), ['revision-0', 'revision-1'], 'an ordinary second name/year/information edit must use the first save acknowledgement even when the server payload omitted version');
+    assert.deepEqual(browserSaves[1].payload.entities.device, { id: 'device', type: 'device', name: 'David workstation 2', year: '2026', info: 'Second normal edit' }, 'a normal Device name/year/information edit must send the edited normalized entity');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const afterReload = await page.evaluate(() => ({
+      data: JSON.parse(localStorage.getItem('elistlyData:user:user-1')),
+      revision: localStorage.getItem('elistlyData:userUpdated:user-1'),
+      recovery: JSON.parse(localStorage.getItem('elistlyData:recovery:user-1'))
+    }));
+    const device = Object.values(afterReload.data.entities)[0];
+    assert.deepEqual(device, { id: device.id, type: 'device', name: 'David workstation 2', year: '2026', info: 'Second normal edit' }, 'the UI edits must survive a browser reload');
+    assert.equal(afterReload.revision, 'revision-2');
+    assert.equal(afterReload.recovery[0].outbox[0].id, 'older-local', 'the archived recovery record must survive a current UI save');
+  });
+}
+
 async function run() {
   await testConflictPreservesDirtyLocalState();
   await testConflictNotificationKeepsTheEditorOpen();
@@ -792,6 +894,8 @@ async function run() {
   await testLegacyDetachedTypeCategorySurvivesWorkspaceHydration();
   await testImportAcknowledgementAcceptsEquivalentJsonObjectOrder();
   await testFullBackupRestoreDoesNotReplaceAQueuedLocalChange();
+  await testRapidOptionalFieldEditsUseTheAcknowledgedRevision();
+  await testBrowserEntityEditsPersistWithArchivedRecovery();
 }
 
 run()
