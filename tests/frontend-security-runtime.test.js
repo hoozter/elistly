@@ -472,12 +472,20 @@ async function testComputerNamesAreProspectiveOnly() {
       App.closeEntityModal = () => document.getElementById('entityModal')?.remove();
 
       App.showEntityForm('computer', 'existing');
-      const afterOpen = App.data.entities.existing.autoName;
+      const afterOpen = document.querySelector('#nameInput').value;
+      const cardAfterOpen = App.getEntityCardTitle(App.data.entities.existing);
       App.showEntityEditMode(true);
       const existingForm = document.querySelector('#entityForm');
       existingForm.querySelector('[name="hostname"]').value = 'CHANGED';
+      existingForm.querySelector('[name="hostname"]').dispatchEvent(new Event('change', { bubbles: true }));
+      const afterFieldChange = existingForm.querySelector('#nameInput').value;
+      existingForm.querySelector('.name-lock-row button').click();
+      existingForm.querySelector('#nameInput').value = 'UNSAVED';
+      existingForm.querySelector('.name-lock-row button').click();
+      const afterRelock = existingForm.querySelector('#nameInput').value;
       existingForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       const afterLockedSave = App.data.entities.existing.autoName;
+      const hasShadowName = Object.hasOwn(App.data.entities.existing, 'name');
 
       App.data.entityTypes.computer.nameGen.prefix = 'LATER-';
       App.showEntityForm('computer');
@@ -490,13 +498,18 @@ async function testComputerNamesAreProspectiveOnly() {
       App.showEntityEditMode(true);
       const manualForm = document.querySelector('#entityForm');
       const nameInput = manualForm.querySelector('#nameInput');
-      nameInput.dataset.unlocked = 'true';
-      nameInput.readOnly = false;
+      manualForm.querySelector('.name-lock-row button').click();
       nameInput.value = 'MY-COMPUTER';
       manualForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      // Simulate persisted JSON rehydration and reopen the actual editor.
+      App.data = JSON.parse(JSON.stringify(App.data));
+      App.showEntityForm('computer', 'existing');
+      const reopenedName = document.querySelector('#nameInput').value;
+      const reopenedCard = document.querySelector('#entityView').textContent;
 
       return {
         afterOpen,
+        cardAfterOpen, afterFieldChange, afterRelock, hasShadowName, reopenedName, reopenedCard,
         afterLockedSave,
         createdName: created.autoName,
         afterManualRename: App.data.entities.existing.autoName,
@@ -505,6 +518,12 @@ async function testComputerNamesAreProspectiveOnly() {
     });
 
     assert.equal(result.afterOpen, 'SAVED-ALPHA', 'opening a saved Computer must not regenerate its name');
+    assert.equal(result.cardAfterOpen, result.afterOpen, 'card and editor must show the same saved name');
+    assert.equal(result.afterFieldChange, 'SAVED-ALPHA', 'field changes must not regenerate saved names');
+    assert.equal(result.afterRelock, 'SAVED-ALPHA', 'relocking must restore the saved name, not regenerate it');
+    assert.equal(result.hasShadowName, false, 'locked saves must not create a competing name field');
+    assert.equal(result.reopenedName, 'MY-COMPUTER', 'reopening a renamed entity must show its saved name');
+    assert.match(result.reopenedCard, /MY-COMPUTER/, 'rendered detail card must show the saved rename');
     assert.equal(result.afterLockedSave, 'SAVED-ALPHA', 'ordinary edits must preserve the saved Computer name');
     assert.equal(result.createdName, 'LATER-BETA', 'changed generation settings must apply to newly created Computers');
     assert.equal(result.afterManualRename, 'MY-COMPUTER', 'unlocking and editing the name must deliberately replace the saved name');

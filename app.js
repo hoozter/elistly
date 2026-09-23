@@ -4757,6 +4757,7 @@ ${removal}
         const data = entityId ? { ...this.data.entities[entityId] } : { id: this.generateId(), type: entityType };
         
         for (let [key, value] of formData.entries()) {
+          if (key === 'name' && type.enableNameGen) continue;
           if (value !== '') data[key] = value;
         }
         type.fields.filter(f => f.type === 'checkbox').forEach(f => {
@@ -6182,16 +6183,20 @@ ${removal}
           input.setAttribute('readonly', '');
           button.querySelector('.material-icons').textContent = 'lock';
           button.title = 'Unlock to edit name manually';
-          input.closest('.form-group').querySelector('.help-text').textContent = 'Name will be auto-generated based on fields';
           input.dataset.unlocked = 'false';
           
-          // Regenerate name
+          // Existing entities return to their saved name; only new drafts regenerate.
           const form = button.closest('form');
           const typeId = form.getAttribute('data-type-id');
           const formData = new FormData(form);
           const data = Object.fromEntries(formData.entries());
           const entityId = form.getAttribute('data-entity-id');
-          input.value = App.generateAutoName(typeId, data, entityId);
+          input.closest('.form-group').querySelector('.help-text').textContent = entityId
+            ? 'Saved name stays unchanged unless you unlock and edit it'
+            : 'Name will be generated from the current naming settings';
+          input.value = entityId
+            ? this.getEntityDisplayName(this.data.entities[entityId])
+            : this.generateAutoName(typeId, data);
         }
       },
       
@@ -6284,6 +6289,7 @@ ${removal}
         if (!input) return;
         const form = input.closest('form');
         const typeId = form.getAttribute('data-type-id');
+        if (form.getAttribute('data-entity-id')) return;
         // initial generation
         const formData = new FormData(form);
         const data = Object.fromEntries(formData.entries());
