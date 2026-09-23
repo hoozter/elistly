@@ -287,7 +287,7 @@ const Storage = {
     this._writeOutbox(userId, []);
     this._conflictRecovery = recovery;
     this._isDirty = false;
-    this._setSyncStatus('conflict', 'Account data loaded. Older local changes are preserved for review.');
+    this._setSyncStatus('conflict', 'Account data loaded. Unsynced local changes are preserved for review.');
   },
 
   async resolveDownloadedRecovery(userId, reviewedRecords) {
@@ -462,7 +462,7 @@ const Storage = {
         this._writeUserCache(userId, remote.payload, remote.updated_at || '');
         this._isDirty = !!(currentBase && !confirmed);
         this._accountVerified = true;
-        this._setSyncStatus(this._isDirty ? 'pending' : this._conflictRecovery ? 'conflict' : 'synced', this._isDirty ? 'Changes are waiting to sync.' : this._conflictRecovery ? 'Account data loaded. Older local changes are preserved for review.' : 'Changes are synced.');
+        this._setSyncStatus(this._isDirty ? 'pending' : this._conflictRecovery ? 'conflict' : 'synced', this._isDirty ? 'Changes are waiting to sync.' : this._conflictRecovery ? 'Account data loaded. Unsynced local changes are preserved for review.' : 'Changes are synced.');
         return structuredClone(next);
       });
     } catch (error) {

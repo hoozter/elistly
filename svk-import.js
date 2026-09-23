@@ -126,11 +126,18 @@
           const refreshRevision = storage._readUserUpdatedAt(session.user.id);
           const response = await api('/app-data');
           if (!active()) return;
-          if (!response.ok || !response.data?.payload) throw new Error('Saved inventory could not be refreshed; reload before editing.');
-          if (storage._isDirty || storage._readOutbox(session.user.id).length || storage._readUserUpdatedAt(session.user.id) !== refreshRevision) throw new Error('Inventory changed during refresh. Import receipts are preserved; reload before editing.');
-          storage._cached = response.data.payload; storage._cachedUserId = session.user.id;
-          storage._writeUserCache(session.user.id, response.data.payload, response.data.updated_at);
-          app.applyRemoteSyncData(response.data.payload);
+          if (!response.ok || !response.data?.payload || !response.data.updated_at) throw new Error('Saved inventory could not be refreshed; reload before editing.');
+          await storage._withStorageLock(() => {
+            if (!active()) return;
+            if (storage._isDirty || storage._readOutbox(session.user.id).length || storage._readUserUpdatedAt(session.user.id) !== refreshRevision) throw new Error('Inventory changed during refresh. Import receipts are preserved; reload before editing.');
+            // The visible inventory and its save revision must advance together.
+            if (app.applyRemoteSyncData(response.data.payload) === false) throw new Error('Close the device editor and reload before editing imported inventory.');
+            storage._cached = structuredClone(response.data.payload);
+            storage._cachedUserId = session.user.id;
+            storage._cachedUpdatedAt = response.data.updated_at;
+            storage._accountVerified = true;
+            storage._writeUserCache(session.user.id, response.data.payload, response.data.updated_at);
+          });
         }
       } catch (error) {
         if (active()) {

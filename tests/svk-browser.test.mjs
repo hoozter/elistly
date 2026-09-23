@@ -82,7 +82,24 @@ try {
  const downloadPromise=page.waitForEvent('download');await modal.getByRole('button',{name:'Download receipt'}).click();
  const downloaded=await downloadPromise;const receipt=JSON.parse(fs.readFileSync(await downloaded.path(),'utf8'));
  assert.equal(receipt.safeToArchiveOrDelete.length,1);assert.equal(receipt.needsAttention.length,4);
- await page.reload();await page.waitForFunction(()=>App.data.currentWorkspaceId==='main');
+ // Edit immediately after import, without a reload that would hide a stale in-memory revision.
+ await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.getByRole('button',{name:'Close',exact:true}).click();
+ const recoveryBefore=await page.evaluate(()=>localStorage.getItem(ElistlyStorage.USER_RECOVERY_PREFIX+'browser-owner'));
+ for (const notes of ['First post-import edit','Second post-import edit']) {
+  await page.evaluate(id=>{App.showEntityForm('computer',id);App.showEntityEditMode(true);},device.id);
+  await page.locator('#entityForm [name="notes"]').fill(notes);
+
+  await page.locator('#entityForm').evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  await page.locator('#entityModal').waitFor({state:'detached'});
+  await page.waitForFunction(()=>!ElistlyStorage._isDirty && !ElistlyStorage._readOutbox('browser-owner').length);
+  const saved=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id];
+  assert.equal(saved.notes,notes,'post-import edits must reach the account without reloading first');
+
+ }
+ assert.equal(await page.evaluate(()=>localStorage.getItem(ElistlyStorage.USER_RECOVERY_PREFIX+'browser-owner')),recoveryBefore,'normal post-import edits must not be archived as conflicts');
+ await page.reload();await page.waitForFunction(()=>App.data.currentWorkspaceId==='main'&&ElistlyStorage._accountVerified);
+ assert.equal(await page.evaluate(id=>App.data.entities[id].notes,device.id),'Second post-import edit');
  await page.evaluate(id=>App.showSvkInventoryHistory(id),device.id);
  await page.locator('#svkHistoryModal').getByText('Last inventoried:',{exact:false}).waitFor();
  assert.match(await page.locator('#svkHistoryModal').textContent(),/2026-09-21T09:00:00.0000000Z/);
@@ -137,9 +154,11 @@ try {
  }
  // Deleting the computer and explicitly importing the same file must restore its visible record.
  await page.reload();
- await page.waitForFunction(id=>App.data.entities[id]?.hostname && !ElistlyStorage._isDirty,device.id);
+ await page.waitForFunction(id=>App.data.entities[id]?.hostname && ElistlyStorage._accountVerified && !ElistlyStorage._isDirty,device.id);
  await page.evaluate(id=>App.deleteEntity(id),device.id);
+ const deletionSaved=page.waitForResponse(r=>r.url().endsWith('/api/app-data')&&r.request().method()==='PUT');
  await page.locator('#confirmDeleteModal').getByRole('button',{name:'Delete',exact:true}).click();
+ assert.equal((await deletionSaved).status(),200,'deletion must be acknowledged by the account');
  await page.waitForFunction(id=>!App.data.entities[id] && !ElistlyStorage._isDirty && !ElistlyStorage._readOutbox('browser-owner').length,device.id);
  assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id],undefined);
  await page.evaluate(()=>App.showSvkInventoryImport());
