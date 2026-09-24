@@ -201,9 +201,11 @@ export function updateReportedDevice(payload, workspaceId, deviceId, facts) {
   registration.lastReportedAt = new Date().toISOString();
   registration.lastObservedAt = facts.inventorySnapshot.collectedAt;
   if (typeof username === "string" && username.trim()) registration.lastObservedUsername = username.trim();
-  // The deployed scheduled reporter refreshes only this established, safe subset.
+  // Reports fill only empty configured fields; the fresh snapshot remains
+  // available separately without replacing authored inventory values.
   projectWindowsComputerFields(nextPayload.workspaces[workspaceId].entities[deviceId], found.workspace.entityTypes.computer, facts, {
     capabilities: new Set(['processor.summary', 'memory.total', 'graphics.adapters']),
+    overwrite: false,
   });
   if (nextPayload.currentWorkspaceId === workspaceId) nextPayload.entities = { ...nextPayload.workspaces[workspaceId].entities };
   return nextPayload;

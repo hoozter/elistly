@@ -79,6 +79,28 @@ describe("per-device reporting", () => {
     expect(device.assignedTo).toBe("Alice");
   });
 
+  it("retains authored Computer values while persisting a fresh report snapshot", async () => {
+    const state = account();
+    const workspace = state.workspaces.main;
+    workspace.entityTypes.computer.fields.push({ name: "graphicsCard", type: "textarea", collection: { provider: "windows", capability: "graphics.adapters" } });
+    Object.assign(workspace.entities["device-1"], { processor: "Authored CPU", ram: "Authored RAM", graphicsCard: "Authored graphics" });
+    const reportedFacts = { ...facts, inventorySnapshot: { ...snapshot, graphicsAdapters: ["Reported GPU"] } };
+    const { sql, calls } = reportingSql({ state });
+    const worker = createWorker({ createSql: () => sql, authenticate: async () => null });
+
+    expect((await request(worker, "/device-reporting/report", { body: reportedFacts, authorization: token })).status).toBe(200);
+
+    const write = calls.find(call => call.query.includes("WITH active_token"));
+    const saved = JSON.parse(write.values.find(value => typeof value === "string" && value.startsWith("{")));
+    const device = saved.workspaces.main.entities["device-1"];
+    expect(device).toMatchObject({ processor: "Authored CPU", ram: "Authored RAM", graphicsCard: "Authored graphics", name: "Manual name", assignedTo: "Alice" });
+    expect(device._elistlyRegistration.inventorySnapshot).toEqual(reportedFacts.inventorySnapshot);
+    expect(saved.workspaces.main.entityTypes).toEqual(workspace.entityTypes);
+    expect(Object.keys(saved.workspaces.main.entities)).toEqual(["device-1"]);
+    expect(saved.entities["device-1"]).toEqual(device);
+    expect(saved.workspaces.other).toEqual(state.workspaces.other);
+  });
+
   it("rejects stale reports, wrong identities, deleted or moved targets, revoked tokens, and CAS conflicts", async () => {
     const cases = [
       { name: "stale", facts: { ...facts, inventorySnapshot: { ...snapshot, collectedAt: "2025-01-01T00:00:00.000Z" } }, options: {}, status: 409 },

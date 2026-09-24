@@ -118,7 +118,7 @@ describe("device registration boundary", () => {
     expect(entity).not.toHaveProperty("graphicsCard");
   });
 
-  it("refreshes configured reported Computer fields without assigning a person", () => {
+  it("fills empty configured reported Computer fields without assigning a person", () => {
     const initial = payload();
     initial.workspaces.default.entityTypes.computer.fields = [
       { name: "processor", type: "text", collection: { provider: "windows", capability: "processor.summary" } },
@@ -128,6 +128,8 @@ describe("device registration boundary", () => {
     ];
     const created = addRegisteredDevice(initial, "default", facts);
     const deviceId = created.entity.id;
+    created.payload.workspaces.default.entities[deviceId].processor = "";
+    created.payload.workspaces.default.entities[deviceId].installedRam = null;
     created.payload.workspaces.default.entities[deviceId].manufacturer = "Manual manufacturer";
     created.payload.workspaces.default.entities[deviceId].windowsVersion = "Manual version";
     const updatedFacts = {
