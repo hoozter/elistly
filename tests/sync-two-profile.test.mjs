@@ -138,6 +138,12 @@ try {
  const backup=await backupEvent;
  const archive=JSON.parse(fs.readFileSync(await backup.path(),'utf8'));
  assert.deepEqual(archive.records,JSON.parse(recoveryBefore));
+ await ui.getByRole('button',{name:'Download current account backup'}).waitFor({state:'visible'});
+ await ui.waitForFunction(()=>!document.querySelector('#syncRecoveryModal button:nth-child(2)')?.disabled);
+ const accountBackupEvent=ui.waitForEvent('download');
+ await ui.getByRole('button',{name:'Download current account backup'}).click();
+ const accountBackup=JSON.parse(fs.readFileSync(await (await accountBackupEvent).path(),'utf8'));
+ assert.deepEqual(accountBackup.payload,(await row()).payload);
  await ui.getByRole('button',{name:'Remove downloaded browser copy',exact:true}).click();
  await ui.getByRole('button',{name:'I saved the archive — remove browser copy',exact:true}).click();
  await ui.locator('#syncRecoveryModal').waitFor({state:'detached'});

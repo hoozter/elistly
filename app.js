@@ -190,6 +190,7 @@ const Storage = {
     this._cachedUpdatedAt = undefined;
     this._accountVerified = undefined;
     this._refreshPromise = null;
+    this._onRemoteSync = null;
     this._isDirty = false;
     this._saveChains = {};
     this._conflictRecovery = null;
@@ -288,6 +289,41 @@ const Storage = {
     this._conflictRecovery = recovery;
     this._isDirty = false;
     this._setSyncStatus('conflict', 'Account data loaded. Unsynced local changes are preserved for review.');
+  },
+
+  async previewRecovery(userId, reviewedRecords) {
+    const identity = await this.getImportIdentity();
+    if (!identity || identity.userId !== userId || !jsonValuesEqual(this._readRecovery(userId), reviewedRecords)) throw new Error('Account or recovery archive changed. Review it again.');
+    if (this._readOutbox(userId).length) throw new Error('Sync current pending edits before restoring an older copy.');
+    const response = await apiRequest('/app-data', { authSession: { access_token: identity.accessToken } });
+    if (!response.ok || !Object.hasOwn(response.data, 'payload') || !Object.hasOwn(response.data, 'updated_at')) throw new Error('Current account data could not be read. No changes were made.');
+    return { payload: response.data.payload, updated_at: response.data.updated_at };
+  },
+
+  async restoreRecovery(userId, reviewedRecords, preview) {
+    const generation = this._accountGeneration;
+    const identity = await this.getImportIdentity();
+    if (!identity || identity.userId !== userId) throw new Error('Signed-in account changed. No changes were made.');
+    return this._withStorageLock(async () => {
+      if (generation !== this._accountGeneration || !jsonValuesEqual(this._readRecovery(userId), reviewedRecords) || this._readOutbox(userId).length) throw new Error('Recovery or pending changes changed. Review again; nothing was overwritten.');
+      const latest = await this.previewRecovery(userId, reviewedRecords);
+      if (!preview || !jsonValuesEqual(latest, preview)) throw new Error('Account data changed since comparison. Review the newest account copy before restoring.');
+      const record = reviewedRecords.at(-1);
+      const payload = record?.localPayload || record?.outbox?.at(-1)?.payload;
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Preserved local copy is invalid.');
+      const response = await apiRequest('/app-data', { method: 'PUT', authSession: { access_token: identity.accessToken }, body: { payload, expectedUpdatedAt: latest.updated_at || null } });
+      if (!response.ok) throw new Error((response.data && response.data.error) || 'Account changed during restore. Local and server copies are retained.');
+      if (!response.data?.updated_at || !jsonValuesEqual(response.data.payload, payload)) throw new Error('Restore acknowledgement could not be verified. Reload and compare both copies.');
+      if (generation !== this._accountGeneration) throw new Error('Account changed after restore. Reload before editing.');
+      this._writeUserCache(userId, payload, response.data.updated_at);
+      this._cached = structuredClone(payload);
+      this._cachedUpdatedAt = response.data.updated_at;
+      this._accountVerified = true;
+      this._isDirty = false;
+      // Keep the archive: even a successful restore must not destroy provenance.
+      this._setSyncStatus('archived', 'Local copy restored to account. Recovery archive remains available for review.');
+      return response.data;
+    });
   },
 
   async resolveDownloadedRecovery(userId, reviewedRecords) {
@@ -423,6 +459,7 @@ const Storage = {
     this._accountVerified = false;
     this._setSyncStatus('refreshing', outbox.length ? 'Checking account data. Local changes are waiting to sync.' : 'Refreshing account data…');
     // Start the account request before returning cached data; profile/admin work is independent.
+    this._onRemoteSync = options.onRemoteSync;
     this._refreshPromise = this.syncRemoteInBackground(user.id, revision, options.onRemoteSync, session);
     void this._refreshPromise.catch(() => {});
     return local !== null ? structuredClone(local) : await this._refreshPromise;
@@ -445,24 +482,34 @@ const Storage = {
           return this._cached;
         }
         const pending = outbox.at(-1)?.payload;
-        const currentBase = outbox.length && Object.hasOwn(outbox[0], 'expectedUpdatedAt') && outbox[0].expectedUpdatedAt === (remote.updated_at || null);
-        const confirmed = outbox.length && jsonValuesEqual(pending, remote.payload);
-        const next = currentBase && !confirmed ? pending : remote.payload;
+        const remoteRevision = remote.updated_at || null;
+        const confirmedIndex = outbox.findIndex((entry, index) =>
+          jsonValuesEqual(entry.payload, remote.payload) &&
+          (index === 0 || outbox.slice(1, index + 1).every((child, offset) => child.parentId === outbox[offset].id)));
+        let remaining = outbox;
+        if (confirmedIndex >= 0) {
+          remaining = outbox.slice(confirmedIndex + 1);
+          if (remaining.length && remaining[0].parentId === outbox[confirmedIndex].id) {
+            remaining = remaining.map((entry, index) => index === 0 ? { ...entry, expectedUpdatedAt: remoteRevision, parentId: null } : entry);
+          }
+        }
+        const currentBase = remaining.length && Object.hasOwn(remaining[0], 'expectedUpdatedAt') && remaining[0].expectedUpdatedAt === remoteRevision;
+        const next = currentBase ? remaining.at(-1).payload : remote.payload;
         const changed = !jsonValuesEqual(next, this._cached);
         // The editor/model and its revision must advance together, or neither may advance.
         if (changed && this._cached !== null && onRemoteSync && onRemoteSync(structuredClone(next)) === false) {
           this._setSyncStatus('stale', 'Newer account data is available. Close the editor and reload to refresh.');
           return this._cached;
         }
-        if (outbox.length && !currentBase && !confirmed) this._preserveConflict(userId, outbox, remote);
-        else if (confirmed) this._writeOutbox(userId, []);
+        if (remaining.length && !currentBase) this._preserveConflict(userId, remaining, remote);
+        else if (confirmedIndex >= 0) this._writeOutbox(userId, remaining);
         this._cached = structuredClone(next);
         this._cachedUserId = userId;
         this._cachedUpdatedAt = remote.updated_at || '';
         this._writeUserCache(userId, remote.payload, remote.updated_at || '');
-        this._isDirty = !!(currentBase && !confirmed);
+        this._isDirty = !!currentBase;
         this._accountVerified = true;
-        this._setSyncStatus(this._isDirty ? 'pending' : this._conflictRecovery ? 'conflict' : 'synced', this._isDirty ? 'Changes are waiting to sync.' : this._conflictRecovery ? 'Account data loaded. Unsynced local changes are preserved for review.' : 'Changes are synced.');
+        this._setSyncStatus(this._isDirty ? 'pending' : this._conflictRecovery ? 'archived' : 'synced', this._isDirty ? 'Changes are waiting to sync.' : this._conflictRecovery ? 'An older local copy is preserved for optional review; account data is current.' : 'Changes are synced.');
         return structuredClone(next);
       });
     } catch (error) {
@@ -508,10 +555,19 @@ const Storage = {
       const previous = this._saveChains[user.id] || Promise.resolve();
       const save = previous.catch(() => {}).then(async () => {
         await this._saveNextOutboxEntry(user.id, generation);
-      }).catch(error => {
+      }).catch(async error => {
+        if (generation === this._accountGeneration && this._accountVerified === true) {
+          try {
+            await this.syncRemoteInBackground(user.id, this._readUserUpdatedAt(user.id), this._onRemoteSync);
+            // A recovered acknowledgement updates state, but the attempted save still failed.
+            // Do not report a competing edit as successful to its caller.
+          } catch (_) { /* Keep the original save error and durable queue. */ }
+        }
         if (generation === this._accountGeneration) {
-          this._isDirty = true;
-          this._setSyncStatus(error && error.message === 'App data changed since preview' ? 'conflict' : 'failed', error && error.message === 'App data changed since preview' ? 'Changes conflict with newer app data. Local changes are retained.' : 'Changes could not be synced. Local changes are retained.');
+          const pending = this._readOutbox(user.id).length > 0;
+          this._isDirty = pending;
+          if (pending) this._setSyncStatus('failed', 'Changes could not be synced. Local changes are retained.');
+          else if (this._conflictRecovery) this._setSyncStatus('archived', 'An older local copy is preserved for review; account data is current.');
         }
         throw error;
       });
@@ -946,7 +1002,7 @@ const App = {
           if (!populated && !fresh?.onboardingDone && !Storage.getConflictRecovery()) this.showOnboarding();
           return Storage.retryPendingSaves();
         }).catch(() => {});
-        this.showSyncConflictRecovery();
+        // Archived recovery stays discoverable in sync status, without interrupting every reload.
         if (this._pendingRemoteData) {
           this.applyRemoteSyncData(this._pendingRemoteData.data);
           this._pendingRemoteData = null;
@@ -974,9 +1030,48 @@ const App = {
         const title = document.createElement('h3');
         title.textContent = 'Local changes need review';
         const message = document.createElement('p');
-        message.textContent = 'Both copies are preserved. The account data is shown and can sync normally. Older local changes are isolated and will not be replayed. Download their recovery archive before reviewing or merging them. Sign-out is blocked while local recovery data remains on this browser.';
+        message.textContent = 'Both copies are preserved. The account data is shown; archived local changes are not replayed automatically. Compare both copies before choosing whether to restore the local snapshot. Restoring replaces the whole account snapshot, not just individual records.';
+        const comparison = document.createElement('div');
+        comparison.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-height:45vh;overflow:auto';
+        const localPane = document.createElement('section');
+        const remotePane = document.createElement('section');
+        const renderPane = (pane, label, payload) => {
+          pane.replaceChildren();
+          const heading = document.createElement('h4'); heading.textContent = label;
+          const summary = document.createElement('p');
+          summary.textContent = `Entities: ${Object.keys(payload?.entities || {}).length}; workspaces: ${Object.keys(payload?.workspaces || {}).length}`;
+          const detail = document.createElement('pre');
+          detail.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:30vh;overflow:auto';
+          detail.textContent = JSON.stringify(payload, null, 2);
+          pane.append(heading, summary, detail);
+        };
+        renderPane(localPane, 'Preserved local copy', recovery.localPayload || recovery.outbox?.at(-1)?.payload);
+        renderPane(remotePane, 'Account copy at conflict detection (refreshing…)', recovery.remotePayload);
+        comparison.append(localPane, remotePane);
+        let reviewedRecords = null;
+        let preview = null;
+        const notice = document.createElement('p');
+        notice.setAttribute('role', 'status');
+        const refreshComparison = async () => {
+          try {
+            const records = Storage._readRecovery(recovery.userId);
+            const latest = await Storage.previewRecovery(recovery.userId, records);
+            reviewedRecords = records;
+            preview = latest;
+            renderPane(remotePane, 'Current account copy', latest.payload);
+            notice.textContent = 'Current account data loaded. Download its backup before restoring the local snapshot.';
+            backupRemote.disabled = false;
+            restore.disabled = true;
+          } catch (error) {
+            notice.textContent = error.message;
+            backupRemote.disabled = true;
+            restore.disabled = true;
+          }
+        };
         const actions = document.createElement('div');
         actions.className = 'modal-actions';
+        actions.style.flexWrap = 'wrap';
+        actions.style.justifyContent = 'center';
         const download = document.createElement('button');
         download.type = 'button';
         download.className = 'btn btn-primary';
@@ -993,6 +1088,43 @@ const App = {
           resolve.disabled = false;
           setTimeout(() => URL.revokeObjectURL(url), 0);
         };
+        const backupRemote = document.createElement('button');
+        backupRemote.type = 'button';
+        backupRemote.className = 'btn btn-secondary';
+        backupRemote.textContent = 'Download current account backup';
+        backupRemote.disabled = true;
+        backupRemote.onclick = () => {
+          if (!preview) return;
+          const blob = new Blob([JSON.stringify({ format: 'elistly-account-before-recovery', payload: preview.payload, updated_at: preview.updated_at }, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url; link.download = 'elistly-account-before-restore.json'; link.click();
+          restore.disabled = false;
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+        };
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'btn btn-primary';
+        restore.textContent = 'Restore local copy to account';
+        restore.disabled = true;
+        restore.onclick = () => this.showConfirmModal({
+          title: 'Replace current account with preserved local copy?',
+          message: 'This replaces the complete current account snapshot. Check the comparison and keep both downloaded backups. If the account changed since comparison, restore will be refused. The local archive is retained.',
+          confirmLabel: 'Restore reviewed local snapshot',
+          onConfirm: async () => {
+            try {
+              const saved = await Storage.restoreRecovery(recovery.userId, reviewedRecords, preview);
+              if (this.applyRemoteSyncData(saved.payload) === false) {
+                this.showNotification('Restore saved to account. Close the editor and reload to see it.', 'error');
+              } else this.showNotification('Preserved local copy restored to account.', 'success');
+              this.closeModal(modal.id);
+            } catch (error) {
+              notice.textContent = error.message;
+              restore.disabled = true;
+              this.showNotification(error.message, 'error');
+            }
+          }
+        });
         const resolve = document.createElement('button');
         resolve.type = 'button';
         resolve.className = 'btn btn-secondary';
@@ -1012,11 +1144,12 @@ const App = {
         close.className = 'btn btn-secondary';
         close.textContent = 'Keep both copies';
         close.onclick = () => this.closeModal(modal.id);
-        actions.append(download, resolve, close);
-        card.append(title, message, actions);
+        actions.append(download, backupRemote, restore, resolve, close);
+        card.append(title, message, comparison, notice, actions);
         modal.append(card);
         document.body.append(modal);
         this.showModal(modal.id);
+        void refreshComparison();
       },
 
       ensureMainContentScrollable() {

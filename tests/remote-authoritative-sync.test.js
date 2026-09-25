@@ -37,7 +37,7 @@ async function configureAccount(page, fetch) {
   await page.evaluate(() => {
     backendClient = { auth: {
       getUser: async () => ({ data: { user: { id: 'account-a' } } }),
-      getSession: async () => ({ data: { session: { access_token: 'test-token' }, error: null } })
+      getSession: async () => ({ data: { session: { access_token: 'test.' + btoa(JSON.stringify({ sub: 'account-a', exp: 4102444800 })).replace(/=/g, '') + '.test', user: { id: 'account-a' } }, error: null } })
     } };
     window.ELISTLY_API_URL = '/mock';
   });
@@ -64,7 +64,7 @@ async function testRemoteSnapshotBootstrapsWithoutDiscardingDivergentPendingEdit
     assert.deepEqual(observed.conflict.remotePayload.entities, { server: { name: 'Server record' } }, 'recovery must identify the authoritative remote snapshot');
     const durable = await page.evaluate(() => JSON.parse(localStorage.getItem('elistlyData:recovery:account-a')));
     assert.deepEqual(durable[0].outbox, observed.conflict.outbox, 'recovery survives reload');
-    assert.equal(observed.sync.state, 'conflict', 'divergence must be visible instead of pretending it will safely sync');
+    assert.equal(observed.sync.state, 'archived', 'divergent edits must remain discoverable, not appear pending');
   });
 }
 
@@ -217,7 +217,102 @@ async function testFailedRecoveryArchivePreservesOriginalQueue() {
   });
 }
 
+async function testRecoveryRestoreRequiresFreshPreviewAndConditionalWrite() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.remote = { payload: { entities: { server: { name: 'remote' } } }, updated_at: 'revision-1' };
+      window.puts = [];
+      window.fetch = async (_url, options) => {
+        if (options.method === 'PUT') {
+          const body = JSON.parse(options.body); window.puts.push(body);
+          if (body.expectedUpdatedAt !== window.remote.updated_at) return new Response(JSON.stringify({ error: 'App data changed since preview' }), { status: 409 });
+          window.remote = { payload: body.payload, updated_at: 'revision-2' };
+        }
+        return new Response(JSON.stringify(window.remote), { status: 200 });
+      };
+    });
+    const result = await page.evaluate(async () => {
+      const localPayload = { entities: { local: { name: 'authored' } } };
+      const recovery = [{ userId: 'account-a', localPayload, remotePayload: window.remote.payload, remoteUpdatedAt: 'revision-1', outbox: [{ id: 'local', payload: localPayload, expectedUpdatedAt: null }] }];
+      localStorage.setItem(Storage.USER_RECOVERY_PREFIX + 'account-a', JSON.stringify(recovery));
+      await Storage.getAppData(); await Storage._refreshPromise;
+      const preview = await Storage.previewRecovery('account-a', recovery);
+      window.remote = { payload: { entities: { concurrent: {} } }, updated_at: 'revision-concurrent' };
+      let blocked = false;
+      try { await Storage.restoreRecovery('account-a', recovery, preview); } catch (_) { blocked = true; }
+      const newer = await Storage.previewRecovery('account-a', recovery);
+      const result = await Storage.restoreRecovery('account-a', recovery, newer);
+      return { blocked, preview, newer, result, puts: window.puts, archive: Storage._readRecovery('account-a'), remote: window.remote };
+    });
+    assert.equal(result.blocked, true);
+    assert.equal(result.puts.length, 1, 'stale preview must not write');
+    assert.equal(result.puts[0].expectedUpdatedAt, 'revision-concurrent');
+    assert.deepEqual(result.remote.payload.entities, { local: { name: 'authored' } });
+    assert.equal(result.archive.length, 1, 'restoration must not erase the preserved copy');
+    assert.equal(result.result.updated_at, 'revision-2');
+  });
+}
+
+async function testUnrelatedCacheIsOnlyDisplayData() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.writes = 0;
+      window.fetch = async (_url, options) => { if (options.method === 'PUT') window.writes++; return new Response(JSON.stringify({ payload: { entities: { server: {} } }, updated_at: 'new' }), { status: 200 }); };
+    });
+    const result = await page.evaluate(async () => {
+      localStorage.setItem(Storage._getUserCacheKey('account-a'), JSON.stringify({ entities: { old: {} } }));
+      localStorage.setItem(Storage._getUserUpdatedKey('account-a'), 'old');
+      const initial = await Storage.getAppData(); await Storage._refreshPromise;
+      return { initial, fresh: Storage._cached, recovery: Storage.getConflictRecovery(), writes: window.writes };
+    });
+    assert.deepEqual(result.initial.entities, { old: {} });
+    assert.deepEqual(result.fresh.entities, { server: {} });
+    assert.equal(result.recovery, null);
+    assert.equal(result.writes, 0);
+  });
+}
+
+async function testLostAcknowledgementWithLaterOfflineEdits() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.remote = { payload: { entities: { record: { name: 'first saved edit' } } }, updated_at: 'revision-after-first' };
+      window.writes = [];
+      window.fetch = async (_url, options) => {
+        if (options.method === 'PUT') {
+          const body = JSON.parse(options.body);
+          window.writes.push(body);
+          if (body.expectedUpdatedAt !== window.remote.updated_at) return new Response(JSON.stringify({ error: 'App data changed since preview' }), { status: 409 });
+          window.remote = { payload: body.payload, updated_at: 'revision-after-second' };
+        }
+        return new Response(JSON.stringify(window.remote), { status: 200 });
+      };
+    });
+    const result = await page.evaluate(async () => {
+      const first = { entities: { record: { name: 'first saved edit' } } };
+      const second = { entities: { record: { name: 'later offline edit' } } };
+      localStorage.setItem(Storage._getUserOutboxKey('account-a'), JSON.stringify([
+        { id: 'first', payload: first, expectedUpdatedAt: 'revision-before-first' },
+        { id: 'second', parentId: 'first', payload: second, createdAt: new Date().toISOString() }
+      ]));
+      await Storage.getAppData(); await Storage._refreshPromise;
+      const pending = Storage._readOutbox('account-a');
+      await Storage.retryPendingSaves();
+      return { pending, writes: window.writes, remote: window.remote, archive: Storage.getConflictRecovery(), remaining: Storage._readOutbox('account-a') };
+    });
+    assert.equal(result.pending.length, 1);
+    assert.equal(result.pending[0].expectedUpdatedAt, 'revision-after-first');
+    assert.equal(result.writes.length, 1);
+    assert.equal(result.writes[0].expectedUpdatedAt, 'revision-after-first');
+    assert.equal(result.remote.payload.entities.record.name, 'later offline edit');
+    assert.equal(result.archive, null);
+    assert.deepEqual(result.remaining, []);
+  });
+}
+
 async function run() {
+  await testLostAcknowledgementWithLaterOfflineEdits();
+  await testRecoveryRestoreRequiresFreshPreviewAndConditionalWrite();
+  await testUnrelatedCacheIsOnlyDisplayData();
   await testFailedRecoveryArchivePreservesOriginalQueue();
   await testRecoveryResolutionRequiresTheReviewedArchive();
   await testReplayNeverBorrowsANewerCachedRevision();
