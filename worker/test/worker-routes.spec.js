@@ -299,13 +299,15 @@ describe("JWT claim boundary", () => {
     globalThis.fetch = async url => String(url) === "https://jwks.example.test/current"
       ? new Response(JSON.stringify({ keys: [{ ...jwk, kid }] })) : originalFetch(url);
     try {
-      const worker = createWorker({ createSql: () => mockSql(), checkAdmin: async () => false });
+      const calls = [];
+      const worker = createWorker({ createSql: () => mockSql(calls), checkAdmin: async () => false });
       const now = Math.floor(Date.now() / 1000);
       const rejectedPayloads = [
         { sub: "user-1", iss: "https://auth.example.test", aud: "elistly-api" },
         { sub: "user-1", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
         { sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: "wrong-audience" },
         { sub: "user-1", exp: now - 1, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: { id: "user-1" }, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
       ];
       for (const payload of rejectedPayloads) {
         const token = await signedJwt({ privateKey: pair.privateKey, kid, payload });
@@ -334,6 +336,23 @@ describe("JWT claim boundary", () => {
       }, context);
       await waitOnExecutionContext(context);
       expect(accepted.status).toBe(200);
+
+      const conflictingToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
+        sub: "user-1", id: "user-2", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+      } });
+      const conflictContext = createExecutionContext();
+      const conflicting = await worker.fetch(new Request("https://api.example.test/app-data", {
+        headers: { Authorization: `Bearer ${conflictingToken}` },
+      }), {
+        ...env,
+        NEON_AUTH_URL: "https://auth.example.test",
+        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
+        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
+        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
+      }, conflictContext);
+      await waitOnExecutionContext(conflictContext);
+      expect(conflicting.status).toBe(200);
+      expect(calls.at(-1).values).toEqual(["user-1"]);
     } finally {
       globalThis.fetch = originalFetch;
     }
