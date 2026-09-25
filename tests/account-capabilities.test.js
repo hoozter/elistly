@@ -23,6 +23,12 @@ function startStaticServer() {
   const server = await startStaticServer();
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  // The static fixture has no deployment config.js; provide a non-production auth endpoint.
+  await page.route('**/config.js', route => route.fulfill({
+    status: 200,
+    contentType: 'text/javascript',
+    body: "window.NEON_AUTH_URL = 'https://auth.example.test';"
+  }));
   let signOutRequest = null;
   await page.route('**/sign-out', async route => {
     signOutRequest = {
