@@ -309,7 +309,96 @@ async function testLostAcknowledgementWithLaterOfflineEdits() {
   });
 }
 
+async function testDownloadedArchiveRequiresCurrentBackupBeforeItOffersRestore() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.writes = 0;
+      window.fetch = async (_url, options = {}) => {
+        if (options.method === 'PUT') window.writes++;
+        return new Response(JSON.stringify({ payload: { entities: { current: { name: 'account copy' } } }, updated_at: 'revision-1' }), { status: 200 });
+      };
+    });
+    const observed = await page.evaluate(async () => {
+      await Storage.getAppData(); await Storage._refreshPromise;
+      await Storage.importRecoveryArchive({
+        format: 'elistly-sync-recovery', version: 1,
+        records: [{ userId: 'account-a', localPayload: { entities: { lost: { name: 'downloaded edit' } } }, outbox: [] }]
+      });
+      App.showSyncConflictRecovery();
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const currentBackup = [...document.querySelectorAll('#syncRecoveryModal button')].find(button => button.textContent === 'Download current account backup');
+        if (currentBackup && !currentBackup.disabled) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const buttons = [...document.querySelectorAll('#syncRecoveryModal button')];
+      const byLabel = label => buttons.find(button => button.textContent === label);
+      const before = {
+        restoreDisabled: byLabel('Restore local copy to account').disabled,
+        accountBackupDisabled: byLabel('Download current account backup').disabled,
+        local: document.querySelector('#syncRecoveryModal')?.textContent.includes('downloaded edit'),
+        current: document.querySelector('#syncRecoveryModal')?.textContent.includes('account copy')
+      };
+      byLabel('Download current account backup').click();
+      const after = { restoreDisabled: byLabel('Restore local copy to account').disabled, writes: window.writes };
+      return { before, after };
+    });
+    assert.deepEqual(observed.before, { restoreDisabled: true, accountBackupDisabled: false, local: true, current: true });
+    assert.deepEqual(observed.after, { restoreDisabled: false, writes: 0 }, 'review and backup clicks must not write account data');
+  });
+}
+
+async function testUnchangedRefreshDoesNotCreateRecurringRecoveryConflicts() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.fetch = async () => new Response(JSON.stringify({ payload: { entities: { server: { name: 'current' } } }, updated_at: 'revision-1' }), { status: 200 });
+    });
+    const observed = await page.evaluate(async () => {
+      const local = { entities: { local: { name: 'older' } } };
+      localStorage.setItem(Storage._getUserOutboxKey('account-a'), JSON.stringify([{ id: 'old', payload: local, expectedUpdatedAt: null }]));
+      await Storage.getAppData(); await Storage._refreshPromise;
+      const first = Storage._readRecovery('account-a');
+      await Storage.getAppData(); await Storage._refreshPromise;
+      return { firstCount: first.length, final: Storage._readRecovery('account-a'), outbox: Storage._readOutbox('account-a'), status: Storage.getSyncStatus().state };
+    });
+    assert.equal(observed.firstCount, 1);
+    assert.equal(observed.final.length, 1, 'an unchanged account refresh must retain one reviewed archive, not create another conflict');
+    assert.deepEqual(observed.outbox, []);
+    assert.equal(observed.status, 'archived');
+  });
+}
+
+async function testDownloadedArchiveCanBeReopenedWithoutWritingAccount() {
+  await withPage(async page => {
+    await configureAccount(page, () => {
+      window.writes = 0;
+      window.fetch = async (_url, options) => {
+        if (options.method === 'PUT') window.writes++;
+        return new Response(JSON.stringify({ payload: { entities: { current: { name: 'account copy' } } }, updated_at: 'revision-1' }), { status: 200 });
+      };
+    });
+    const result = await page.evaluate(async () => {
+      await Storage.getAppData(); await Storage._refreshPromise;
+      const record = { userId: 'account-a', localPayload: { entities: { lost: { name: 'downloaded edit' } } }, outbox: [], detectedAt: '2026-09-21T00:00:00Z' };
+      const archive = { format: 'elistly-sync-recovery', version: 1, records: [record] };
+      let wrongAccountRejected = false;
+      try { await Storage.importRecoveryArchive({ ...archive, records: [{ ...record, userId: 'other' }] }); } catch (_) { wrongAccountRejected = true; }
+      await Storage.importRecoveryArchive(archive);
+      await Storage.importRecoveryArchive(archive);
+      return { wrongAccountRejected, records: Storage._readRecovery('account-a'), status: Storage.getSyncStatus().state, cached: Storage._cached, writes: window.writes };
+    });
+    assert.equal(result.wrongAccountRejected, true);
+    assert.equal(result.records.length, 1);
+    assert.equal(result.records[0].localPayload.entities.lost.name, 'downloaded edit');
+    assert.equal(result.cached.entities.current.name, 'account copy');
+    assert.equal(result.status, 'archived');
+    assert.equal(result.writes, 0);
+  });
+}
+
 async function run() {
+  await testDownloadedArchiveRequiresCurrentBackupBeforeItOffersRestore();
+  await testUnchangedRefreshDoesNotCreateRecurringRecoveryConflicts();
+  await testDownloadedArchiveCanBeReopenedWithoutWritingAccount();
   await testLostAcknowledgementWithLaterOfflineEdits();
   await testRecoveryRestoreRequiresFreshPreviewAndConditionalWrite();
   await testUnrelatedCacheIsOnlyDisplayData();

@@ -386,6 +386,33 @@ const Storage = {
     return this._conflictRecovery ? structuredClone(this._conflictRecovery) : null;
   },
 
+  async importRecoveryArchive(archive) {
+    const identity = await this.getImportIdentity();
+    if (!identity || archive?.format !== 'elistly-sync-recovery' || archive.version !== 1 ||
+        !Array.isArray(archive.records) || !archive.records.length ||
+        archive.records.some(record => record?.userId !== identity.userId ||
+          !record.localPayload || typeof record.localPayload !== 'object' || Array.isArray(record.localPayload) ||
+          !Array.isArray(record.outbox))) {
+      throw new Error('This is not a recovery archive for the signed-in account. Nothing was imported.');
+    }
+    const generation = this._accountGeneration;
+    return this._withStorageLock(async () => {
+      const current = await this.getImportIdentity();
+      if (generation !== this._accountGeneration || current?.userId !== identity.userId)
+        throw new Error('Account changed during import. Nothing was imported.');
+      const records = this._readRecovery(identity.userId);
+      for (const record of archive.records) {
+        if (!records.some(saved => jsonValuesEqual(saved, record))) records.push(record);
+      }
+      const key = this.USER_RECOVERY_PREFIX + identity.userId;
+      const raw = JSON.stringify(records);
+      localStorage.setItem(key, raw);
+      if (localStorage.getItem(key) !== raw) throw new Error('Recovery archive could not be verified. Keep the downloaded file.');
+      this._conflictRecovery = records.at(-1);
+      this._setSyncStatus('archived', 'Downloaded local changes are available for review; account data was not changed.');
+    });
+  },
+
   _readUserCache(userId) {
     try {
       const raw = localStorage.getItem(this._getUserCacheKey(userId));
@@ -4348,6 +4375,10 @@ ${removal}
                     <button type="button" class="btn btn-secondary" id="profileRestoreAllBtn">
                       <span class="material-icons">upload</span> Restore inventory backup
                     </button>
+                    <button type="button" class="btn btn-secondary" id="profileOpenRecoveryBtn">
+                      <span class="material-icons">history</span> Review downloaded local changes
+                    </button>
+                    <input type="file" id="profileRecoveryFile" accept=".json,application/json" hidden>
                     <button type="button" class="btn btn-secondary" id="profileResetDataBtn">
                       <span class="material-icons">refresh</span> Reset data
                     </button>
@@ -4377,10 +4408,26 @@ ${removal}
         if (saveBtn) saveBtn.addEventListener('click', () => this.saveProfile());
         const exportAllBtn = document.getElementById('profileExportAllBtn');
         const restoreAllBtn = document.getElementById('profileRestoreAllBtn');
+        const openRecoveryBtn = document.getElementById('profileOpenRecoveryBtn');
+        const recoveryFile = document.getElementById('profileRecoveryFile');
         const resetDataBtn = document.getElementById('profileResetDataBtn');
         const deleteAccountBtn = document.getElementById('profileDeleteAccountBtn');
         if (exportAllBtn) exportAllBtn.addEventListener('click', () => this.exportAllData());
         if (restoreAllBtn) restoreAllBtn.addEventListener('click', () => this.showFullBackupRestoreModal());
+        if (openRecoveryBtn && recoveryFile) openRecoveryBtn.addEventListener('click', () => recoveryFile.click());
+        if (recoveryFile) recoveryFile.addEventListener('change', async () => {
+          const file = recoveryFile.files?.[0];
+          if (!file) return;
+          try {
+            await Storage.importRecoveryArchive(JSON.parse(await file.text()));
+            this.closeModal('profileModal');
+            this.showSyncConflictRecovery();
+          } catch (error) {
+            this.showNotification(error.message || 'Could not open the recovery file. No account data was changed.', 'error');
+          } finally {
+            recoveryFile.value = '';
+          }
+        });
         if (resetDataBtn) resetDataBtn.addEventListener('click', () => this.showResetDataModal());
         if (deleteAccountBtn) deleteAccountBtn.addEventListener('click', () => this.showDeleteAccountModal());
       },
