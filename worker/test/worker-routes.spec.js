@@ -1,5 +1,5 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createWorker } from "../src/index.js";
 
 const env = {
@@ -290,87 +290,99 @@ async function signedJwt({ privateKey, kid, payload }) {
   return `${header}.${body}.${encodedSignature}`;
 }
 
-describe("JWT claim boundary", () => {
-  it("rejects trusted-key JWTs without expiry or with wrong issuer, audience, or expiry", async () => {
-    const kid = `claims-${crypto.randomUUID()}`;
+describe("JWT authority boundary", () => {
+  it("applies deterministic signed-token authority checks to the Worker handler", async () => {
+    const kid = "authority-boundary-test-key";
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
     const originalFetch = globalThis.fetch;
+    const now = 1_800_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now * 1000);
     globalThis.fetch = async url => String(url) === "https://jwks.example.test/current"
       ? new Response(JSON.stringify({ keys: [{ ...jwk, kid }] })) : originalFetch(url);
     try {
       const calls = [];
-      const worker = createWorker({ createSql: () => mockSql(calls), checkAdmin: async () => false });
-      const now = Math.floor(Date.now() / 1000);
+      const sql = async (strings, ...values) => {
+        const query = strings.join(" ");
+        calls.push({ query, values });
+        if (query.includes("FROM app_data")) return [{ payload: { owner: values[0] }, updated_at: "2026-01-01" }];
+        if (query.includes("FROM device_registration_tokens")) return [{ id: "drt_owner", workspace_id: "owner", label: "Owner device" }];
+        if (query.includes("FROM neon_auth")) return [{ id: "member-user", email: "member@example.test", name: "Member", created_at: "2026-01-01" }];
+        return [];
+      };
+      const worker = createWorker({
+        createSql: () => sql,
+        checkAdmin: async (_sql, authenticatedUser) => authenticatedUser.id === "admin-user",
+      });
+      const workerEnv = {
+        ...env,
+        NEON_AUTH_URL: "https://auth.example.test",
+        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
+        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
+        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
+      };
+      const request = async (path, token, method = "GET") => {
+        const context = createExecutionContext();
+        const response = await worker.fetch(new Request(`https://api.example.test${path}`, {
+          method, headers: { Authorization: `Bearer ${token}` },
+        }), workerEnv, context);
+        await waitOnExecutionContext(context);
+        return response;
+      };
       const rejectedPayloads = [
-        { sub: "user-1", iss: "https://auth.example.test", aud: "elistly-api" },
-        { sub: "user-1", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
-        { sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: "wrong-audience" },
-        { sub: "user-1", exp: now - 1, iss: "https://auth.example.test", aud: "elistly-api" },
-        { sub: "user-1", nbf: now + 60, exp: now + 120, iss: "https://auth.example.test", aud: "elistly-api" },
-        { sub: "user-1", nbf: "not-a-timestamp", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
-        { sub: { id: "user-1" }, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "member-user", iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "member-user", exp: "not-a-timestamp", iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "member-user", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
+        { sub: "member-user", exp: now + 60, iss: "https://auth.example.test", aud: "wrong-audience" },
+        { sub: "member-user", exp: now - 1, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "member-user", nbf: now + 60, exp: now + 120, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "member-user", nbf: "not-a-timestamp", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: { id: "member-user" }, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
       ];
       for (const payload of rejectedPayloads) {
         const token = await signedJwt({ privateKey: pair.privateKey, kid, payload });
-        const context = createExecutionContext();
-        const response = await worker.fetch(new Request("https://api.example.test/app-data", { headers: { Authorization: `Bearer ${token}` } }), {
-          ...env,
-          NEON_AUTH_URL: "https://auth.example.test",
-          NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
-          NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
-          NEON_AUTH_JWT_AUDIENCE: "elistly-api",
-        }, context);
-        await waitOnExecutionContext(context);
+        const response = await request("/app-data", token);
         expect(response.status).toBe(401);
       }
 
-      const validToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
-        sub: "user-1", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: ["other-service", "elistly-api"],
+      const unsigned = `${encodeJwtPart({ alg: "EdDSA", kid, typ: "JWT" })}.${encodeJwtPart({
+        sub: "member-user", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+      })}.`;
+      expect((await request("/app-data", unsigned)).status).toBe(401);
+      const attacker = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+      const forged = await signedJwt({ privateKey: attacker.privateKey, kid, payload: {
+        sub: "member-user", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
       } });
-      const context = createExecutionContext();
-      const accepted = await worker.fetch(new Request("https://api.example.test/app-data", { headers: { Authorization: `Bearer ${validToken}` } }), {
-        ...env,
-        NEON_AUTH_URL: "https://auth.example.test",
-        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
-        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
-        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
-      }, context);
-      await waitOnExecutionContext(context);
-      expect(accepted.status).toBe(200);
+      expect((await request("/app-data", forged)).status).toBe(401);
+      expect(calls).toEqual([]);
 
-      const conflictingToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
-        sub: "user-1", id: "user-2", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+      const memberToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
+        sub: "member-user", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: ["other-service", "elistly-api"],
       } });
-      const conflictContext = createExecutionContext();
-      const conflicting = await worker.fetch(new Request("https://api.example.test/app-data", {
-        headers: { Authorization: `Bearer ${conflictingToken}` },
-      }), {
-        ...env,
-        NEON_AUTH_URL: "https://auth.example.test",
-        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
-        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
-        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
-      }, conflictContext);
-      await waitOnExecutionContext(conflictContext);
-      expect(conflicting.status).toBe(200);
-      expect(calls.at(-1).values).toEqual(["user-1"]);
-      const callsBeforeDeniedDelete = calls.length;
-      const otherAccountContext = createExecutionContext();
-      const otherAccount = await worker.fetch(new Request("https://api.example.test/admin/users/user-2", {
-        method: "DELETE", headers: { Authorization: `Bearer ${conflictingToken}` },
-      }), {
-        ...env,
-        NEON_AUTH_URL: "https://auth.example.test",
-        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
-        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
-        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
-      }, otherAccountContext);
-      await waitOnExecutionContext(otherAccountContext);
-      expect(otherAccount.status).toBe(403);
-      expect(calls).toHaveLength(callsBeforeDeniedDelete);
+      const accepted = await request("/app-data", memberToken);
+      expect(accepted.status).toBe(200);
+      expect(await accepted.json()).toEqual({ payload: { owner: "member-user" }, updated_at: "2026-01-01" });
+      expect(calls.at(-1).values).toEqual(["member-user"]);
+
+      const otherUserToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
+        sub: "other-user", id: "member-user", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+      } });
+      const otherDevices = await request("/device-registration/tokens", otherUserToken);
+      expect(otherDevices.status).toBe(200);
+      expect(calls.at(-1).values).toEqual(["other-user"]);
+      const callsBeforeCrossUserActions = calls.length;
+      expect((await request("/device-registration/tokens/drt_owner", otherUserToken, "DELETE")).status).toBe(404);
+      expect(calls.at(-1).values).toEqual(["drt_owner", "other-user"]);
+      expect((await request("/admin/users/member-user", otherUserToken, "DELETE")).status).toBe(403);
+      expect(calls).toHaveLength(callsBeforeCrossUserActions + 1);
+
+      const adminToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
+        sub: "admin-user", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+      } });
+      expect((await request("/admin/users", adminToken)).status).toBe(200);
     } finally {
       globalThis.fetch = originalFetch;
+      clock.mockRestore();
     }
   });
 });

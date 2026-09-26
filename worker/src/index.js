@@ -325,14 +325,24 @@ async function verifyNeonJwt(token, env) {
   const jwk = keys.find(key => key.kid === header.kid);
   if (!jwk || jwk.kty !== "OKP" || jwk.crv !== "Ed25519") return null;
 
-  const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
-  const valid = await crypto.subtle.verify(
-    { name: "Ed25519" },
-    key,
-    base64urlDecode(parts[2]),
-    new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
-  );
-  return valid ? payload : null;
+  let signature;
+  try {
+    signature = base64urlDecode(parts[2]);
+  } catch {
+    return null;
+  }
+  try {
+    const key = await crypto.subtle.importKey("jwk", jwk, { name: "Ed25519" }, false, ["verify"]);
+    const valid = await crypto.subtle.verify(
+      { name: "Ed25519" },
+      key,
+      signature,
+      new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+    );
+    return valid ? payload : null;
+  } catch {
+    return null;
+  }
 }
 
 function getBearerToken(req) {
