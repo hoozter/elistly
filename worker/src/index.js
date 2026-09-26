@@ -316,7 +316,9 @@ async function verifyNeonJwt(token, env) {
   // A trusted signature identifies its signer, not the application the token
   // was minted for. API authentication therefore binds every token to a
   // current expiry and this deployment's exact issuer and audience.
-  if (header.alg !== "EdDSA" || !Number.isSafeInteger(payload.exp) || payload.exp <= now || typeof payload.sub !== "string" || !payload.sub
+  if (header.alg !== "EdDSA" || !Number.isSafeInteger(payload.exp) || payload.exp <= now
+    || (payload.nbf !== undefined && (!Number.isSafeInteger(payload.nbf) || payload.nbf > now))
+    || typeof payload.sub !== "string" || !payload.sub
     || !issuer || payload.iss !== issuer || !audience || !tokenAudiences.includes(audience)) return null;
 
   const keys = await getJwks(env);

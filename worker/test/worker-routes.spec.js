@@ -307,6 +307,8 @@ describe("JWT claim boundary", () => {
         { sub: "user-1", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
         { sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: "wrong-audience" },
         { sub: "user-1", exp: now - 1, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "user-1", nbf: now + 60, exp: now + 120, iss: "https://auth.example.test", aud: "elistly-api" },
+        { sub: "user-1", nbf: "not-a-timestamp", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
         { sub: { id: "user-1" }, exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api" },
       ];
       for (const payload of rejectedPayloads) {
@@ -324,7 +326,7 @@ describe("JWT claim boundary", () => {
       }
 
       const validToken = await signedJwt({ privateKey: pair.privateKey, kid, payload: {
-        sub: "user-1", exp: now + 60, iss: "https://auth.example.test", aud: ["other-service", "elistly-api"],
+        sub: "user-1", nbf: now - 60, exp: now + 60, iss: "https://auth.example.test", aud: ["other-service", "elistly-api"],
       } });
       const context = createExecutionContext();
       const accepted = await worker.fetch(new Request("https://api.example.test/app-data", { headers: { Authorization: `Bearer ${validToken}` } }), {
@@ -353,6 +355,20 @@ describe("JWT claim boundary", () => {
       await waitOnExecutionContext(conflictContext);
       expect(conflicting.status).toBe(200);
       expect(calls.at(-1).values).toEqual(["user-1"]);
+      const callsBeforeDeniedDelete = calls.length;
+      const otherAccountContext = createExecutionContext();
+      const otherAccount = await worker.fetch(new Request("https://api.example.test/admin/users/user-2", {
+        method: "DELETE", headers: { Authorization: `Bearer ${conflictingToken}` },
+      }), {
+        ...env,
+        NEON_AUTH_URL: "https://auth.example.test",
+        NEON_AUTH_JWKS_URL: "https://jwks.example.test/current",
+        NEON_AUTH_JWT_ISSUER: "https://auth.example.test",
+        NEON_AUTH_JWT_AUDIENCE: "elistly-api",
+      }, otherAccountContext);
+      await waitOnExecutionContext(otherAccountContext);
+      expect(otherAccount.status).toBe(403);
+      expect(calls).toHaveLength(callsBeforeDeniedDelete);
     } finally {
       globalThis.fetch = originalFetch;
     }
