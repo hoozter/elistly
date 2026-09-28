@@ -540,7 +540,7 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
       const path = url.pathname;
 
       if (path === "/health" || path === "/") {
-        return jsonResponse({ ok: true, service: "elistly-api", provider: "neon", auth: "neon-auth" }, 200, origin);
+        return jsonResponse({ ok: true, service: "elistly-api", provider: "neon", auth: "neon-auth", capabilities: { manualImportReview: true } }, 200, origin);
       }
 
       if (path === "/debug-env") return jsonResponse({ error: "Not found" }, 404, origin);

@@ -25,7 +25,7 @@ describe("Elistly Worker public boundary", () => {
     const response = await request("/health");
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true });
+    expect(await response.json()).toMatchObject({ ok: true, capabilities: { manualImportReview: true } });
     expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
     expect(response.headers.get("Access-Control-Allow-Credentials")).toBeNull();
   });
