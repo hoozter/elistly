@@ -141,6 +141,27 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   return {payload:next, deviceId, disposition:deletedDeviceId ? 'Restore deleted device' : matches.size ? 'Update observations' : 'New'};
 }
 
+// A hostname is not identity evidence. Only one live serial/UUID candidate can be reviewed.
+export function manualReview(payload, workspaceId, v, history) {
+  const w = payload.workspaces[workspaceId];
+  const candidates = Object.entries(w.entities).filter(([,e]) => e?.type === 'computer' && (
+    [e.serialNumber, e._elistlyRegistration?.inventorySnapshot?.device?.serialNumber].some(s => typeof s === 'string' && s.trim().toLowerCase() === v.serialKey) ||
+    e._elistlyRegistration?.inventorySnapshot?.device?.uuid?.trim().toLowerCase() === v.uuidKey
+  ));
+  if (candidates.length !== 1) return null;
+  const [deviceId, entity] = candidates[0];
+  if (history.length && !entity._svkManualLink) return null;
+  if (history.length && (history.some(h => h.device_id !== deviceId || h.hardware_identity !== v.report.hardwareIdentity || h.collected_key >= v.collectedKey) || (entity._elistlyRegistration && entity._elistlyRegistration.hardwareIdentity !== v.report.hardwareIdentity))) return null;
+  if (!history.length && entity._elistlyRegistration) return null;
+  const type = structuredClone(w.entityTypes.computer);
+  migrateKnownItWindowsSchema(type, v.report);
+  const proposed = createImportedComputer({id:deviceId, entityType:type, entities:w.entities, report:v.report});
+  const fields = Object.keys(proposed).filter(key => !['id','type','_elistlyRegistration'].includes(key) && canonicalJson(entity[key] ?? null) !== canonicalJson(proposed[key] ?? null))
+    .map(key => ({key, label:type.fields?.find(f => f.name === key)?.label || key, current:entity[key] ?? null, incoming:proposed[key]}));
+  if (history.length && !fields.length) return null;
+  return {deviceId, name:entity.name || entity.autoName || entity.hostname || deviceId, fields, proposed};
+}
+
 async function receipt(sql, owner, workspace, id) {
   const rows = await sql`SELECT report_id, content_digest, report, device_id, imported_at::text AS imported_at
     FROM inventory_import_reports WHERE owner_user_id = ${owner} AND workspace_id = ${workspace} AND report_id = ${id}`;
@@ -151,6 +172,11 @@ async function verifiedReceipt(row, v) {
 }
 export async function importSvkFile(sql, owner, workspace, file, preview) {
   const v = await validateSvkReport(file.content);
+  const choice = file.review;
+  if (choice !== undefined) {
+    exact(choice, ['deviceId','revision','updates'], 'Review');
+    if (typeof choice.deviceId !== 'string' || typeof choice.revision !== 'string' || !Array.isArray(choice.updates) || choice.updates.some(k => typeof k !== 'string') || new Set(choice.updates).size !== choice.updates.length) fail('Invalid review choices');
+  }
   // A bounded CAS retry handles concurrent imports and ordinary app saves.
   for (let attempt = 0; attempt < 3; attempt++) {
     const [current] = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${owner}`;
@@ -190,6 +216,30 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
       AND (hardware_identity = ${v.report.hardwareIdentity} OR serial_key = ${v.serialKey} OR uuid_key = ${v.uuidKey})
       ORDER BY device_id, (collected_key = ${v.collectedKey}) DESC, collected_key DESC LIMIT 101`;
     if (history.length > 100) fail('Too many identity matches; review required');
+    const review = manualReview(current.payload, workspace, v, history);
+    if (review && !saved) {
+      if (preview) return {safe:false, disposition:'Review existing computer', review:{deviceId:review.deviceId, name:review.name, fields:review.fields, revision:current.updated_at}, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
+      if (!choice) fail('Review the existing computer and choose which values to update before importing');
+      if (choice.deviceId !== review.deviceId || choice.revision !== current.updated_at || choice.updates.some(k => !review.fields.some(f => f.key === k))) fail('Computer changed since review; preview again before importing');
+      const next = structuredClone(current.payload), w = next.workspaces[workspace];
+      migrateKnownItWindowsSchema(w.entityTypes.computer, v.report);
+      for (const key of choice.updates) w.entities[review.deviceId][key] = review.proposed[key];
+      w.entities[review.deviceId]._svkManualLink = true;
+      if (next.currentWorkspaceId === workspace) { next.entities = {...w.entities}; next.entityTypes = {...w.entityTypes}; }
+      if (new TextEncoder().encode(JSON.stringify(next)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
+      const inserted = await sql`WITH saved AS (
+        UPDATE app_data SET payload = ${JSON.stringify(next)}::jsonb, updated_at = clock_timestamp()
+        WHERE user_id = ${owner} AND updated_at = ${current.updated_at}::timestamptz RETURNING user_id
+      ) INSERT INTO inventory_import_reports
+        (owner_user_id, workspace_id, report_id, content_digest, hardware_identity, serial_key, uuid_key, collected_key, device_id, report)
+        SELECT user_id, ${workspace}, ${v.reportId}, ${v.digest}, ${v.report.hardwareIdentity}, ${v.serialKey}, ${v.uuidKey}, ${v.collectedKey}, ${review.deviceId}, ${JSON.stringify(v.report)}::jsonb
+        FROM saved RETURNING report_id`;
+      if (!inserted.length) fail('Computer changed since review; preview again before importing');
+      const readback = await receipt(sql, owner, workspace, v.reportId);
+      if (!await verifiedReceipt(readback, v) || readback.device_id !== review.deviceId) fail('Save could not be verified; retry this file before archiving');
+      return {safe:true, disposition:'Reviewed import', deviceId:review.deviceId, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest};
+    }
+    if (choice && !saved) fail('Review target no longer matches; preview again');
     const plan = planSvkImport(current.payload, workspace, v, history);
     if (preview) return {safe:false, disposition:plan.disposition, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
     if (new TextEncoder().encode(JSON.stringify(plan.payload)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
@@ -229,7 +279,7 @@ export async function importSvkBatch(sql, owner, body) {
   for (const file of body.files) {
     const result = {filename:typeof file?.filename === 'string' ? file.filename.slice(0,512) : '(invalid filename)', safe:false};
     try {
-      exact(file, ['filename','content'], 'File');
+      exact(file, file?.review === undefined ? ['filename','content'] : ['filename','content','review'], 'File');
       if (typeof file.filename !== 'string' || !file.filename || file.filename.length > 512 || file.filename.split('/').length > 8 || /[\u0000-\u001f\u007f]/.test(file.filename) || file.filename.split('/').some(p => p === '..' || p === '.' || !p)) fail('Invalid relative filename or folder depth');
       if (/\.pending$/i.test(file.filename)) fail('Incomplete .pending file ignored; keep until collection is complete');
       if (!/\.json$/i.test(file.filename)) fail('Skipped: only completed JSON reports are eligible');

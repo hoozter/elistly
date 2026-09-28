@@ -65,6 +65,17 @@
         const item = make('li');
         item.append(make('strong', row.filename), document.createTextNode(' — ' + (row.reason || row.disposition)));
         if (row.hostname) item.append(make('p', `${row.hostname} · ${row.context} · ${row.collectedAt}`, 'help-text'));
+        if (row.review && row.preview) {
+          item.append(make('p', `Match: ${row.review.name} (${row.review.deviceId}). Choose which incoming values replace saved values. Unchecked values stay as they are.`, 'help-text'));
+          for (const field of row.review.fields) {
+            const label = make('label', undefined, 'svk-review-field');
+            const check = make('input'); check.type = 'checkbox'; check.checked = selected.find(f => f.filename === row.filename)?.updates?.includes(field.key) || false;
+            check.onchange = () => { const entry = selected.find(f => f.filename === row.filename); if (entry) entry.updates = row.review.fields.filter((f, i) => item.querySelectorAll('.svk-review-field input')[i].checked).map(f => f.key); };
+            label.append(check, document.createTextNode(` ${field.label}: saved ${JSON.stringify(field.current)} → incoming ${JSON.stringify(field.incoming)}`));
+            item.append(label);
+          }
+          if (!row.review.fields.length) item.append(make('p', 'No differing projected fields. The observation can still be linked to this computer.', 'help-text'));
+        }
         if (row.identity) item.append(make('code', row.identity));
         (row.preview ? previewList : row.safe ? safe : attention).append(item);
       }
@@ -102,12 +113,14 @@
           try {
             const content = await item.file.text();
             if (!active()) return;
-            const response = await api('/inventory-import', {method:'POST',body:{workspaceId,preview,files:[{filename:item.filename,content}]}});
+            const review = !preview && item.review ? {...item.review, updates:item.updates || []} : undefined;
+            const response = await api('/inventory-import', {method:'POST',body:{workspaceId,preview,files:[{filename:item.filename,content,...(review ? {review} : {})}]}});
             if (!active()) return;
             if (!response.ok) throw new Error(response.data?.error || 'Import request failed');
             const row = response.data?.results?.[0];
             if (!row || row.filename !== item.filename || typeof row.safe !== 'boolean') throw new Error('Unexpected import response; retry to confirm');
             item.eligible = row.disposition !== 'Needs attention'; item.previewReason = row.reason;
+            if (preview) { item.review = row.review ? {deviceId:row.review.deviceId,revision:row.review.revision} : null; item.updates = []; }
             results.push({...row, preview:preview && item.eligible});
           } catch (error) {
             if (!active()) return;

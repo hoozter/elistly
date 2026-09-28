@@ -175,8 +175,24 @@ try {
  assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports')).rows[0].count,2);
  await page.reload();
  await page.waitForFunction(id=>App.data.entities[id]?.hostname,device.id);
- await page.evaluate(()=>App.showSvkInventoryImport());
- await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ // A manually saved computer is reviewable in the actual dialog, with saved values kept by default.
+ const manual=structuredClone(fixture);manual.reportId=crypto.randomUUID();manual.serialNumber='BROWSER-MANUAL-1';manual.inventorySnapshot.device.serialNumber=manual.serialNumber;manual.inventorySnapshot.device.uuid=crypto.randomUUID();
+ manual.hardwareIdentity=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(manual.inventorySnapshot.device.uuid+'|'+manual.serialNumber)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const manualPath=path.join(dir,'manual.json');fs.writeFileSync(manualPath,JSON.stringify(manual));
+ const current=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload;
+ current.workspaces.main.entities.manual={id:'manual',type:'computer',name:'My saved PC',hostname:manual.hostname,serialNumber:manual.serialNumber,model:'Manual model'};current.entities={...current.workspaces.main.entities};
+ await db.query('UPDATE app_data SET payload=$1::jsonb,updated_at=clock_timestamp() WHERE user_id=$2',[JSON.stringify(current),'browser-owner']);
+ await page.reload();await page.waitForFunction(()=>App.data.entities.manual?.model==='Manual model'&&!ElistlyStorage._isDirty);
+ await page.evaluate(()=>App.showSvkInventoryImport());await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.locator('#svkFiles').setInputFiles([manualPath]);await modal.getByText('Preview only.',{exact:false}).waitFor();
+ assert.match(await modal.locator('#svkPreview').textContent(),/My saved PC/);
+ assert.match(await modal.locator('#svkPreview').textContent(),/Manual model/);
+ const modelChoice=modal.locator('.svk-review-field').filter({hasText:/^ model: saved/}).locator('input');
+ assert.equal(await modelChoice.isChecked(),false);
+ await modelChoice.check();
+ await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.manual.model,manual.model);
+ assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.manual.name,'My saved PC');
  await page.evaluate(()=>{ElistlyStorage._clearInMemoryAccountState();App.clearAccountRuntime();});
  assert.equal(await page.locator('#svkImportModal').count(),0);
  console.log('PASS: real folder input and multi-file fallback, preview without writes, persisted import/reload/history, two filename lists, hostile text, downloadable receipt, lost response and confirmed retry');

@@ -3566,6 +3566,7 @@ body.refresh-page a:hover {
 .svk-import-modal .svk-file-inputs { display: grid; gap: 0.6rem; margin-block: 1rem; }
 .svk-import-modal .svk-file-list { padding-left: 1.4rem; overflow-wrap: anywhere; }
 .svk-import-modal .svk-file-list li { margin-block: 0.6rem; }
+.svk-import-modal .svk-review-field { display: block; padding: 0.35rem 0; overflow-wrap: anywhere; cursor: pointer; }
 .svk-import-modal pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .svk-import-modal .modal-actions { flex-wrap: wrap; }
 .svk-import-modal input, .svk-import-modal select { max-width: 100%; }
