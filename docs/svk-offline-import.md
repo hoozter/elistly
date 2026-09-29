@@ -13,7 +13,7 @@ Download the receipt before closing if you need a local record of the lists. Pre
 
 ## Accepted observations
 
-Only `svk.device-inventory.v1` with `svk.windows-installation-snapshot.v1` is accepted. The importer verifies the hash of the **trimmed, case-preserved UUID + `|` + serial**, schema fields, types, bounds, UTC collection times (including seven fractional digits), and consistency between the envelope and snapshot. Future timestamps and contradictory equal-time observations require attention.
+Only `svk.device-inventory.v1` with `svk.windows-installation-snapshot.v1` is accepted. A local-file report can contain remote service observations (`collection.context: "service", `networkUsed: true`); installation collection remains offline (`networkUsed: false`). The importer verifies the hash of the **trimmed, case-preserved UUID + `|` + serial**, schema fields, types, bounds, UTC collection times (including seven fractional digits), and consistency between the envelope and snapshot. Future timestamps and contradictory equal-time observations require attention.
 
 Selection limits are 100 files, 4 MiB total, 64 KiB per report, 512 filename characters and 8 path components. Server requests accept at most 10 reports and 1 MiB; the browser sends one file at a time to preserve partial outcomes. Arrays, strings and object depth are bounded independently.
 

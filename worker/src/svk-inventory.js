@@ -55,7 +55,9 @@ export async function validateSvkReport(raw, now = Date.now()) {
   text(r.collector.name, 'collector.name', true); text(r.collector.provisionVersion, 'collector.provisionVersion', true);
   if (r.collector.formatVersion !== 1) fail('Unsupported collector formatVersion');
   exact(r.collection, ['context','mode','networkUsed','userObservation','unavailable'], 'collection');
-  if (!['installation','service'].includes(r.collection.context) || r.collection.mode !== 'local-file' || r.collection.networkUsed !== false || r.collection.userObservation !== 'not-collected') fail('Contradictory collection metadata');
+  // Service inventory may query a remote machine and still produce a local file.
+  // Installation collection remains offline; neither context observes a user.
+  if (!['installation','service'].includes(r.collection.context) || r.collection.mode !== 'local-file' || typeof r.collection.networkUsed !== 'boolean' || (r.collection.context === 'installation' && r.collection.networkUsed) || r.collection.userObservation !== 'not-collected') fail('Contradictory collection metadata');
   if (!Array.isArray(r.collection.unavailable) || r.collection.unavailable.length > 32) fail('Invalid unavailable list');
   r.collection.unavailable.forEach(v => text(v, 'unavailable', true));
   for (const key of ['hostname','serialNumber','manufacturer','model','windowsEdition']) text(r[key], key, key === 'hostname');

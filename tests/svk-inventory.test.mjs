@@ -12,6 +12,19 @@ test('accepts producer precision and verifies content and identity hashes', asyn
  assert.match(valid.digest, /^[a-f0-9]{64}$/);
  assert.equal((await validate(Object.fromEntries(Object.entries(fixture).reverse()))).digest, valid.digest);
 });
+test('accepts remote service collection stored as a local file without weakening installation checks', async () => {
+ const report = structuredClone(fixture);
+ report.collection.context = 'service';
+ report.collection.networkUsed = true;
+ report.provisioning.phase = 'service-observation';
+ assert.equal((await validate(report)).report.collection.networkUsed, true);
+ const invalid = structuredClone(report);
+ invalid.collection.networkUsed = 'true';
+ await assert.rejects(validate(invalid), /Contradictory collection metadata/);
+ const installation = structuredClone(fixture);
+ installation.collection.networkUsed = true;
+ await assert.rejects(validate(installation), /Contradictory collection metadata/);
+});
 test('strict schema, identities, bounds, dates and contradictions', async () => {
  const invalid = [
   r=>r.schema='elistly.device-intake.v1', r=>r.extra=true,
