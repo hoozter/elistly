@@ -1,0 +1,76 @@
+{
+    "schema":  "svk.device-inventory.v1",
+    "reportId":  "90166e1a-3bed-4415-8642-397cf22f589d",
+    "collectedAt":  "2026-09-29T12:01:48.9046633Z",
+    "collector":  {
+                      "name":  "SVK Admin Lenovo factory import",
+                      "formatVersion":  1,
+                      "provisionVersion":  "not-applicable"
+                  },
+    "collection":  {
+                       "context":  "service",
+                       "mode":  "local-file",
+                       "networkUsed":  false,
+                       "userObservation":  "not-collected",
+                       "unavailable":  [
+                                           "live Windows facts",
+                                           "current RAM",
+                                           "current graphics",
+                                           "BIOS UUID"
+                                       ]
+                   },
+    "hardwareIdentity":  null,
+    "identityStatus":  "manual-review-required",
+    "hostname":  "SVK-PF5D4W92",
+    "serialNumber":  "PF5D4W92",
+    "manufacturer":  "Lenovo",
+    "model":  null,
+    "windowsEdition":  null,
+    "inventorySnapshot":  {
+                              "schemaVersion":  "svk.windows-installation-snapshot.v1",
+                              "collectedAt":  "2026-09-29T12:01:48.9046633Z",
+                              "device":  {
+                                             "manufacturer":  "Lenovo",
+                                             "model":  null,
+                                             "serialNumber":  "PF5D4W92",
+                                             "uuid":  null
+                                         },
+                              "windows":  {
+                                              "edition":  null,
+                                              "version":  null,
+                                              "build":  null
+                                          },
+                              "cpu":  {
+                                          "model":  null,
+                                          "cores":  null,
+                                          "logicalProcessors":  null
+                                      },
+                              "ramBytes":  null,
+                              "graphicsAdapters":  [
+
+                                                   ],
+                              "biosVersion":  null,
+                              "lastInteractiveUser":  null
+                          },
+    "provisioning":  {
+                         "coreVerified":  false,
+                         "phase":  "service-observation",
+                         "finished":  null
+                     },
+    "factoryEvidence":  {
+                            "source":  "Lenovo As-Built PartsExport",
+                            "sourceFile":  "PartsExport_Serial-pf5d4w92_2026-09-29-11-51-07.xlsx",
+                            "sourceSha256":  "F5D9861D81DC83B592DB85B59B9CDD25F6E18C4CF8D8711D821838D417FF2D9B",
+                            "ramEstimateBytes":  68719476736,
+                            "graphicsParts":  [
+                                                  "QN20-P2RTX A1000 6GB,96bit,6GB"
+                                              ],
+                            "cpuBoardParts":  [
+                                                  "I7-14700HX NOK nA yAB yDT DI"
+                                              ],
+                            "storageAlternatives":  [
+                                                        "Lenovo SSD 512G,M.2,2280,PCIE4X4,OPAL,SAMSUNG",
+                                                        "Lenovo SSD 512G,M.2,2280,PCIE4X4,OPAL,KIOXIA"
+                                                    ]
+                        }
+}

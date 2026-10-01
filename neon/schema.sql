@@ -94,15 +94,18 @@ create table if not exists public.inventory_import_reports (
   workspace_id text not null,
   report_id text not null,
   content_digest text not null check (content_digest ~ '^[a-f0-9]{64}$'),
-  hardware_identity text not null check (hardware_identity ~ '^[a-f0-9]{64}$'),
-  serial_key text not null,
-  uuid_key text not null,
+  hardware_identity text check (hardware_identity ~ '^[a-f0-9]{64}$'),
+  serial_key text,
+  uuid_key text,
   collected_key text not null,
   device_id text not null,
   report jsonb not null,
   imported_at timestamptz not null default clock_timestamp(),
   primary key (owner_user_id, workspace_id, report_id)
 );
+alter table public.inventory_import_reports alter column hardware_identity drop not null;
+alter table public.inventory_import_reports alter column serial_key drop not null;
+alter table public.inventory_import_reports alter column uuid_key drop not null;
 create index if not exists inventory_import_identity_idx
   on public.inventory_import_reports(owner_user_id, workspace_id, hardware_identity);
 create index if not exists inventory_import_serial_idx

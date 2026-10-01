@@ -56,7 +56,7 @@
     function lock(value) {
       busy = value;
       workspace.disabled = value || !ready; folder.disabled = value || !ready; files.disabled = value || !ready;
-      commit.disabled = value || !selected.some(f=>f.eligible); retry.disabled = value || !selected.length;
+      commit.disabled = value || !selected.some(f=>f.eligible && (f.review?.candidates ? (f.action === 'new' || (f.action === 'link' && f.deviceId && f.confirmedSameDevice)) : (!['hostname','unverified serial'].includes(f.review?.match) || f.confirmedSameDevice))); retry.disabled = value || !selected.length;
       download.disabled = value || !results.length;
     }
     function render() {
@@ -65,8 +65,40 @@
         const item = make('li');
         item.append(make('strong', row.filename), document.createTextNode(' — ' + (row.reason || row.disposition)));
         if (row.hostname) item.append(make('p', `${row.hostname} · ${row.context} · ${row.collectedAt}`, 'help-text'));
-        if (row.review && row.preview) {
-          item.append(make('p', `Match: ${row.review.name} (${row.review.deviceId}). Choose which incoming values replace saved values. Unchecked values stay as they are.`, 'help-text'));
+        if (row.review?.candidates && row.preview) {
+          const entry = selected.find(f => f.filename === row.filename);
+          item.append(make('p', 'UUID unavailable: hostname and serial are suggestions, not proof of identity. Choose a new Computer or explicitly link a verified existing Computer. Incoming fields never overwrite existing values unless checked.', 'help-text'));
+          const label = make('label', 'Import target '); const target = make('select'); target.className = 'svk-target';
+          const newOption = make('option', 'Create new Computer'); newOption.value = 'new'; target.append(newOption);
+          for (const candidate of row.review.candidates) {
+            const option = make('option', `${candidate.match ? `[${candidate.match} suggestion] ` : ''}${candidate.name} (${candidate.deviceId})`);
+            option.value = candidate.deviceId; target.append(option);
+          }
+          target.value = entry?.action === 'link' ? entry.deviceId : 'new';
+          target.onchange = () => { if (!entry) return; entry.action = target.value === 'new' ? 'new' : 'link'; entry.deviceId = target.value === 'new' ? null : target.value; entry.updates = []; entry.confirmedSameDevice = false; render(); lock(false); };
+          label.append(target); item.append(label);
+          if (entry?.action === 'link') {
+            const candidate = row.review.candidates.find(c => c.deviceId === entry.deviceId);
+            item.append(make('p', `Candidate: ${candidate.name} (${candidate.deviceId}). ${candidate.match || 'No hostname/serial match'}. Verify this is the same physical computer before linking.`, 'help-text'));
+            const identityLabel = make('label', undefined, 'svk-review-identity'); const check = make('input'); check.type = 'checkbox'; check.checked = !!entry.confirmedSameDevice;
+            check.onchange = () => { entry.confirmedSameDevice = check.checked; lock(false); };
+            identityLabel.append(check, document.createTextNode(' I verified this is the same computer')); item.append(identityLabel);
+            for (const field of candidate.fields) {
+              const fieldLabel = make('label', undefined, 'svk-review-field'); const fieldCheck = make('input'); fieldCheck.type = 'checkbox'; fieldCheck.checked = entry.updates?.includes(field.key) || false;
+              fieldCheck.onchange = () => { entry.updates = candidate.fields.filter((f,i) => item.querySelectorAll('.svk-review-field input')[i].checked).map(f => f.key); };
+              fieldLabel.append(fieldCheck, document.createTextNode(` ${field.label}: saved ${JSON.stringify(field.current)} → incoming ${JSON.stringify(field.incoming)}`)); item.append(fieldLabel);
+            }
+          }
+        } else if (row.review && row.preview) {
+          item.append(make('p', `Candidate: ${row.review.name} (${row.review.deviceId}). Matched by ${row.review.match}. Choose which incoming values replace saved values. Unchecked values stay as they are.`, 'help-text'));
+          if (['hostname','unverified serial'].includes(row.review.match)) {
+            item.append(make('p', row.review.match === 'hostname' ? 'A hostname can be reused and does not prove device identity. Check the computer outside Elistly before linking this report.' : 'An unverified serial does not prove device identity. Check the computer outside Elistly before linking this report.', 'help-text'));
+            const label = make('label', undefined, 'svk-review-identity');
+            const check = make('input'); check.type = 'checkbox'; check.checked = selected.find(f => f.filename === row.filename)?.confirmedSameDevice || false;
+            check.onchange = () => { const entry = selected.find(f => f.filename === row.filename); if (entry) entry.confirmedSameDevice = check.checked; lock(false); };
+            label.append(check, document.createTextNode(' I verified this is the same computer'));
+            item.append(label);
+          }
           for (const field of row.review.fields) {
             const label = make('label', undefined, 'svk-review-field');
             const check = make('input'); check.type = 'checkbox'; check.checked = selected.find(f => f.filename === row.filename)?.updates?.includes(field.key) || false;
@@ -113,14 +145,15 @@
           try {
             const content = await item.file.text();
             if (!active()) return;
-            const review = !preview && item.review ? {...item.review, updates:item.updates || []} : undefined;
+            if (!preview && ['hostname','unverified serial'].includes(item.review?.match) && !item.confirmedSameDevice) throw new Error('Confirm that the unverified candidate is the same computer');
+            const review = !preview && item.review ? (item.review.candidates ? (item.action === 'new' ? {action:'new',revision:item.review.revision} : {action:'link',deviceId:item.deviceId,revision:item.review.revision,updates:item.updates || [],confirmedSameDevice:!!item.confirmedSameDevice}) : {deviceId:item.review.deviceId, revision:item.review.revision, updates:item.updates || [], confirmedSameDevice:!!item.confirmedSameDevice}) : undefined;
             const response = await api('/inventory-import', {method:'POST',body:{workspaceId,preview,files:[{filename:item.filename,content,...(review ? {review} : {})}]}});
             if (!active()) return;
             if (!response.ok) throw new Error(response.data?.error || 'Import request failed');
             const row = response.data?.results?.[0];
             if (!row || row.filename !== item.filename || typeof row.safe !== 'boolean') throw new Error('Unexpected import response; retry to confirm');
             item.eligible = row.disposition !== 'Needs attention'; item.previewReason = row.reason;
-            if (preview) { item.review = row.review ? {deviceId:row.review.deviceId,revision:row.review.revision} : null; item.updates = []; }
+            if (preview) { item.review = row.review ? (row.review.candidates ? {revision:row.review.revision,candidates:row.review.candidates,suggestedDeviceIds:row.review.suggestedDeviceIds} : {deviceId:row.review.deviceId,revision:row.review.revision,match:row.review.match}) : null; item.action = item.review?.candidates ? 'new' : null; item.deviceId = null; item.updates = []; item.confirmedSameDevice = false; }
             results.push({...row, preview:preview && item.eligible});
           } catch (error) {
             if (!active()) return;

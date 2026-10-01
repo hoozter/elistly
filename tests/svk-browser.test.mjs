@@ -16,7 +16,6 @@ fixture.inventorySnapshot.cpu.model='Intel(R) Core(TM) Ultra 5 125U';
 fixture.inventorySnapshot.ramBytes=16619384832;
 const filename='<img onerror=alert(1)>.json';
 fs.mkdirSync(path.join(dir,'Inventory'));fs.writeFileSync(path.join(dir,'Inventory',filename),JSON.stringify(fixture));
-fs.copyFileSync(path.join(root,'tests/fixtures/svk/02-service-missing-identity.json'),path.join(dir,'Inventory','missing.json'));
 fs.writeFileSync(path.join(dir,'Inventory','broken.json'),'bad');fs.writeFileSync(path.join(dir,'Inventory','report.json.pending'),'incomplete');fs.writeFileSync(path.join(dir,'Inventory','notes.txt'),'not a report');
 const sql=async(strings,...values)=>(await db.query(strings.reduce((s,v,i)=>s+v+(i<values.length?'$'+(i+1):''),''),values)).rows;
 const token='test.'+Buffer.from(JSON.stringify({sub:'browser-owner',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.test';
@@ -71,7 +70,6 @@ try {
  await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();
  await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
  assert.match(await modal.locator('#svkSafe').textContent(),/<img onerror=alert\(1\)>\.json/);
- assert.match(await modal.locator('#svkAttention').textContent(),/missing.json/);
  assert.equal(await modal.locator('img').count(),0);assert.equal(dialogs,0);
  const [stored]=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows;
  const computerType=stored.payload.workspaces.main.entityTypes.computer;
@@ -81,7 +79,7 @@ try {
  assert.ok(device.autoName);assert.equal(device.name,undefined);
  const downloadPromise=page.waitForEvent('download');await modal.getByRole('button',{name:'Download receipt'}).click();
  const downloaded=await downloadPromise;const receipt=JSON.parse(fs.readFileSync(await downloaded.path(),'utf8'));
- assert.equal(receipt.safeToArchiveOrDelete.length,1);assert.equal(receipt.needsAttention.length,4);
+ assert.equal(receipt.safeToArchiveOrDelete.length,1);assert.equal(receipt.needsAttention.length,3);
  // Edit immediately after import, without a reload that would hide a stale in-memory revision.
  await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
  await modal.getByRole('button',{name:'Close',exact:true}).click();
@@ -193,6 +191,47 @@ try {
  await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
  assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.manual.model,manual.model);
  assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.manual.name,'My saved PC');
+ // Same hostname alone is a review candidate, never automatic identity proof.
+ const hostOnly=structuredClone(manual);hostOnly.reportId=crypto.randomUUID();hostOnly.hostname='HOST-ONLY-BROWSER';
+ hostOnly.serialNumber='HOST-ONLY-BROWSER-SERIAL';hostOnly.inventorySnapshot.device.serialNumber=hostOnly.serialNumber;
+ hostOnly.inventorySnapshot.device.uuid=crypto.randomUUID();
+ hostOnly.hardwareIdentity=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(hostOnly.inventorySnapshot.device.uuid+'|'+hostOnly.serialNumber)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+ const hostPath=path.join(dir,'host-only.json');fs.writeFileSync(hostPath,JSON.stringify(hostOnly));
+ const withHost=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload;
+ withHost.workspaces.main.entities.hostOnly={id:'hostOnly',type:'computer',name:'Hand named',hostname:hostOnly.hostname,model:'Hand picked',assignedTo:'chosen-person'};
+ withHost.entities={...withHost.workspaces.main.entities};
+ await db.query('UPDATE app_data SET payload=$1::jsonb,updated_at=clock_timestamp() WHERE user_id=$2',[JSON.stringify(withHost),'browser-owner']);
+ await page.reload();await page.waitForFunction(()=>App.data.entities.hostOnly?.model==='Hand picked'&&!ElistlyStorage._isDirty);
+ await page.evaluate(()=>App.showSvkInventoryImport());await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.locator('#svkFiles').setInputFiles([hostPath]);await modal.getByText('Preview only.',{exact:false}).waitFor();
+ assert.match(await modal.locator('#svkPreview').textContent(),/Matched by hostname/);
+ assert.match(await modal.locator('#svkPreview').textContent(),/Hand picked/);
+ assert.match(await modal.locator('#svkPreview').textContent(),/A hostname can be reused/);
+ if(process.env.SVK_REVIEW_SCREENSHOT) {await page.waitForTimeout(350);await modal.locator('.modal-content').screenshot({path:process.env.SVK_REVIEW_SCREENSHOT});}
+ const importButton=modal.getByRole('button',{name:'Import all eligible reports',exact:true});
+ assert.equal(await importButton.isDisabled(),true);
+ await modal.locator('.svk-review-identity input').check();
+ assert.equal(await importButton.isEnabled(),true);
+ await modal.locator('.svk-review-field').filter({hasText:/^ model: saved/}).locator('input').check();
+ await importButton.click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ let hostStored=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.hostOnly;
+ assert.equal(hostStored.model,hostOnly.model);assert.equal(hostStored.name,'Hand named');assert.equal(hostStored.manufacturer,undefined);assert.equal(hostStored.assignedTo,'chosen-person');
+ await modal.getByRole('button',{name:'Preview / retry selection'}).click();await modal.getByText('Preview only.',{exact:false}).waitFor();
+ await importButton.click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ hostStored=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities.hostOnly;
+ assert.equal(hostStored.manufacturer,undefined,'rejected blank field must stay blank on retry');
+ await page.reload();await page.waitForFunction(model=>App.data.entities.hostOnly?.model===model,hostOnly.model);
+ assert.equal(await page.evaluate(()=>App.data.entities.hostOnly.manufacturer),undefined,'rejected field remains absent after reload');
+ assert.equal(await page.evaluate(()=>App.data.entities.hostOnly.assignedTo),'chosen-person');
+ // The exact Lenovo factory file works in the real dialog, without a BIOS UUID.
+ const factoryPath=path.join(root,'tests/fixtures/svk/03-factory-uuidless.json');
+ await page.evaluate(()=>App.showSvkInventoryImport());await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
+ await modal.locator('#svkFiles').setInputFiles([factoryPath]);await modal.getByText('Preview only.',{exact:false}).waitFor();
+ assert.match(await modal.locator('#svkPreview').textContent(),/Create new Computer/);
+ assert.equal(await modal.locator('.svk-target').inputValue(),'new');
+ await importButton.click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
+ assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports WHERE report_id=$1',['90166e1a-3bed-4415-8642-397cf22f589d'])).rows[0].count,1);
+ assert.ok(Object.values((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities).some(e=>e.hostname==='SVK-PF5D4W92'));
  await page.evaluate(()=>{ElistlyStorage._clearInMemoryAccountState();App.clearAccountRuntime();});
  assert.equal(await page.locator('#svkImportModal').count(),0);
  console.log('PASS: real folder input and multi-file fallback, preview without writes, persisted import/reload/history, two filename lists, hostile text, downloadable receipt, lost response and confirmed retry');

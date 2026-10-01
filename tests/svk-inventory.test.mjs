@@ -1,11 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { validateSvkReport, planSvkImport, canonicalJson } from '../worker/src/svk-inventory.js';
+import { validateSvkReport, planSvkImport, manualReview, canonicalJson } from '../worker/src/svk-inventory.js';
 const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/svk/01-installation.json', import.meta.url)));
 const now = Date.parse('2026-09-22T00:00:00Z');
 const validate = value => validateSvkReport(JSON.stringify(value), now);
 const payload = () => ({currentWorkspaceId:'main', workspaces:{main:{entityTypes:{computer:{}},entities:{}}}});
+test('hostname-only review never treats a conflicting or ambiguous hostname as identity', async () => {
+ const v=await validate(fixture), p=payload();
+ p.workspaces.main.entities.one={id:'one',type:'computer',hostname:fixture.hostname,model:'Manual model'};
+ assert.equal(manualReview(p,'main',v,[])?.match,'hostname');
+ p.workspaces.main.entities.one.serialNumber='A-DIFFERENT-SERIAL';
+ assert.equal(manualReview(p,'main',v,[]),null);
+ assert.throws(()=>planSvkImport(p,'main',v,[]),/Hostname conflicts/);
+ delete p.workspaces.main.entities.one.serialNumber;
+ p.workspaces.main.entities.two={id:'two',type:'computer',hostname:fixture.hostname};
+ assert.equal(manualReview(p,'main',v,[]),null);
+ assert.throws(()=>planSvkImport(p,'main',v,[]),/Hostname conflicts/);
+ p.workspaces.main.entities.one.serialNumber=fixture.serialNumber;
+ assert.equal(manualReview(p,'main',v,[])?.deviceId,'one','a unique serial candidate takes priority over a repeated hostname');
+ p.workspaces.main.entities.two.serialNumber=fixture.serialNumber;
+ assert.equal(manualReview(p,'main',v,[]),null,'duplicate serial candidates cannot be linked automatically');
+});
 test('accepts producer precision and verifies content and identity hashes', async () => {
  const valid = await validate(fixture);
  assert.equal(valid.collectedKey, '2026-09-21T09:00:00.0000000Z');
@@ -25,6 +41,29 @@ test('accepts remote service collection stored as a local file without weakening
  installation.collection.networkUsed = true;
  await assert.rejects(validate(installation), /Contradictory collection metadata/);
 });
+test('accepts bounded factory evidence and UUID-less manual-review reports without treating them as stable identities', async () => {
+ // Disposable shape of the supplied service report; no source report is changed or stored here.
+ const service = structuredClone(fixture);
+ service.collector.name = 'SVK Admin Lenovo factory import';
+ service.collector.provisionVersion = 'not-applicable';
+ service.collection.context = 'service';
+ service.provisioning.phase = 'service-observation';
+ service.identityStatus = 'manual-review-required';
+ service.hardwareIdentity = null;
+ service.inventorySnapshot.device.uuid = null;
+ service.factoryEvidence = {source:'Lenovo As-Built PartsExport',sourceFile:'parts.csv',sourceSha256:'a'.repeat(64),ramEstimateBytes:null,graphicsParts:[],cpuBoardParts:[],storageAlternatives:[]};
+ const accepted = await validate(service);
+ assert.equal(accepted.report.hardwareIdentity, null);
+ assert.equal(accepted.uuidKey, null);
+ const missing = structuredClone(service);
+ delete missing.model;
+ await assert.rejects(validate(missing), /Report: missing fields: model/);
+ const invalidEvidence = structuredClone(service);
+ invalidEvidence.factoryEvidence.sourceSha256 = 'bad';
+ await assert.rejects(validate(invalidEvidence), /Invalid factory source SHA-256/);
+ const missingIdentity = JSON.parse(fs.readFileSync(new URL('./fixtures/svk/02-service-missing-identity.json',import.meta.url)));
+ assert.equal((await validate(missingIdentity)).report.identityStatus, 'manual-review-required');
+});
 test('strict schema, identities, bounds, dates and contradictions', async () => {
  const invalid = [
   r=>r.schema='elistly.device-intake.v1', r=>r.extra=true,
@@ -41,7 +80,7 @@ test('strict schema, identities, bounds, dates and contradictions', async () => 
  ];
  for (const mutate of invalid) {const r=structuredClone(fixture); mutate(r); await assert.rejects(validate(r), undefined, mutate.toString());}
  await assert.rejects(validateSvkReport(' '.repeat(65537)),/64 KiB/);
- await assert.rejects(validate(JSON.parse(fs.readFileSync(new URL('./fixtures/svk/02-service-missing-identity.json',import.meta.url)))), /identity/i);
+ assert.equal((await validate(JSON.parse(fs.readFileSync(new URL('./fixtures/svk/02-service-missing-identity.json',import.meta.url))))).report.identityStatus, 'manual-review-required');
 });
 test('canonical content ignores object key order only', () => {
  assert.equal(canonicalJson({b:1,a:[null,'x']}),canonicalJson({a:[null,'x'],b:1}));

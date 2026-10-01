@@ -15,7 +15,16 @@ async function digest(value) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 function exact(value, keys, label) {
-  if (!object(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) fail(`${label}: unexpected or missing fields`);
+  if (!object(value)) fail(`${label}: unexpected or missing fields`);
+  const unexpected = Object.keys(value).filter(key => !keys.includes(key));
+  const missing = keys.filter(key => !Object.hasOwn(value, key));
+  if (unexpected.length || missing.length) {
+    if (label === 'Report') fail(`Report: ${[
+      unexpected.length && `unexpected fields: ${unexpected.join(', ')}`,
+      missing.length && `missing fields: ${missing.join(', ')}`
+    ].filter(Boolean).join('; ')}`);
+    fail(`${label}: unexpected or missing fields`);
+  }
 }
 function text(value, label, required = false) {
   if (value === null && !required) return;
@@ -46,7 +55,7 @@ export async function validateSvkReport(raw, now = Date.now()) {
   let r;
   try { r = JSON.parse(raw.replace(/^\uFEFF/, '')); } catch { fail('Invalid JSON report'); }
   bounded(r);
-  exact(r, ['schema','reportId','collectedAt','collector','collection','hardwareIdentity','identityStatus','hostname','serialNumber','manufacturer','model','windowsEdition','inventorySnapshot','provisioning'], 'Report');
+  exact(r, ['schema','reportId','collectedAt','collector','collection','hardwareIdentity','identityStatus','hostname','serialNumber','manufacturer','model','windowsEdition','inventorySnapshot','provisioning', ...(Object.hasOwn(r, 'factoryEvidence') ? ['factoryEvidence'] : [])], 'Report');
   if (r.schema !== 'svk.device-inventory.v1') fail('Unsupported report schema');
   if (!uuid.test(r.reportId) || !stable(r.reportId)) fail('Invalid reportId UUID');
   const collectedKey = timestampKey(r.collectedAt);
@@ -78,11 +87,24 @@ export async function validateSvkReport(raw, now = Date.now()) {
   if (s.lastInteractiveUser !== null) fail('User identity must not be collected');
   for (const key of ['manufacturer','model','serialNumber']) if (r[key] !== s.device[key]) fail(`${key}: envelope and snapshot disagree`);
   if (r.windowsEdition !== s.windows.edition) fail('Windows edition fields disagree');
+  if (Object.hasOwn(r, 'factoryEvidence')) {
+    const e = r.factoryEvidence;
+    exact(e, ['source','sourceFile','sourceSha256','ramEstimateBytes','graphicsParts','cpuBoardParts','storageAlternatives'], 'factoryEvidence');
+    text(e.source, 'factoryEvidence.source', true); text(e.sourceFile, 'factoryEvidence.sourceFile', true);
+    if (typeof e.sourceSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(e.sourceSha256)) fail('Invalid factory source SHA-256');
+    integer(e.ramEstimateBytes, 'factoryEvidence.ramEstimateBytes');
+    for (const key of ['graphicsParts','cpuBoardParts','storageAlternatives']) {
+      if (!Array.isArray(e[key]) || e[key].length > 32) fail(`Invalid factoryEvidence.${key}`);
+      e[key].forEach(value => text(value, `factoryEvidence.${key}`, true));
+    }
+  }
   exact(r.provisioning, ['coreVerified','phase','finished'], 'provisioning');
   if (typeof r.provisioning.coreVerified !== 'boolean' || r.provisioning.finished !== null || r.provisioning.phase !== (r.collection.context === 'installation' ? 'before-finish-cleanup' : 'service-observation')) fail('Contradictory provisioning metadata');
-  if (r.identityStatus !== 'stable' || !stable(r.serialNumber) || !stable(s.device.uuid) || !uuid.test(s.device.uuid?.trim()) || !/^[a-f0-9]{64}$/.test(r.hardwareIdentity)) fail('Missing, generic or invalid hardware identity requires review');
-  if (await digest(s.device.uuid.trim() + '|' + r.serialNumber.trim()) !== r.hardwareIdentity) fail('Hardware identity hash does not match trimmed UUID|serial');
-  return {report:r, digest:await digest(canonicalJson(r)), reportId:r.reportId.toLowerCase(), collectedKey, serialKey:r.serialNumber.trim().toLowerCase(), uuidKey:s.device.uuid.trim().toLowerCase()};
+  if (r.identityStatus === 'stable') {
+    if (!stable(r.serialNumber) || !stable(s.device.uuid) || !uuid.test(s.device.uuid?.trim()) || typeof r.hardwareIdentity !== 'string' || !/^[a-f0-9]{64}$/.test(r.hardwareIdentity)) fail('Stable identity requires a non-generic serial, valid UUID and hardwareIdentity hash');
+    if (await digest(s.device.uuid.trim() + '|' + r.serialNumber.trim()) !== r.hardwareIdentity) fail('Hardware identity hash does not match trimmed UUID|serial');
+  } else if (r.identityStatus !== 'manual-review-required' || r.hardwareIdentity !== null || s.device.uuid !== null) fail('Unconfirmed identity requires null UUID and hardwareIdentity');
+  return {report:r, digest:await digest(canonicalJson(r)), reportId:r.reportId.toLowerCase(), collectedKey, serialKey:stable(r.serialNumber) ? r.serialNumber.trim().toLowerCase() : null, uuidKey:s.device.uuid?.trim().toLowerCase() ?? null};
 }
 function sameObservation(a, b) {
   const facts = r => ({hostname:r.hostname, snapshot:{...r.inventorySnapshot, collectedAt:timestampKey(r.inventorySnapshot.collectedAt)}});
@@ -121,6 +143,7 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   }
   if (matches.size > 1) fail('Multiple matching devices require review');
   if (deletedDeviceId && matches.size) fail('Deleted historical device conflicts with a live device; review required');
+  if (!matches.size && !deletedDeviceId && Object.values(workspace.entities).some(e => e?.type === 'computer' && typeof e.hostname === 'string' && e.hostname.trim().toLowerCase() === r.hostname.trim().toLowerCase())) fail('Hostname conflicts with an existing computer; review identity before importing');
   const deviceId = [...matches][0] || deletedDeviceId || `device_${crypto.randomUUID()}`;
   const next = structuredClone(payload);
   const schemaChanged = migrateKnownItWindowsSchema(next.workspaces[workspaceId].entityTypes.computer, r);
@@ -143,25 +166,47 @@ export function planSvkImport(payload, workspaceId, validated, history) {
   return {payload:next, deviceId, disposition:deletedDeviceId ? 'Restore deleted device' : matches.size ? 'Update observations' : 'New'};
 }
 
-// A hostname is not identity evidence. Only one live serial/UUID candidate can be reviewed.
-export function manualReview(payload, workspaceId, v, history) {
+// A hostname is not identity evidence. Only one unambiguous live candidate can be reviewed.
+export function manualReview(payload, workspaceId, v, history, unconfirmedHistory = []) {
   const w = payload.workspaces[workspaceId];
-  const candidates = Object.entries(w.entities).filter(([,e]) => e?.type === 'computer' && (
+  const identityCandidates = Object.entries(w.entities).filter(([,e]) => e?.type === 'computer' && (
     [e.serialNumber, e._elistlyRegistration?.inventorySnapshot?.device?.serialNumber].some(s => typeof s === 'string' && s.trim().toLowerCase() === v.serialKey) ||
     e._elistlyRegistration?.inventorySnapshot?.device?.uuid?.trim().toLowerCase() === v.uuidKey
   ));
-  if (candidates.length !== 1) return null;
+  const hostnameCandidates = Object.entries(w.entities).filter(([,e]) => e?.type === 'computer' && typeof e.hostname === 'string' && e.hostname.trim().toLowerCase() === v.report.hostname.trim().toLowerCase());
+  const candidates = identityCandidates.length ? identityCandidates : hostnameCandidates.filter(([,e]) =>
+    !stable(e.serialNumber) && !stable(e._elistlyRegistration?.inventorySnapshot?.device?.serialNumber) && !stable(e._elistlyRegistration?.inventorySnapshot?.device?.uuid) && !e._elistlyRegistration
+  );
+  if (candidates.length !== 1 || (identityCandidates.length === 0 && hostnameCandidates.length !== 1)) return null;
   const [deviceId, entity] = candidates[0];
+  if (history.length && unconfirmedHistory.length && unconfirmedHistory.every(h => h.device_id === deviceId) && entity._svkManualLink && history.every(h => h.device_id === deviceId && h.hardware_identity === v.report.hardwareIdentity)) return null;
+  const unconfirmedRegistration = !entity._elistlyRegistration?.hardwareIdentity && unconfirmedHistory.some(h => h.device_id === deviceId);
+  const match = unconfirmedRegistration ? 'unverified serial' : identityCandidates.length || (history.length && entity._svkManualLink && history.every(h => h.device_id === deviceId && h.hardware_identity === v.report.hardwareIdentity)) ? 'serial/UUID' : 'hostname';
   if (history.length && !entity._svkManualLink) return null;
   if (history.length && (history.some(h => h.device_id !== deviceId || h.hardware_identity !== v.report.hardwareIdentity || h.collected_key >= v.collectedKey) || (entity._elistlyRegistration && entity._elistlyRegistration.hardwareIdentity !== v.report.hardwareIdentity))) return null;
-  if (!history.length && entity._elistlyRegistration) return null;
+  if (!history.length && entity._elistlyRegistration && !unconfirmedRegistration) return null;
   const type = structuredClone(w.entityTypes.computer);
   migrateKnownItWindowsSchema(type, v.report);
   const proposed = createImportedComputer({id:deviceId, entityType:type, entities:w.entities, report:v.report});
   const fields = Object.keys(proposed).filter(key => !['id','type','_elistlyRegistration'].includes(key) && canonicalJson(entity[key] ?? null) !== canonicalJson(proposed[key] ?? null))
     .map(key => ({key, label:type.fields?.find(f => f.name === key)?.label || key, current:entity[key] ?? null, incoming:proposed[key]}));
-  if (history.length && !fields.length) return null;
-  return {deviceId, name:entity.name || entity.autoName || entity.hostname || deviceId, fields, proposed};
+  return {deviceId, name:entity.name || entity.autoName || entity.hostname || deviceId, match, fields, proposed};
+}
+
+// Hostname and serial are suggestions, not identity evidence.
+export function unconfirmedCandidates(payload, workspaceId, v) {
+  const w = payload.workspaces[workspaceId];
+  const type = structuredClone(w.entityTypes.computer);
+  migrateKnownItWindowsSchema(type, v.report);
+  return Object.entries(w.entities).filter(([,e]) => e?.type === 'computer').map(([deviceId, entity]) => {
+    const serial = v.serialKey && [entity.serialNumber, entity._elistlyRegistration?.inventorySnapshot?.device?.serialNumber]
+      .some(s => typeof s === 'string' && s.trim().toLowerCase() === v.serialKey);
+    const hostname = typeof entity.hostname === 'string' && entity.hostname.trim().toLowerCase() === v.report.hostname.trim().toLowerCase();
+    const proposed = createImportedComputer({id:deviceId, entityType:type, entities:w.entities, report:v.report});
+    const fields = Object.keys(proposed).filter(key => !['id','type'].includes(key) && canonicalJson(entity[key] ?? null) !== canonicalJson(proposed[key] ?? null))
+      .map(key => ({key, label:type.fields?.find(f => f.name === key)?.label || key, current:entity[key] ?? null, incoming:proposed[key]}));
+    return {deviceId, name:entity.name || entity.autoName || entity.hostname || deviceId, match:serial ? 'serial' : hostname ? 'hostname' : null, fields, proposed};
+  });
 }
 
 async function receipt(sql, owner, workspace, id) {
@@ -176,8 +221,13 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
   const v = await validateSvkReport(file.content);
   const choice = file.review;
   if (choice !== undefined) {
-    exact(choice, ['deviceId','revision','updates'], 'Review');
-    if (typeof choice.deviceId !== 'string' || typeof choice.revision !== 'string' || !Array.isArray(choice.updates) || choice.updates.some(k => typeof k !== 'string') || new Set(choice.updates).size !== choice.updates.length) fail('Invalid review choices');
+    if (v.report.identityStatus === 'stable') {
+      exact(choice, ['deviceId','revision','updates','confirmedSameDevice'], 'Review');
+      if (typeof choice.deviceId !== 'string' || typeof choice.revision !== 'string' || typeof choice.confirmedSameDevice !== 'boolean' || !Array.isArray(choice.updates) || choice.updates.some(k => typeof k !== 'string') || new Set(choice.updates).size !== choice.updates.length) fail('Invalid review choices');
+    } else {
+      exact(choice, choice?.action === 'new' ? ['action','revision'] : ['action','deviceId','revision','updates','confirmedSameDevice'], 'Review');
+      if (!['new','link'].includes(choice.action) || typeof choice.revision !== 'string' || (choice.action === 'link' && (typeof choice.deviceId !== 'string' || choice.confirmedSameDevice !== true || !Array.isArray(choice.updates) || choice.updates.some(k => typeof k !== 'string') || new Set(choice.updates).size !== choice.updates.length))) fail('Invalid explicit import choice');
+    }
   }
   // A bounded CAS retry handles concurrent imports and ordinary app saves.
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -187,7 +237,12 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
     if (saved) {
       if (!await verifiedReceipt(saved, v)) fail('Report ID already exists with different content; keep this file for review');
       const entity = current.payload.workspaces[workspace].entities?.[saved.device_id];
+      if (v.report.identityStatus !== 'stable') {
+        if (entity?.type !== 'computer') fail('Imported computer was deleted; restore it explicitly before archiving this report');
+        return {safe:!preview, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
+      }
       if (entity?.type === 'computer') {
+        if (entity._svkManualLink) return {safe:!preview, disposition:'Already imported', deviceId:saved.device_id, importedAt:saved.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
         if (preview) {
           const candidate = structuredClone(current.payload);
           const candidateWorkspace = candidate.workspaces[workspace];
@@ -213,19 +268,61 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
         return {safe:true, disposition:'Repaired import', deviceId:readback.device_id, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
       }
     }
+    if (v.report.identityStatus !== 'stable') {
+      const candidates = unconfirmedCandidates(current.payload, workspace, v);
+      if (candidates.length > 500) fail('Too many Computers to review; narrow this workspace before importing');
+      const suggestions = candidates.filter(c => c.match);
+      const review = {revision:current.updated_at, candidates:candidates.map(({proposed, ...c}) => c), suggestedDeviceIds:suggestions.map(c => c.deviceId)};
+      if (preview) return {safe:false, disposition:'Choose new or existing computer', review, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
+      if (!choice) fail('Choose Create new computer or select an existing Computer before importing');
+      if (choice.revision !== current.updated_at) fail('Computer changed since review; preview again before importing');
+      const candidate = choice.action === 'link' && candidates.find(c => c.deviceId === choice.deviceId);
+      if (choice.action === 'link' && !candidate) fail('Computer changed since review; preview again before importing');
+      if (candidate?.proposed && choice.updates.some(k => !candidate.fields.some(f => f.key === k))) fail('Computer changed since review; preview again before importing');
+      // An explicit, confirmed link may append an unconfirmed observation to a
+      // registered Computer; the registered identity itself is never replaced.
+      const next = structuredClone(current.payload), w = next.workspaces[workspace];
+      migrateKnownItWindowsSchema(w.entityTypes.computer, v.report);
+      const deviceId = candidate?.deviceId || `device_${crypto.randomUUID()}`;
+      if (candidate) {
+        for (const key of choice.updates) w.entities[deviceId][key] = candidate.proposed[key];
+      } else {
+        w.entities[deviceId] = createImportedComputer({id:deviceId, entityType:w.entityTypes.computer, entities:w.entities, report:v.report});
+      }
+      if (next.currentWorkspaceId === workspace) { next.entities = {...w.entities}; next.entityTypes = {...w.entityTypes}; }
+      if (new TextEncoder().encode(JSON.stringify(next)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
+      const inserted = await sql`WITH saved AS (
+        UPDATE app_data SET payload = ${JSON.stringify(next)}::jsonb, updated_at = clock_timestamp()
+        WHERE user_id = ${owner} AND updated_at = ${current.updated_at}::timestamptz RETURNING user_id
+      ) INSERT INTO inventory_import_reports
+        (owner_user_id, workspace_id, report_id, content_digest, hardware_identity, serial_key, uuid_key, collected_key, device_id, report)
+        SELECT user_id, ${workspace}, ${v.reportId}, ${v.digest}, ${v.report.hardwareIdentity}, ${v.serialKey}, ${v.uuidKey}, ${v.collectedKey}, ${deviceId}, ${JSON.stringify(v.report)}::jsonb
+        FROM saved RETURNING report_id`;
+      if (!inserted.length) fail('Computer changed since review; preview again before importing');
+      const readback = await receipt(sql, owner, workspace, v.reportId);
+      if (!await verifiedReceipt(readback, v) || readback.device_id !== deviceId) fail('Save could not be verified; retry this file before archiving');
+      return {safe:true, disposition:candidate ? 'Reviewed import' : 'New', deviceId, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
+    }
     const history = await sql`SELECT DISTINCT ON (device_id) device_id, hardware_identity, report
       FROM inventory_import_reports WHERE owner_user_id = ${owner} AND workspace_id = ${workspace}
+      AND hardware_identity IS NOT NULL
       AND (hardware_identity = ${v.report.hardwareIdentity} OR serial_key = ${v.serialKey} OR uuid_key = ${v.uuidKey})
       ORDER BY device_id, (collected_key = ${v.collectedKey}) DESC, collected_key DESC LIMIT 101`;
     if (history.length > 100) fail('Too many identity matches; review required');
-    const review = manualReview(current.payload, workspace, v, history);
+    const unconfirmedHistory = await sql`SELECT DISTINCT device_id FROM inventory_import_reports
+      WHERE owner_user_id = ${owner} AND workspace_id = ${workspace} AND hardware_identity IS NULL
+      AND serial_key = ${v.serialKey} LIMIT 101`;
+    if (unconfirmedHistory.length > 100) fail('Too many unconfirmed serial matches; review required');
+    const review = manualReview(current.payload, workspace, v, history, unconfirmedHistory);
     if (review && !saved) {
-      if (preview) return {safe:false, disposition:'Review existing computer', review:{deviceId:review.deviceId, name:review.name, fields:review.fields, revision:current.updated_at}, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
+      if (preview) return {safe:false, disposition:'Review existing computer', review:{deviceId:review.deviceId, name:review.name, match:review.match, fields:review.fields, revision:current.updated_at}, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context};
       if (!choice) fail('Review the existing computer and choose which values to update before importing');
       if (choice.deviceId !== review.deviceId || choice.revision !== current.updated_at || choice.updates.some(k => !review.fields.some(f => f.key === k))) fail('Computer changed since review; preview again before importing');
+      if (review.match !== 'serial/UUID' && !choice.confirmedSameDevice) fail('Confirm this unverified candidate is the same computer before importing');
       const next = structuredClone(current.payload), w = next.workspaces[workspace];
       migrateKnownItWindowsSchema(w.entityTypes.computer, v.report);
       for (const key of choice.updates) w.entities[review.deviceId][key] = review.proposed[key];
+
       w.entities[review.deviceId]._svkManualLink = true;
       if (next.currentWorkspaceId === workspace) { next.entities = {...w.entities}; next.entityTypes = {...w.entityTypes}; }
       if (new TextEncoder().encode(JSON.stringify(next)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
@@ -242,6 +339,7 @@ export async function importSvkFile(sql, owner, workspace, file, preview) {
       return {safe:true, disposition:'Reviewed import', deviceId:review.deviceId, importedAt:readback.imported_at, reportId:v.reportId, digest:v.digest};
     }
     if (choice && !saved) fail('Review target no longer matches; preview again');
+    if (unconfirmedHistory.length && (history.length !== 1 || unconfirmedHistory.some(h => h.device_id !== history[0].device_id))) fail('Earlier UUID-less reports share this serial; review the existing computer before importing');
     const plan = planSvkImport(current.payload, workspace, v, history);
     if (preview) return {safe:false, disposition:plan.disposition, hostname:v.report.hostname, collectedAt:v.report.collectedAt, context:v.report.collection.context, identity:v.report.hardwareIdentity};
     if (new TextEncoder().encode(JSON.stringify(plan.payload)).length > 4 * 1024 * 1024) fail('Account inventory is too large to import safely');
