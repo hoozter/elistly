@@ -1,34 +1,37 @@
-# Local retention and shared-device security
+# Account cache, saving, and local privacy
 
-## Scope
+## Current account-data contract
 
-Source-only hardening of the managed-service trust roadmap, using isolated browser profiles and synthetic accounts. No production or family data, authentication provider, RLS design, deployed reporter protocol, schedule, device identity or credential format was changed. Nothing was deployed.
+The server owns saved account data. A browser keeps an account-scoped, disposable **server-confirmed read cache** so a returning account can load quickly without waiting for Neon. Background refresh checks the latest server copy. The cache is not an upload source, an offline write queue, or proof that an unacknowledged edit was saved.
 
-## Storage and retention
+`elistlyData:confirmed:v1:<account-id>` contains a `server-ack-v1` envelope with the confirmed payload and its revision. Only verified GET responses or acknowledged conditional saves update this envelope. Unmarked historical payloads are never promoted into confirmed cache data. Cached startup remains read-only until the account read succeeds. A failed refresh visibly reports the failure rather than inventing an empty account or saving defaults.
 
-- Account inventories, revision timestamps and pending writes live in account-keyed localStorage. The browser bearer token also lives in localStorage. These are not encrypted against other users of the same browser profile or same-origin JavaScript.
-- Pending writes have no automatic expiry. Malformed, empty-string or unreadable outboxes are now retained with a visible failure instead of deleted and treated as an empty queue. New saves cannot silently overwrite an unreadable outbox.
-- Acknowledging a queued write now removes only that acknowledged entry from the current queue. Edits appended while the request is in flight survive.
-- Existing sign-out preparation refuses cleanup when any account has pending or unverifiable writes. Successful cleanup removes durable inventory, revision and outbox keys and clears the storage layer's in-memory cache. Cleanup errors remain visible rather than claiming success.
-- Inventory requests started before successful local sign-out cleanup cannot repopulate the cache afterward, including the background refresh path.
-- When another tab removes an account cache, revision or outbox key during sign-out, open tabs clear their in-memory inventory. Per-page generation guards prevent stale successful or failed save, retry, queued-save and import completions from restoring cleared account state or issuing a queued remote write.
-- The service worker now intercepts only explicitly listed public shell URLs. API, auth, runtime configuration and arbitrary query-bearing URLs bypass Cache Storage. Activation removes prior Elistly shell caches, not unrelated applications' caches. Local script dependencies are explicitly included to preserve the offline shell.
+Each account PUT supplies exactly one server precondition: `If-Match` with its current strong ETag, or `If-None-Match: *` for a new account without a row. The database condition atomically rejects a stale revision. The client checks the returned payload, revision, and ETag before treating the write as saved. Normal edits serialize in memory so rapid edits cannot silently overwrite one another or be falsely acknowledged. That sequencing is not persistent and is not an offline synchronization engine.
 
-## Authentication lifecycle
+An older or out-of-order GET cannot replace an open draft or undo a newer save acknowledgment. An editor may veto refresh adoption; a veto does not advance its write revision. Account-generation checks prevent delayed reads, saves, imports, and startup callbacks from restoring account data after sign-out or a session change.
 
-Local-token removal errors, remote HTTP failures and network failures are returned to the sign-out UI. Failed remote revocation still attempts local-token removal. The UI warns that sign-out is incomplete and the browser must not yet be shared.
+## Failed saves and conflicts
 
-Late session-refresh results cannot restore a removed or replaced token. Concurrent refreshes cannot clear a newer token. Sign-out waits for already-started login, signup and verification response headers before revoking the provider cookie; superseded flows cannot restore a token or report successful authentication. New authentication mutations are refused during revocation. Existing Neon endpoints, request bodies and credentials mode are unchanged.
+A failed save leaves the latest unsaved draft in memory and shows **Download unsaved draft**, **Retry save**, and **Discard draft and load latest**. Reading the account while that draft is open returns the draft, not the older persisted cache. Subsequent edits remain unsaved until the user retries; there is no automatic upload after a failure.
 
-## Remaining risks and exact decisions
+Retry first reads the account. If its payload exactly matches the draft, the client verifies the previously lost acknowledgment without another PUT. If the revision is unchanged, retry uses that revision for a guarded save. If another browser has saved a newer revision, retry refuses to rebase or overwrite it: the user can export their draft and explicitly discard it to load the latest account copy. Discarding a draft requires an in-app decision dialog.
 
-1. This is not a shared-browser isolation guarantee. Open tabs clear storage-layer inventory after cross-tab sign-out, but may retain already-rendered inventory; generation guards are per-page, not cross-tab locks. A future cross-tab lifecycle design must preserve unsynced edits while deciding whether to lock or hide other tabs. Until then, use separate OS/browser profiles for different people and close all application tabs before handing over a device.
-2. Failed revocation can leave a provider cookie active. Failed sign-out leaves the current page visible with a warning; it is not a privacy lock screen. Stalled authentication requests can keep sign-out pending. Provider cookie rotation, expiry and revocation need an approved synthetic-account hosted test, not assertions derived from local mocks. No disposable hosted provider environment was available during the 2026-09-18 acceptance run, so real-provider cookie/session cleanup was not exercised.
-3. Persistent-login duration, optional session-only storage, auto-lock and cross-tab UX need an explicit product policy. Local inventory and tokens remain readable to same-origin script and anyone with browser-profile access. Encryption with keys in that same profile is not represented as a solution.
-4. No age-based purge or quota eviction was introduced. Automatic deletion of unsynced work is not authorized. Recovery/export UX for unreadable queues and limits or expiry for synced inventories require a preservation-first policy. Existing local-only inventory and explicit reset/account-deletion flows were not redesigned.
-5. The shell restriction does not control ordinary HTTP caching or provider cookies. Existing installed workers retire old caches only when the replacement activates. Deployment is a separate approval and acceptance boundary.
-6. Provider migration/MFA and trusted database identity/RLS remain separate roadmap decisions. Neither was implemented here.
+**Unsaved drafts are not durable.** Reloading or closing the browser may lose them; the browser's unload warning is a best-effort safeguard, not a recovery guarantee. Download a draft before leaving if saving cannot be completed. Only server-confirmed account data is available from the persistent cache after a reload.
+
+## Historical browser copies
+
+Older `elistlyData:outbox:<account-id>` and `elistlyData:recovery:<account-id>` records are preserved for export, never replayed or used to hydrate current account data. They do not produce a recurring current-save-failure banner. An account can read and save current data independently of these older records.
+
+The account menu provides an older-copy download when applicable. Sign-out presents **Download a copy**, **Cancel**, and **Discard local copies and sign out** if an open draft or historical unsaved copy exists. Cancel leaves the copies and login intact. Downloading does not imply consent to delete. Discard consent binds to the exact historical keys and values displayed; a copy changed in another tab requires a new decision instead of being silently deleted.
+
+After consent, normal sign-out clears browser account caches, old account-revision keys, historical records, and account memory. Local-only inventories are separate and are not account sign-out targets. If local cleanup fails, sign-out reports the failure instead of claiming browser privacy was achieved. If remote session sign-out fails after cleanup, account content is still removed from the current view and the remote failure is reported truthfully. A token change or removal in another tab invalidates account memory and rendered content there as well.
+
+## Security boundary
+
+Account IDs and revisions in browser storage are identifiers, not secrets. Inventory payloads and historical exports can contain sensitive data. Browser storage and downloaded JSON copies are not encrypted by Elistly; protect the browser profile and exported files. Sharing an operating-system login or browser profile does not isolate inventories from someone with access to that profile. Normal sign-out reduces residual account data, but is not secure erasure of disk, browser backups, or already-downloaded exports.
+
+Application cache data cannot authorize server access. Worker authentication and account scoping determine which row a request may read or update. Conditional writes prevent silent stale overwrites; they are not a substitute for authorization. Explicit imports additionally bind their preview to the account, access token, and expected revision, refusing a changed account or an unsaved draft.
 
 ## Verification
 
-Regressions cover unreadable outbox preservation, enqueue-during-save, stale foreground/background inventory completion after cleanup, cross-tab sign-out invalidation and stale save/import completion guards, sign-out failure reporting, token-refresh ordering, pending login/signup/verification ordering, cancellation reporting, private-response cache exclusion and offline shell dependencies. The 2026-09-18 acceptance run passed the repository lifecycle suite with isolated browser fixtures and synthetic fetch responses. It did not exercise a hosted provider cookie or session. Focused regressions, the complete root test suite and worker tests passed; final command outcomes are recorded in the task handoff.
+The current checks exercise confirmed cached startup, failed refresh, conditional writes, rapid edits, delayed GET/save races, failed-draft reopen/retry, lost acknowledgments, stale concurrent browsers/tabs, import, historical export/consent, account switching, failed cleanup, delayed callbacks after sign-out, responsive decision dialogs, and warm/cold onboarding. Browser integration tests use isolated Chrome contexts and the real Worker with PGlite where database behavior matters. Synthetic failure injection is identified in the tests and does not replace a live release check.

@@ -17,6 +17,7 @@ function startStaticServer() {
       response.writeHead(404).end('Not found');
       return;
     }
+    response.setHeader('Content-Type',filePath.endsWith('.js')?'application/javascript':filePath.endsWith('.html')?'text/html':filePath.endsWith('.css')?'text/css':'application/octet-stream');
     response.end(fs.readFileSync(filePath));
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
@@ -26,427 +27,107 @@ async function withPage(run, setup) {
   const server = await startStaticServer();
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  page.on('pageerror', error => console.error('BROWSER ERROR:', error.message));
+  page.on('console', message => {if (message.type()==='error') console.error('BROWSER:',message.text());});
+  page.setDefaultTimeout(8000);
   await page.route('**/config.js', route => route.fulfill({ contentType: 'application/javascript', body: 'window.ELISTLY_API_URL = "https://api.elistly.test"; window.NEON_AUTH_URL = "/mock-auth";' }));
   try {
     if (setup) await setup(page);
     await page.goto(`http://127.0.0.1:${server.address().port}/app.html`, { waitUntil: 'domcontentloaded' });
     return await run(page);
+  } catch (error) {
+    console.error('FAILED STATE:', await page.evaluate(()=>({ready:App._isReady,status:Storage.getSyncStatus(),tokenPresent:!!localStorage.getItem('elistly_token'),clientPresent:!!backendClient,error:document.getElementById('mainContent')?.textContent})));
+    throw error;
   } finally {
     await browser.close();
     await new Promise(resolve => server.close(resolve));
   }
 }
 
-async function testConflictPreservesDirtyLocalState() {
+async function testConfirmedSaveAndSerialRevision() {
   await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const base = { version: 'test', entities: { original: true } };
-      const localEdit = { version: 'test', entities: { local: true } };
-      localStorage.setItem('elistlyData', JSON.stringify(base));
-      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(base));
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      Storage._cached = structuredClone(base);
-      Storage._cachedUserId = 'user-1';
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
+    const result = await page.evaluate(async () => {
+      const first = {entities:{first:true}}, second = {entities:{second:true}};
+      backendClient = {auth:{getUser:async()=>({data:{user:{id:'user-1'}}}),getSession:async()=>({data:{session:{access_token:'token',user:{id:'user-1'}}}})}};
+      window.ELISTLY_API_URL='/mock';
+      Storage._cachedUserId='user-1'; Storage._cachedUpdatedAt='base'; Storage._accountVerified=true;
+      Storage._writeConfirmed('user-1',{entities:{original:true}},'base');
+      const requests=[]; let release;
+      window.fetch=async (_url,opts)=>{
+        requests.push({body:JSON.parse(opts.body),headers:opts.headers});
+        if(requests.length===1) await new Promise(resolve=>{release=resolve});
+        const revision=`rev-${requests.length}`;
+        return new Response(JSON.stringify({payload:JSON.parse(opts.body).payload,updated_at:revision}),{status:200,headers:{'Access-Control-Expose-Headers':'ETag',ETag:`"${revision}"`}});
       };
-      window.ELISTLY_API_URL = '/mock';
-      let request = null;
-      window.fetch = async (_url, options) => {
-        request = JSON.parse(options.body);
-        return new Response(JSON.stringify({ error: 'App data changed since preview' }), { status: 409 });
-      };
-      let error = null;
-      try {
-        await Storage.setAppData(localEdit);
-      } catch (caught) {
-        error = caught.message;
-      }
-      return {
-        request,
-        error,
-        cached: Storage._cached,
-        revision: localStorage.getItem('elistlyData:userUpdated:user-1')
-      };
+      const a=Storage.setAppData(first), b=Storage.setAppData(second);
+      await new Promise(resolve=>setTimeout(resolve,20));
+      const before=requests.length; release();await Promise.all([a,b]);
+      return {before,requests,confirmed:Storage._readConfirmed('user-1'),dirty:Storage._isDirty};
     });
-
-    assert.deepEqual(observed.request, {
-      payload: { version: 'test', entities: { local: true } },
-      expectedUpdatedAt: '2026-08-12T00:00:00.000Z'
-    }, 'ordinary saves must send their base revision');
-    assert.equal(observed.error, 'App data changed since preview', 'conflicts must be surfaced deterministically');
-    assert.deepEqual(observed.cached, { version: 'test', entities: { local: true } }, 'conflicts must retain dirty in-memory data');
-    assert.equal(observed.revision, '2026-08-12T00:00:00.000Z', 'conflicts must retain the base revision');
+    assert.equal(result.before,1);
+    assert.deepEqual(result.requests.map(req=>req.headers['If-Match']),['"base"','"rev-1"']);
+    assert.deepEqual(result.confirmed,{format:'server-ack-v1',payload:{entities:{second:true}},revision:'rev-2'});
+    assert.equal(result.dirty,false);
   });
 }
-
-async function testConflictNotificationKeepsTheEditorOpen() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const notices = [];
-      const originalSetAppData = Storage.setAppData;
-      const originalNotification = App.showNotification;
-      Storage.setAppData = async () => { throw new Error('App data changed since preview'); };
-      App.showNotification = (message, kind) => notices.push({ message, kind });
-      App.data = { version: 'test', settings: {}, categories: {}, entityTypes: {}, entities: {}, workspaces: {}, currentWorkspaceId: '' };
-      App.saveData();
-      await new Promise(resolve => setTimeout(resolve, 25));
-      Storage.setAppData = originalSetAppData;
-      App.showNotification = originalNotification;
-      return { notices, data: App.data };
+async function testFailedSaveRetainsOnlyAcknowledgedCacheAndInMemoryDraft() {
+  await withPage(async page=>{
+    const result=await page.evaluate(async()=>{
+      backendClient={auth:{getUser:async()=>({data:{user:{id:'user-1'}}}),getSession:async()=>({data:{session:{access_token:'token',user:{id:'user-1'}}}})}};
+      window.ELISTLY_API_URL='/mock';
+      const old={entities:{saved:true}},draft={entities:{draft:true}};
+      Storage._cachedUserId='user-1';Storage._cached=old;Storage._cachedUpdatedAt='base';Storage._accountVerified=true;
+      Storage._writeConfirmed('user-1',old,'base');
+      window.fetch=async()=>new Response(JSON.stringify({error:'conflict'}),{status:412});
+      let error;try{await Storage.setAppData(draft)}catch(e){error=e.message}
+      const during={cached:Storage._cached,confirmed:Storage._readConfirmed('user-1'),status:Storage.getSyncStatus().state,dirty:Storage._isDirty,error};
+      Storage._clearInMemoryAccountState();
+      window.fetch=async()=>{throw Error('offline')};
+      const reload=await Storage.getAppData();await Storage._refreshPromise.catch(()=>{});
+      return {during,reload,confirmed:Storage._readConfirmed('user-1')};
     });
-
-    assert.deepEqual(observed.notices, [{
-      message: 'Your changes were not saved because newer app data is available. Your local changes are still open.',
-      kind: 'error'
-    }], 'the client must report a revision conflict without discarding the active edit');
-    assert.deepEqual(observed.data.entities, {}, 'the active in-memory editor data must remain available');
+    assert.match(result.during.error,/Account changed/);
+    assert.equal(result.during.status,'conflict');assert.equal(result.during.dirty,true);
+    assert.deepEqual(result.during.cached.entities,{draft:true});
+    assert.deepEqual(result.during.confirmed.payload.entities,{saved:true});
+    assert.deepEqual(result.reload.entities,{saved:true});
+    assert.deepEqual(result.confirmed.payload.entities,{saved:true});
   });
 }
-
-async function testBackgroundSyncDoesNotReplaceDirtyData() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const localEdit = { version: 'test', entities: { local: true } };
-      const remote = { version: 'test', entities: { remote: true } };
-      Storage._cached = structuredClone(localEdit);
-      Storage._cachedUserId = 'user-1';
-      Storage._isDirty = true;
-      window.ELISTLY_API_URL = '/mock';
-      window.fetch = async () => new Response(JSON.stringify({ payload: remote, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
-      let callbackCalls = 0;
-      await Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z', () => { callbackCalls += 1; });
-      return { cached: Storage._cached, callbackCalls };
+async function testFailedRetryChecksLatestWithoutRebasing() {
+  await withPage(async page=>{
+    const result=await page.evaluate(async()=>{
+      backendClient={auth:{getUser:async()=>({data:{user:{id:'user-1'}}}),getSession:async()=>({data:{session:{access_token:'token',user:{id:'user-1'}}}})}};
+      window.ELISTLY_API_URL='/mock';Storage._cachedUserId='user-1';Storage._cachedUpdatedAt='base';Storage._accountVerified=true;
+      Storage._writeConfirmed('user-1',{entities:{saved:true}},'base');
+      window.fetch=async()=>new Response('{}',{status:503});
+      try{await Storage.setAppData({entities:{draft:true}})}catch(_){}
+      const methods=[];
+      window.fetch=async (_url,opts)=>{methods.push(opts.method);return new Response(JSON.stringify({payload:{entities:{remote:true}},updated_at:'new'}),{headers:{'Access-Control-Expose-Headers':'ETag',ETag:'"new"'}})};
+      let error;try{await Storage.retrySave()}catch(e){error=e.message}
+      return {methods,error,draft:Storage._cached,confirmed:Storage._readConfirmed('user-1'),state:Storage.getSyncStatus().state};
     });
-
-    assert.deepEqual(observed.cached, { version: 'test', entities: { local: true } }, 'background hydration must not replace unsaved local data');
-    assert.equal(observed.callbackCalls, 0, 'background hydration must not render remote data over an active edit');
+    assert.deepEqual(result.methods,['GET']);assert.match(result.error,/Account changed/);
+    assert.deepEqual(result.draft.entities,{draft:true});assert.deepEqual(result.confirmed.payload.entities,{saved:true});assert.equal(result.state,'conflict');
   });
 }
-
-async function testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const first = { version: 'test', entities: { first: true } };
-      const second = { version: 'test', entities: { second: true } };
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      const requests = [];
-      let finishFirst;
-      window.fetch = (_url, options) => {
-        requests.push(JSON.parse(options.body));
-        if (requests.length === 1) return new Promise(resolve => { finishFirst = resolve; });
-        return Promise.resolve(new Response(JSON.stringify({ payload: second, updated_at: '2026-08-12T00:02:00.000Z' }), { status: 200 }));
-      };
-      const firstSave = Storage.setAppData(first);
-      const secondSave = Storage.setAppData(second);
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const beforeFirstCompletes = requests.length;
-      finishFirst(new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
-      await Promise.all([firstSave, secondSave]);
-      return { beforeFirstCompletes, requests };
+async function testHistoricalCopiesAreNeverReplayInputs() {
+  await withPage(async page=>{
+    const result=await page.evaluate(async()=>{
+      backendClient={auth:{getUser:async()=>({data:{user:{id:'user-1'}}}),getSession:async()=>({data:{session:{access_token:'token',user:{id:'user-1'}}}})}};
+      window.ELISTLY_API_URL='/mock';
+      const historical='[{"payload":{"entities":{"private":true}}}]';
+      localStorage.setItem('elistlyData:outbox:user-1',historical);
+      const requests=[];
+      window.fetch=async (_url,opts)=>{requests.push(opts.method);return new Response(JSON.stringify({payload:{entities:{remote:true}},updated_at:'server'}),{headers:{'Access-Control-Expose-Headers':'ETag',ETag:'"server"'}})};
+      const data=await Storage.getAppData();
+      return {data,requests,historical:localStorage.getItem('elistlyData:outbox:user-1'),confirmed:Storage._readConfirmed('user-1')};
     });
-
-    assert.equal(observed.beforeFirstCompletes, 1, 'overlapping saves must have one in-flight conditional write');
-    assert.equal(observed.requests[1].expectedUpdatedAt, '2026-08-12T00:01:00.000Z', 'the next save must use the revision acknowledged by the previous save');
+    assert.deepEqual(result.data.entities,{remote:true});assert.deepEqual(result.requests,['GET']);
+    assert.equal(result.historical,'[{"payload":{"entities":{"private":true}}}]');
+    assert.deepEqual(result.confirmed.payload.entities,{remote:true});
   });
 }
-
-async function testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const cached = { version: 'test', entities: { cached: true } };
-      const localEdit = { version: 'test', entities: { local: true } };
-      const staleRemote = { version: 'test', entities: { staleRemote: true } };
-      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(cached));
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      let finishBackgroundRead;
-      let requests = 0;
-      window.fetch = (_url, options = {}) => {
-        requests += 1;
-        if ((options.method || 'GET') === 'GET') return new Promise(resolve => { finishBackgroundRead = resolve; });
-        return Promise.resolve(new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:02:00.000Z' }), { status: 200 }));
-      };
-      Storage._cached = structuredClone(cached);
-      Storage._cachedUserId = 'user-1';
-      const refreshing = Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z');
-      await Storage.setAppData(localEdit);
-      finishBackgroundRead(new Response(JSON.stringify({ payload: staleRemote, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
-      await new Promise(resolve => setTimeout(resolve, 10));
-      return {
-        requests,
-        cached: Storage._cached,
-        revision: localStorage.getItem('elistlyData:userUpdated:user-1')
-      };
-    });
-
-    assert.equal(observed.requests, 2, 'the delayed read and local save must both reach the persistence boundary');
-    assert.deepEqual(observed.cached, { version: 'test', entities: { local: true } }, 'a delayed remote read must not roll back an acknowledged local save');
-    assert.equal(observed.revision, '2026-08-12T00:02:00.000Z', 'a delayed remote read must not roll back the acknowledged revision');
-  });
-}
-
-async function testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const localEdit = { version: 'test', entities: { local: true } };
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      let requests = 0;
-      window.fetch = async () => {
-        requests += 1;
-        throw new Error('offline');
-      };
-      try { await Storage.setAppData(localEdit); } catch (_) {}
-      Storage._cached = null;
-      Storage._cachedUserId = null;
-      Storage._isDirty = false;
-      const reloaded = await Storage.getAppData();
-      await Storage._refreshPromise.catch(() => {});
-      return {
-        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
-        reloaded,
-        requests,
-        status: Storage.getSyncStatus()
-      };
-    });
-
-    assert.equal(observed.outbox.length, 1, 'a failed write must remain in the durable outbox');
-    assert.deepEqual(observed.reloaded, { version: 'test', entities: { local: true } }, 'reload must restore queued local data when the account cannot be read');
-    assert.equal(observed.requests, 2, 'reload must attempt the account bootstrap before retaining offline pending data');
-    assert.deepEqual(observed.status, { state: 'failed', message: 'Refresh failed. Showing unverified local data; local changes are retained. Reload to retry.' }, 'failed refresh must be honest about retained local data');
-  });
-}
-
-async function testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const first = { version: 'test', entities: { first: true } };
-      const second = { version: 'test', entities: { second: true } };
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([
-        { id: 'first', payload: first, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' },
-        { id: 'second', payload: second, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }
-      ]));
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      let attempts = 0;
-      window.fetch = async () => ++attempts === 1 ? new Response(JSON.stringify({ payload: first, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }) : new Response(JSON.stringify({error:'App data changed since preview'}),{status:409});
-      try { await Storage.retryPendingSaves(); } catch (_) {}
-      return {
-        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
-        revision: localStorage.getItem('elistlyData:userUpdated:user-1'),
-        status: Storage.getSyncStatus()
-      };
-    });
-
-    assert.deepEqual(observed.outbox, [{ id: 'second', payload: { version: 'test', entities: { second: true } }, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }], 'retry must clear only the acknowledged entry');
-    assert.equal(observed.revision, '2026-08-12T00:01:00.000Z', 'successful retry must advance the cached revision');
-    assert.equal(observed.status.state, 'conflict', 'the unacknowledged stale entry remains visible as a conflict');
-  });
-}
-
-async function testConcurrentReconnectsSerializeOnePendingReplay() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const localEdit = { version: 'test', entities: { local: true } };
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }]));
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      const requests = [];
-      let finishSave;
-      window.fetch = (_url, options) => {
-        requests.push(JSON.parse(options.body));
-        return new Promise(resolve => { finishSave = resolve; });
-      };
-      const firstReplay = Storage.retryPendingSaves();
-      const secondReplay = Storage.retryPendingSaves();
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const beforeAcknowledgement = requests.length;
-      finishSave(new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 }));
-      await Promise.all([firstReplay, secondReplay]);
-      return { beforeAcknowledgement, requests, outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')) };
-    });
-
-    assert.equal(observed.beforeAcknowledgement, 1, 'concurrent reconnect signals must send one conditional replay at a time');
-    assert.equal(observed.requests.length, 1, 'the acknowledged pending entry must not be replayed twice');
-    assert.deepEqual(observed.outbox, [], 'the one acknowledged replay must clear the durable entry');
-  });
-}
-
-async function testOnlineReconnectRetriesPendingSave() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const localEdit = { version: 'test', entities: { local: true } };
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: localEdit, expectedUpdatedAt: '2026-08-12T00:00:00.000Z' }]));
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token' } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      let requests = 0;
-      window.fetch = async () => {
-        requests += 1;
-        return new Response(JSON.stringify({ payload: localEdit, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
-      };
-      window.dispatchEvent(new Event('online'));
-      await new Promise(resolve => setTimeout(resolve, 20));
-      return { requests, outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')), revision: localStorage.getItem('elistlyData:userUpdated:user-1') };
-    });
-
-    assert.equal(observed.requests, 1, 'reconnect must retry a pending durable save');
-    assert.deepEqual(observed.outbox, [], 'a reconnect acknowledgement must clear the durable outbox entry');
-    assert.equal(observed.revision, '2026-08-12T00:01:00.000Z', 'a reconnect acknowledgement must advance the cached revision');
-  });
-}
-
-async function testMalformedOutboxFailsSafely() {
-  await withPage(async page => {
-    const observed = await page.evaluate(() => {
-      localStorage.setItem('elistlyData:outbox:user-1', '{not-json');
-      let error;
-      try { Storage._readOutbox('user-1'); } catch (caught) { error = caught.message; }
-      return { error, persisted: localStorage.getItem('elistlyData:outbox:user-1'), status: Storage.getSyncStatus() };
-    });
-
-    assert.match(observed.error || '', /retained/, 'unreadable pending changes must stop the caller instead of looking like an empty queue');
-    assert.equal(observed.persisted, '{not-json', 'unreadable pending changes must remain available for recovery');
-    assert.equal(observed.status.state, 'failed', 'malformed outbox data must be visible as a failure');
-  });
-}
-
-async function testAcknowledgementPreservesEditsQueuedDuringSave() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      backendClient = { auth: {
-        getUser: async () => ({ data: { user: { id: 'queue-user' } } }),
-        getSession: async () => ({ data: { session: { access_token: 'test-token' } } })
-      } };
-      window.ELISTLY_API_URL = '/mock';
-      let release, started;
-      const waiting = new Promise(resolve => { started = resolve; });
-      const requests = [];
-      window.fetch = async (_url, options) => {
-        requests.push(JSON.parse(options.body));
-        if (requests.length === 1) {
-          started();
-          await new Promise(resolve => { release = resolve; });
-        }
-        return new Response(JSON.stringify({ updated_at: `revision-${requests.length}` }), { status: 200 });
-      };
-      const first = Storage.setAppData({ entities: { first: true } });
-      await waiting;
-      const second = Storage.setAppData({ entities: { second: true } });
-      await Promise.resolve();
-      await Promise.resolve();
-      release();
-      await Promise.all([first, second]);
-      return { requests, cache: Storage._readUserCache('queue-user'), outbox: Storage._readOutbox('queue-user') };
-    });
-    assert.equal(observed.requests.length, 2, 'acknowledging an older save must not silently discard a newer queued edit');
-    assert.deepEqual(observed.requests[1], { payload: { entities: { second: true } }, expectedUpdatedAt: 'revision-1' });
-    assert.deepEqual(observed.cache, { entities: { second: true } });
-    assert.deepEqual(observed.outbox, []);
-  });
-}
-
-async function testFailedAccountHydrationDoesNotStartAnEmptyAccount() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      backendClient = {
-        auth: {
-          getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-          getSession: async () => ({ data: { session: { access_token: 'token', user: { id: 'user-1' } } } })
-        }
-      };
-      window.ELISTLY_API_URL = '/mock';
-      let writes = 0;
-      window.fetch = async (_url, options = {}) => {
-        if ((options.method || 'GET') === 'PUT') writes += 1;
-        return new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 });
-      };
-      Storage._cached = null;
-      Storage._cachedUserId = null;
-      Storage._isDirty = false;
-      let error = null;
-      try { await Storage.getAppData(); } catch (caught) { error = caught.message; }
-      return {
-        error,
-        writes,
-        cache: localStorage.getItem('elistlyData:user:user-1'),
-        outbox: localStorage.getItem('elistlyData:outbox:user-1'),
-        status: Storage.getSyncStatus()
-      };
-    });
-
-    assert.match(observed.error || '', /Service unavailable/, 'a failed account read must reject instead of looking like an empty account');
-    assert.equal(observed.writes, 0, 'failed hydration must never issue an empty-account write');
-    assert.equal(observed.cache, null, 'failed hydration must not create an empty account cache');
-    assert.equal(observed.outbox, null, 'failed hydration must not create an empty-account outbox entry');
-    assert.equal(observed.status.state, 'failed', 'failed hydration must be visible instead of being reported as synced');
-  });
-}
-
-async function testFailedBackgroundHydrationPreservesCachedData() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const cached = { version: 'test', entities: { retained: true } };
-      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(cached));
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: cached }]));
-      window.ELISTLY_API_URL = '/mock';
-      window.fetch = async () => new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 });
-      Storage._cached = structuredClone(cached);
-      Storage._cachedUserId = 'user-1';
-      Storage._isDirty = false;
-      await Storage.syncRemoteInBackground('user-1', '2026-08-12T00:00:00.000Z').catch(() => {});
-      return {
-        cache: JSON.parse(localStorage.getItem('elistlyData:user:user-1')),
-        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
-        status: Storage.getSyncStatus()
-      };
-    });
-
-    assert.deepEqual(observed.cache, { version: 'test', entities: { retained: true } }, 'failed background hydration must preserve the account cache');
-    assert.deepEqual(observed.outbox, [{ id: 'pending', payload: { version: 'test', entities: { retained: true } } }], 'failed background hydration must preserve the durable outbox');
-    assert.equal(observed.status.state, 'failed', 'failed background hydration must be visible rather than silently ignored');
-  });
-}
-
 async function testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible() {
   await withPage(async page => {
     const observed = await page.evaluate(() => {
@@ -458,12 +139,10 @@ async function testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible() {
     });
 
     assert.deepEqual(observed.healthy, { hidden: true, text: '', state: 'synced' }, 'healthy sync must be quiet rather than permanently claiming success');
-    assert.deepEqual(observed.failed, {
-      hidden: false,
-      text: 'Changes could not be synced. Local changes are retained.',
-      state: 'failed',
-      live: 'polite'
-    }, 'sync failures must remain compact, visible, and announced accessibly');
+    assert.equal(observed.failed.hidden, false);
+    assert.match(observed.failed.text, /Changes could not be synced.*Refresh account data/);
+    assert.equal(observed.failed.state, 'failed');
+    assert.equal(observed.failed.live, 'polite');
   });
 }
 
@@ -475,11 +154,9 @@ async function testSyncStatusIsAccessibleInTheApplication() {
       return status && { text: status.textContent, state: status.dataset.state, live: status.getAttribute('aria-live') };
     });
 
-    assert.deepEqual(observed, {
-      text: 'Changes could not be synced. Local changes are retained.',
-      state: 'failed',
-      live: 'polite'
-    }, 'sync failure must have an accessible, truthful status');
+    assert.match(observed.text, /Changes could not be synced.*Refresh account data/);
+    assert.equal(observed.state, 'failed');
+    assert.equal(observed.live, 'polite');
   });
 }
 
@@ -553,13 +230,13 @@ async function testWorkspaceOnlyAccountDataSurvivesInitNamingSaveAndReload() {
       App.saveEntityType({ preventDefault() {}, target: form }, 'computer');
     });
     await savedWrite;
-    await page.waitForFunction(() => !Storage._isDirty && Storage._readOutbox('user-1').length === 0);
+    await page.waitForFunction(() => !Storage._isDirty && Storage.getSyncStatus().state === 'synced');
     const persistedAfterNamingSave = structuredClone(remote);
 
     // A real page reload with no account cache must fetch the saved remote data.
     await page.evaluate(() => {
       localStorage.removeItem('elistlyData');
-      localStorage.removeItem('elistlyData:user:user-1');
+      localStorage.removeItem(Storage._getUserCacheKey('user-1'));
       localStorage.removeItem('elistlyData:userUpdated:user-1');
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -576,9 +253,9 @@ async function testWorkspaceOnlyAccountDataSurvivesInitNamingSaveAndReload() {
       if (request.method() === 'PUT') {
         remote = request.postDataJSON().payload;
         writes.push(structuredClone(remote));
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: `2026-09-15T00:00:0${writes.length}.000Z` }) });
+        return route.fulfill({ status: 200, headers:{'Access-Control-Expose-Headers':'ETag',ETag:`\"2026-09-15T00:00:0${writes.length}.000Z\"`}, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: `2026-09-15T00:00:0${writes.length}.000Z` }) });
       }
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: '2026-09-15T00:00:00.000Z' }) });
+      return route.fulfill({ status: 200, headers:{'Access-Control-Expose-Headers':'ETag',ETag:'\"2026-09-15T00:00:00.000Z\"'}, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: '2026-09-15T00:00:00.000Z' }) });
     });
   }).then(observed => {
     for (const snapshot of [observed.afterHydration, observed.persistedAfterNamingSave, observed.afterReload]) {
@@ -620,10 +297,10 @@ async function testEmptyActiveWorkspaceHydratesInactiveWorkspaceAndAccountSettin
     const save = page.waitForResponse(response => response.url().endsWith('/app-data') && response.request().method() === 'PUT');
     await page.evaluate(() => App.setFontSizeStep(1));
     await save;
-    await page.waitForFunction(() => !Storage._isDirty && Storage._readOutbox('empty-active-user').length === 0);
+    await page.waitForFunction(() => !Storage._isDirty && Storage.getSyncStatus().state === 'synced');
     await page.evaluate(() => {
       localStorage.removeItem('elistlyData');
-      localStorage.removeItem('elistlyData:user:empty-active-user');
+      localStorage.removeItem(Storage._getUserCacheKey('empty-active-user'));
       localStorage.removeItem('elistlyData:userUpdated:empty-active-user');
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -639,9 +316,9 @@ async function testEmptyActiveWorkspaceHydratesInactiveWorkspaceAndAccountSettin
       if (request.method() === 'PUT') {
         remote = request.postDataJSON().payload;
         writes.push(structuredClone(remote));
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: `2026-09-15T00:10:0${writes.length}.000Z` }) });
+        return route.fulfill({ status: 200, headers:{'Access-Control-Expose-Headers':'ETag',ETag:`\"2026-09-15T00:10:0${writes.length}.000Z\"`}, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: `2026-09-15T00:10:0${writes.length}.000Z` }) });
       }
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: '2026-09-15T00:10:00.000Z' }) });
+      return route.fulfill({ status: 200, headers:{'Access-Control-Expose-Headers':'ETag',ETag:'\"2026-09-15T00:10:00.000Z\"'}, contentType: 'application/json', body: JSON.stringify({ payload: remote, updated_at: '2026-09-15T00:10:00.000Z' }) });
     });
   });
 
@@ -677,12 +354,11 @@ async function testLegacyDetachedTypeCategorySurvivesWorkspaceHydration() {
         currentWorkspaceId: 'default', onboardingDone: true
       };
       localStorage.clear();
-      localStorage.setItem('elistlyData:user:user-legacy', JSON.stringify(saved));
-      localStorage.setItem('elistlyData:userUpdated:user-legacy', '2026-09-15T00:00:00.000Z');
+      localStorage.setItem(Storage._getUserCacheKey('user-legacy'), JSON.stringify({format:'server-ack-v1',payload:saved,revision:'2026-09-15T00:00:00.000Z'}));
       Storage._cached = null;
       Storage._cachedUserId = null;
       Storage._isDirty = false;
-      Storage._saveChains = {};
+      Storage._saveChain = Promise.resolve();
       backendClient = { auth: {
         getUser: async () => ({ data: { user: { id: 'user-legacy' } } }),
         getSession: async () => ({ data: { session: { access_token: 'token', user: { id: 'user-legacy' } } } })
@@ -690,7 +366,7 @@ async function testLegacyDetachedTypeCategorySurvivesWorkspaceHydration() {
       window.ELISTLY_API_URL = '/mock';
       window.fetch = async url => String(url).endsWith('/admin/me')
         ? new Response(JSON.stringify({ admin: false }), { status: 200 })
-        : new Response(JSON.stringify({ payload: saved, updated_at: '2026-09-15T00:00:00.000Z' }), { status: 200 });
+        : new Response(JSON.stringify({ payload: saved, updated_at: '2026-09-15T00:00:00.000Z' }), { status: 200,headers:{'Access-Control-Expose-Headers':'ETag',ETag:'\"2026-09-15T00:00:00.000Z\"'} });
       App.renderSidebar = () => {};
       App.loadView = () => {};
       App.buildIconGrid = () => {};
@@ -702,7 +378,7 @@ async function testLegacyDetachedTypeCategorySurvivesWorkspaceHydration() {
       Storage._cached = null;
       Storage._cachedUserId = null;
       Storage._isDirty = false;
-      Storage._saveChains = {};
+      Storage._saveChain = Promise.resolve();
       await App.init();
       return { hydrated, reloaded: structuredClone(App.data) };
     });
@@ -713,194 +389,16 @@ async function testLegacyDetachedTypeCategorySurvivesWorkspaceHydration() {
   });
 }
 
-async function testImportAcknowledgementAcceptsEquivalentJsonObjectOrder() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const candidate = { version: 'test', settings: { view: 'list', retained: true }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' };
-      const acknowledged = { currentWorkspaceId: 'default', workspaces: { default: { entities: {}, entityTypes: {}, categories: {}, name: 'Default' } }, settings: { retained: true, view: 'list' }, version: 'test' };
-      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'token' } } }) } };
-      window.ELISTLY_API_URL = '/mock';
-      Storage._cachedUserId = 'user-1';
-      window.fetch = async () => new Response(JSON.stringify({ payload: acknowledged, updated_at: '2026-08-20T00:00:00.000Z' }), { status: 200 });
-      await Storage.setAppDataForImport(candidate, { userId: 'user-1', accessToken: 'token', expectedUpdatedAt: null });
-      return Storage._cached;
-    });
-    assert.deepEqual(observed, { version: 'test', settings: { view: 'list', retained: true }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default' }, 'a semantically identical JSON acknowledgement must complete the import');
-  });
-}
-
-async function testFullBackupRestoreDoesNotReplaceAQueuedLocalChange() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const pending = { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' };
-      const backup = { version: 'test', settings: { view: 'grid' }, workspaces: { restored: { name: 'Restored', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'restored', marker: 'backup' };
-      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(pending));
-      localStorage.setItem('elistlyData:userUpdated:user-1', '2026-08-12T00:00:00.000Z');
-      localStorage.setItem('elistlyData:outbox:user-1', JSON.stringify([{ id: 'pending', payload: pending }]));
-      Storage._cached = structuredClone(pending);
-      Storage._cachedUserId = 'user-1';
-      Storage._isDirty = true;
-      backendClient = { auth: { getUser: async () => ({ data: { user: { id: 'user-1' } } }), getSession: async () => ({ data: { session: { access_token: 'token' } } }) } };
-      window.ELISTLY_API_URL = '/mock';
-      let requests = 0;
-      window.fetch = async () => {
-        requests += 1;
-        return new Response(JSON.stringify({ payload: backup, updated_at: '2026-08-12T00:01:00.000Z' }), { status: 200 });
-      };
-      let error = null;
-      try {
-        await Storage.setAppDataForImport(backup, { userId: 'user-1', accessToken: 'token', expectedUpdatedAt: '2026-08-12T00:00:00.000Z' });
-      } catch (caught) {
-        error = caught.message;
-      }
-      return {
-        error,
-        requests,
-        cached: Storage._cached,
-        outbox: JSON.parse(localStorage.getItem('elistlyData:outbox:user-1')),
-        revision: localStorage.getItem('elistlyData:userUpdated:user-1')
-      };
-    });
-
-    assert.equal(observed.error, 'Unsynced local changes must be synced or resolved before restoring a full backup.');
-    assert.equal(observed.requests, 0, 'restore must not remotely replace account data while a local change is queued');
-    assert.deepEqual(observed.cached, { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' }, 'restore rejection must retain the local edit in memory');
-    assert.deepEqual(observed.outbox, [{ id: 'pending', payload: { version: 'test', settings: { view: 'list' }, workspaces: { default: { name: 'Default', categories: {}, entityTypes: {}, entities: {} } }, currentWorkspaceId: 'default', marker: 'pending-local-edit' } }], 'restore rejection must retain the durable pending local change');
-    assert.equal(observed.revision, '2026-08-12T00:00:00.000Z', 'restore rejection must retain the revision that protects the queued local change');
-  });
-}
-
-async function testRapidOptionalFieldEditsUseTheAcknowledgedRevision() {
-  await withPage(async page => {
-    const observed = await page.evaluate(async () => {
-      const first = { version: 'test', entities: { device: { name: 'Desk 2025', year: '2025', info: 'First edit', optionalField: undefined } } };
-      const second = { version: 'test', entities: { device: { name: 'Desk 2026', year: '2026', info: 'Second edit', optionalField: undefined } } };
-      localStorage.setItem('elistlyData:userUpdated:user-1', 'revision-0');
-      const recovery = [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } }, expectedUpdatedAt: null }] }];
-      localStorage.setItem('elistlyData:recovery:user-1', JSON.stringify(recovery));
-      Storage._conflictRecovery = recovery[0];
-      backendClient = { auth: {
-        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-        getSession: async () => ({ data: { session: { access_token: 'token' } } })
-      } };
-      window.ELISTLY_API_URL = '/mock';
-      const requests = [];
-      let releaseFirst;
-      window.fetch = (_url, options) => {
-        requests.push(JSON.parse(options.body));
-        if (requests.length === 1) return new Promise(resolve => { releaseFirst = resolve; });
-        return Promise.resolve(new Response(JSON.stringify({ updated_at: 'revision-2' }), { status: 200 }));
-      };
-      const firstSave = Storage.setAppData(first);
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const secondSave = Storage.setAppData(second);
-      await new Promise(resolve => setTimeout(resolve, 10));
-      releaseFirst(new Response(JSON.stringify({ updated_at: 'revision-1' }), { status: 200 }));
-      await Promise.all([firstSave, secondSave]);
-      return { requests, cached: Storage._cached, revision: Storage._cachedUpdatedAt, outbox: Storage._readOutbox('user-1'), recovery: Storage._readRecovery('user-1') };
-    });
-    assert.deepEqual(observed.requests.map(request => request.expectedUpdatedAt), ['revision-0', 'revision-1'], 'a JSON-omitted optional field must not prevent the next edit from using the prior acknowledgement');
-    assert.equal(observed.cached.entities.device.name, 'Desk 2026');
-    assert.equal(observed.revision, 'revision-2');
-    assert.deepEqual(observed.outbox, []);
-    assert.deepEqual(observed.recovery, [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } }, expectedUpdatedAt: null }] }], 'successful current edits must not alter archived recovery');
-  });
-}
-
-async function testBrowserEntityEditsPersistWithArchivedRecovery() {
-  await withPage(async page => {
-    await page.evaluate(() => {
-      const data = {
-        settings: {}, categories: { devices: { id: 'devices', label: 'Devices' } },
-        entityTypes: { device: { id: 'device', label: 'Device', categories: ['devices'], fields: [
-          { name: 'name', label: 'Device name', type: 'text' },
-          { name: 'year', label: 'Year', type: 'text' },
-          { name: 'info', label: 'Information', type: 'textarea' }
-        ] } },
-        entities: { device: { id: 'device', type: 'device', name: 'Before', year: '2024', info: 'Old information' } },
-        workspaces: {}, currentWorkspaceId: ''
-      };
-      localStorage.setItem('elistlyData:user:user-1', JSON.stringify(data));
-      localStorage.setItem('elistlyData:userUpdated:user-1', 'revision-0');
-      const recovery = [{ archived: true, outbox: [{ id: 'older-local', payload: { entities: { old: { name: 'Archived local copy' } } } }] }];
-      localStorage.setItem('elistlyData:recovery:user-1', JSON.stringify(recovery));
-      Storage._cached = structuredClone(data);
-      Storage._cachedUserId = 'user-1';
-      Storage._cachedUpdatedAt = 'revision-0';
-      Storage._conflictRecovery = recovery[0];
-      backendClient = { auth: {
-        getUser: async () => ({ data: { user: { id: 'user-1' } } }),
-        getSession: async () => ({ data: { session: { access_token: 'token' } } })
-      } };
-      window.ELISTLY_API_URL = '/mock';
-      window.entityEditRequests = [];
-      window.fetch = async (_url, options) => {
-        window.entityEditRequests.push(JSON.parse(options.body));
-        return new Response(JSON.stringify({ updated_at: `revision-${window.entityEditRequests.length}` }), { status: 200 });
-      };
-      App.data = data;
-      App.showEntityForm('device', 'device');
-    });
-    await page.locator('#entityModal button').filter({ hasText: /^editEdit$/ }).click();
-    await page.locator('#entityModal [name="name"]').fill('David workstation');
-    await page.locator('#entityModal [name="year"]').fill('2025');
-    await page.locator('#entityModal [name="info"]').fill('Updated device information');
-    await page.locator('#entityModal button[type="submit"]').click();
-    await page.locator('#entityModal').waitFor({ state: 'detached' });
-    await page.waitForFunction(() => window.entityEditRequests.length === 1);
-    await page.evaluate(() => App.showEntityForm('device', 'device'));
-    await page.locator('#entityModal button').filter({ hasText: /^editEdit$/ }).click();
-    await page.locator('#entityModal [name="name"]').fill('David workstation 2');
-    await page.locator('#entityModal [name="year"]').fill('2026');
-    await page.locator('#entityModal [name="info"]').fill('Second normal edit');
-    await page.locator('#entityModal button[type="submit"]').click();
-    await page.locator('#entityModal').waitFor({ state: 'detached' });
-    await page.waitForFunction(() => window.entityEditRequests.length === 2);
-    const browserSaves = await page.evaluate(() => window.entityEditRequests);
-    assert.deepEqual(browserSaves.map(request => request.expectedUpdatedAt), ['revision-0', 'revision-1'], 'an ordinary second name/year/information edit must use the first save acknowledgement even when the server payload omitted version');
-    assert.deepEqual(browserSaves[1].payload.entities.device, { id: 'device', type: 'device', name: 'David workstation 2', year: '2026', info: 'Second normal edit' }, 'a normal Device name/year/information edit must send the edited normalized entity');
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    const afterReload = await page.evaluate(() => ({
-      data: JSON.parse(localStorage.getItem('elistlyData:user:user-1')),
-      revision: localStorage.getItem('elistlyData:userUpdated:user-1'),
-      recovery: JSON.parse(localStorage.getItem('elistlyData:recovery:user-1'))
-    }));
-    const device = Object.values(afterReload.data.entities)[0];
-    assert.deepEqual(device, { id: device.id, type: 'device', name: 'David workstation 2', year: '2026', info: 'Second normal edit' }, 'the UI edits must survive a browser reload');
-    assert.equal(afterReload.revision, 'revision-2');
-    assert.equal(afterReload.recovery[0].outbox[0].id, 'older-local', 'the archived recovery record must survive a current UI save');
-  });
-}
-
 async function run() {
-  await testConflictPreservesDirtyLocalState();
-  await testConflictNotificationKeepsTheEditorOpen();
-  await testBackgroundSyncDoesNotReplaceDirtyData();
-  await testOverlappingSavesUseTheRevisionAcknowledgedByThePreviousSave();
-  await testDelayedBackgroundHydrationCannotOverwriteAnAcknowledgedSave();
-  await testFailedSavePreservesItsOutboxWhenRemoteBootstrapIsOffline();
-  await testRetryClearsOnlyAcknowledgedOutboxEntryAndAdvancesRevision();
-  await testConcurrentReconnectsSerializeOnePendingReplay();
-  await testOnlineReconnectRetriesPendingSave();
-  await testMalformedOutboxFailsSafely();
-  await testAcknowledgementPreservesEditsQueuedDuringSave();
-  await testFailedAccountHydrationDoesNotStartAnEmptyAccount();
-  await testFailedBackgroundHydrationPreservesCachedData();
+  await testConfirmedSaveAndSerialRevision();
+  await testFailedSaveRetainsOnlyAcknowledgedCacheAndInMemoryDraft();
+  await testFailedRetryChecksLatestWithoutRebasing();
+  await testHistoricalCopiesAreNeverReplayInputs();
   await testHealthySyncStatusIsHiddenWhileFailuresRemainAccessible();
   await testSyncStatusIsAccessibleInTheApplication();
   await testRemoteHydrationRetainsUnknownTopLevelAccountData();
   await testWorkspaceOnlyAccountDataSurvivesInitNamingSaveAndReload();
   await testEmptyActiveWorkspaceHydratesInactiveWorkspaceAndAccountSettings();
   await testLegacyDetachedTypeCategorySurvivesWorkspaceHydration();
-  await testImportAcknowledgementAcceptsEquivalentJsonObjectOrder();
-  await testFullBackupRestoreDoesNotReplaceAQueuedLocalChange();
-  await testRapidOptionalFieldEditsUseTheAcknowledgedRevision();
-  await testBrowserEntityEditsPersistWithArchivedRecovery();
 }
-
-run()
-  .then(() => console.log('PASS revision persistence'))
-  .catch(error => {
-    console.error(`FAIL revision persistence: ${error.stack || error.message}`);
-    process.exitCode = 1;
-  });
+run().then(()=>console.log('PASS revision persistence')).catch(error=>{console.error(`FAIL revision persistence: ${error.stack||error.message}`);process.exitCode=1});

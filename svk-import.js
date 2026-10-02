@@ -24,7 +24,7 @@
   }
   async function open(app, request, storage, session) {
     if (!session?.user?.id || !session.access_token) return app.showNotification('Sign in before importing inventory.', 'error');
-    if (storage._isDirty || storage._readOutbox(session.user.id).length) return app.showNotification('Sync or resolve pending edits before importing inventory.', 'error');
+    if (storage._isDirty) return app.showNotification('Sync or resolve pending edits before importing inventory.', 'error');
     const {modal, body, actions} = dialog(app, 'svkImportModal', 'Import inventory from folder');
     const generation = storage._accountGeneration;
     const active = () => modal.isConnected && modal.classList.contains('show') && storage._accountGeneration === generation;
@@ -134,7 +134,7 @@
       const workspaceId = workspace.value;
       results = [];
       try {
-        if (storage._isDirty || storage._readOutbox(session.user.id).length) throw new Error('Sync or resolve pending edits before importing.');
+        if (storage._isDirty) throw new Error('Sync or resolve pending edits before importing.');
         for (let i=0; i<selected.length; i++) {
           const item = selected[i];
           if (!active()) return;
@@ -169,21 +169,21 @@
         if (!preview) {
           // Read the authoritative account revision after import. Never overwrite
           // edits made while the request was running or a replacement account.
-          const refreshRevision = storage._readUserUpdatedAt(session.user.id);
+          const refreshRevision = storage._cachedUpdatedAt;
           const response = await api('/app-data');
           if (!active()) return;
           if (!response.ok || !response.data?.payload || !response.data.updated_at) throw new Error('Saved inventory could not be refreshed; reload before editing.');
-          await storage._withStorageLock(() => {
+          {
             if (!active()) return;
-            if (storage._isDirty || storage._readOutbox(session.user.id).length || storage._readUserUpdatedAt(session.user.id) !== refreshRevision) throw new Error('Inventory changed during refresh. Import receipts are preserved; reload before editing.');
+            if (storage._isDirty || storage._cachedUpdatedAt !== refreshRevision) throw new Error('Inventory changed during refresh. Import receipts are preserved; reload before editing.');
             // The visible inventory and its save revision must advance together.
             if (app.applyRemoteSyncData(response.data.payload) === false) throw new Error('Close the device editor and reload before editing imported inventory.');
             storage._cached = structuredClone(response.data.payload);
             storage._cachedUserId = session.user.id;
             storage._cachedUpdatedAt = response.data.updated_at;
             storage._accountVerified = true;
-            storage._writeUserCache(session.user.id, response.data.payload, response.data.updated_at);
-          });
+            storage._writeConfirmed(session.user.id, response.data.payload, response.data.updated_at);
+          }
         }
       } catch (error) {
         if (active()) {

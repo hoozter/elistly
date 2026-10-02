@@ -51,8 +51,7 @@ async function run() {
     });
     const warm = await page.evaluate(async () => {
       const cached = { entities: { cached: {} } };
-      localStorage.setItem('elistlyData:user:account-a', JSON.stringify(cached));
-      localStorage.setItem('elistlyData:userUpdated:account-a', 'old');
+      localStorage.setItem(Storage._getUserCacheKey('account-a'), JSON.stringify({format:'server-ack-v1', payload:cached, revision:'old'}));
       const started = performance.now();
       const data = await Storage.getAppData({ onRemoteSync: data => { window.adopted = data; return true; } });
       return { data, state: Storage.getSyncStatus().state, readStarted: !!window.finishRefresh, elapsed: performance.now()-started };
@@ -62,7 +61,7 @@ async function run() {
     assert.deepEqual(warm.data.entities, { cached: {} });
     assert.ok(warm.elapsed < 250, 'cached return must not wait for the held remote response');
     const fresh = await page.evaluate(async () => {
-      finishRefresh(new Response(JSON.stringify({ payload: { entities: { fresh: {} } }, updated_at: 'new' }), {status:200}));
+      finishRefresh(new Response(JSON.stringify({ payload: { entities: { fresh: {} } }, updated_at: 'new' }), {status:200,headers:{ETag:'"new"'}}));
       await Storage._refreshPromise;
       return { adopted, state: Storage.getSyncStatus().state, revision: Storage._cachedUpdatedAt };
     });
@@ -72,7 +71,7 @@ async function run() {
     // A callback veto represents an open editor: neither its base nor cache may advance.
     const veto = await page.evaluate(async () => {
       await Storage.getAppData({onRemoteSync:()=>false});
-      finishRefresh(new Response(JSON.stringify({payload:{entities:{elsewhere:{}}},updated_at:'newer'}),{status:200}));
+      finishRefresh(new Response(JSON.stringify({payload:{entities:{elsewhere:{}}},updated_at:'newer'}),{status:200,headers:{ETag:'"newer"'}}));
       await Storage._refreshPromise;
       return {revision:Storage._cachedUpdatedAt,cached:Storage._cached,status:Storage.getSyncStatus().state};
     });
@@ -90,7 +89,7 @@ async function run() {
     const same = await page.evaluate(async()=>{
       let redraws=0;
       await Storage.getAppData({onRemoteSync:()=>{redraws++;}});
-      finishRefresh(new Response(JSON.stringify({payload:{entities:{fresh:{}}},updated_at:'new'}),{status:200}));
+      finishRefresh(new Response(JSON.stringify({payload:{entities:{fresh:{}}},updated_at:'new'}),{status:200,headers:{ETag:'"new"'}}));
       await Storage._refreshPromise;
       return {redraws,state:Storage.getSyncStatus().state};
     });
@@ -100,16 +99,18 @@ async function run() {
     await configureAccount(page, () => {
       window.sent = [];
       window.fetch = async (_url, options) => {
-        const body=JSON.parse(options.body); sent.push(body);
-        return new Response(JSON.stringify({payload:body.payload,updated_at:sent.length===1?'restored-revision':'edited-revision'}),{status:200});
+        const body=JSON.parse(options.body); sent.push({payload:body.payload,headers:options.headers});
+        const revision=sent.length===1?'restored-revision':'edited-revision';
+        return new Response(JSON.stringify({payload:body.payload,updated_at:revision}),{status:200,headers:{ETag:`"${revision}"`}});
       };
     });
     const sent=await page.evaluate(async()=>{
-      Storage._cachedUserId='account-a';Storage._cachedUpdatedAt='old-revision';
+      Storage._cachedUserId='account-a';Storage._cachedUpdatedAt='old-revision';Storage._accountVerified=true;
       await Storage.setAppDataForImport({entities:{restored:{}}},{userId:'account-a',accessToken:'test-token',expectedUpdatedAt:'old-revision'});
       await Storage.setAppData({entities:{edited:{}}});return window.sent;
     });
-    assert.equal(sent[1].expectedUpdatedAt,'restored-revision','ordinary edit after restore uses the acknowledged restore revision');
+    assert.equal(sent[1].payload.entities.edited !== undefined,true,'ordinary edit after restore sends the edited payload');
+    assert.equal(sent[1].headers['If-Match'],'"restored-revision"','ordinary edit uses the acknowledged restore revision');
   });
   console.log('PASS cached startup: immediate cached data, request started, visible refresh, safe adoption, failed/stale states, no unchanged redraw');
 }

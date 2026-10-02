@@ -90,7 +90,7 @@ try {
 
   await page.locator('#entityForm').evaluate(form=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
   await page.locator('#entityModal').waitFor({state:'detached'});
-  await page.waitForFunction(()=>!ElistlyStorage._isDirty && !ElistlyStorage._readOutbox('browser-owner').length);
+  await page.waitForFunction(()=>!ElistlyStorage._isDirty && ElistlyStorage.getSyncStatus().state==='synced');
   const saved=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id];
   assert.equal(saved.notes,notes,'post-import edits must reach the account without reloading first');
 
@@ -139,7 +139,7 @@ try {
   const current=(await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload;
   current.workspaces.main.entities[device.id].name='Intervening saved name';current.entities={...current.workspaces.main.entities};
   const saved=(await db.query('UPDATE app_data SET payload=$1::jsonb,updated_at=clock_timestamp() WHERE user_id=$2 RETURNING payload,updated_at::text AS updated_at',[JSON.stringify(current),'browser-owner'])).rows[0];
-  await page.evaluate(row=>{ElistlyStorage._writeUserCache('browser-owner',row.payload,row.updated_at);ElistlyStorage._cached=row.payload;App.applyRemoteSyncData(row.payload);},saved);
+  await page.evaluate(row=>{ElistlyStorage._writeConfirmed('browser-owner',row.payload,row.updated_at);ElistlyStorage._cachedUpdatedAt=row.updated_at;ElistlyStorage._cached=row.payload;App.applyRemoteSyncData(row.payload);},saved);
  };
  await modal.getByRole('button',{name:'Import all eligible reports',exact:true}).click();
  await modal.getByText('Inventory changed during refresh.',{exact:false}).waitFor();
@@ -157,7 +157,7 @@ try {
  const deletionSaved=page.waitForResponse(r=>r.url().endsWith('/api/app-data')&&r.request().method()==='PUT');
  await page.locator('#confirmDeleteModal').getByRole('button',{name:'Delete',exact:true}).click();
  assert.equal((await deletionSaved).status(),200,'deletion must be acknowledged by the account');
- await page.waitForFunction(id=>!App.data.entities[id] && !ElistlyStorage._isDirty && !ElistlyStorage._readOutbox('browser-owner').length,device.id);
+ await page.waitForFunction(id=>!App.data.entities[id] && !ElistlyStorage._isDirty && ElistlyStorage.getSyncStatus().state==='synced',device.id);
  assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id],undefined);
  await page.evaluate(()=>App.showSvkInventoryImport());
  await page.waitForFunction(()=>!document.querySelector('#svkFiles').disabled);
@@ -232,7 +232,32 @@ try {
  await importButton.click();await modal.getByText('1 files confirmed durably saved.',{exact:false}).waitFor();
  assert.equal((await db.query('SELECT count(*) FROM inventory_import_reports WHERE report_id=$1',['90166e1a-3bed-4415-8642-397cf22f589d'])).rows[0].count,1);
  assert.ok(Object.values((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities).some(e=>e.hostname==='SVK-PF5D4W92'));
+ await page.waitForFunction(()=>ElistlyStorage._accountVerified && !ElistlyStorage._isDirty);
+ await page.evaluate(()=>App.closeModal('svkImportModal'));
+ // Exercise the visible retry path against the actual Worker/database after a failed PUT.
+ let abortSave=true;
+ await page.route('**/api/app-data',route=>{
+  if(abortSave && route.request().method()==='PUT') {abortSave=false;return route.abort();}
+  return route.fallback();
+ });
+ await page.evaluate(id=>{App.data.entities[id].notes='Retry from visible status';App.saveData();},device.id);
+ await page.waitForFunction(()=>ElistlyStorage.getSyncStatus().state==='failed' && ElistlyStorage._isDirty);
+ await page.locator('#syncStatus').getByRole('button',{name:'Retry save',exact:true}).click();
+ await page.waitForFunction(()=>ElistlyStorage.getSyncStatus().state==='synced' && !ElistlyStorage._isDirty);
+ assert.equal((await db.query('SELECT payload FROM app_data WHERE user_id=$1',['browser-owner'])).rows[0].payload.workspaces.main.entities[device.id].notes,'Retry from visible status');
+ // Sign-out offers export/discard consent; cancelling preserves both the copy and login.
+ const oldCopy=JSON.stringify([{payload:{entities:{old:{name:'Preserved draft'}}}}]);
+ await page.evaluate(value=>localStorage.setItem('elistlyData:recovery:browser-owner',value),oldCopy);
+ await page.evaluate(()=>App.handleSignOut());
+ const signout=page.locator('#syncSignOutModal');await signout.waitFor({state:'visible'});
+ const backupPromise=page.waitForEvent('download');await signout.getByRole('button',{name:'Download a copy',exact:true}).click();
+ const backup=await backupPromise;const backupData=JSON.parse(fs.readFileSync(await backup.path(),'utf8'));
+ assert.equal(backupData.historical[0].value,oldCopy);
+ await signout.getByRole('button',{name:'Cancel',exact:true}).click();
+ assert.equal(await page.evaluate(()=>localStorage.getItem('elistlyData:recovery:browser-owner')),oldCopy);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('elistly_token')),token);
+ assert.equal(dialogs,0);
  await page.evaluate(()=>{ElistlyStorage._clearInMemoryAccountState();App.clearAccountRuntime();});
  assert.equal(await page.locator('#svkImportModal').count(),0);
- console.log('PASS: real folder input and multi-file fallback, preview without writes, persisted import/reload/history, two filename lists, hostile text, downloadable receipt, lost response and confirmed retry');
+ console.log('PASS: real import/edits/receipts/retry, visible save retry against Worker + database, historical sign-out export/cancel, no native dialogs');
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));await db.close();fs.rmSync(dir,{recursive:true,force:true});}

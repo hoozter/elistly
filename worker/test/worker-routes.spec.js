@@ -19,14 +19,14 @@ function mockSql(calls = []) {
   };
 }
 
-async function fetchFrom(worker, path, { method = "GET", body, rawBody } = {}) {
+async function fetchFrom(worker, path, { method = "GET", body, rawBody, headers = {} } = {}) {
   const context = createExecutionContext();
   const requestBody = rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined;
   const response = await worker.fetch(
     new Request(`https://api.example.test${path}`, {
       method,
       body: requestBody,
-      headers: requestBody !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...(requestBody !== undefined ? { "Content-Type": "application/json" } : {}), ...headers },
     }),
     env,
     context,
@@ -36,6 +36,15 @@ async function fetchFrom(worker, path, { method = "GET", body, rawBody } = {}) {
 }
 
 describe("Elistly Worker route seams", () => {
+  it("exposes strong app-data ETags and requires HTTP conditional writes", async () => {
+    const calls = [];
+    const worker = createWorker({ createSql: () => mockSql(calls), authenticate: async () => user, checkAdmin: async () => false });
+    const read = await fetchFrom(worker, "/app-data");
+    expect(read.headers.get("ETag")).toBe('"2026-01-01"');
+    const missing = await fetchFrom(worker, "/app-data", { method: "PUT", body: { payload: {} } });
+    expect(missing.status).toBe(428);
+    expect(calls).toHaveLength(1);
+  });
   it("returns app-data revisions as lossless database text", async () => {
     const calls = [];
     const worker = createWorker({
@@ -182,8 +191,8 @@ describe("Elistly Worker route seams", () => {
       body: { payload: { entities: {} } },
     });
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "App data revision required" });
+    expect(response.status).toBe(428);
+    expect(await response.json()).toEqual({ error: "One revision precondition required" });
     expect(calls).toEqual([]);
   });
 
@@ -197,13 +206,15 @@ describe("Elistly Worker route seams", () => {
 
     const response = await fetchFrom(worker, "/app-data", {
       method: "PUT",
-      body: { payload: { entities: { updated: true } }, expectedUpdatedAt: "2026-08-12T00:00:00.000Z" },
+      headers: { "If-Match": '"2026-08-12T00:00:00.000Z"' },
+      body: { payload: { entities: { updated: true } } },
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('ETag')).toBe('"2026-08-12T00:01:00.000Z"');
     expect(await response.json()).toEqual({ payload: { entities: { updated: true } }, updated_at: "2026-08-12T00:01:00.000Z" });
     expect(calls).toHaveLength(1);
-    expect(calls[0].query).toContain("app_data.updated_at =");
+    expect(calls[0].query).toContain("AND updated_at =");
     expect(calls[0].query).toContain("updated_at::text AS updated_at");
     expect(calls[0].values).toContain("2026-08-12T00:00:00.000Z");
   });
@@ -218,13 +229,14 @@ describe("Elistly Worker route seams", () => {
 
     const response = await fetchFrom(worker, "/app-data", {
       method: "PUT",
-      body: { payload: { entities: { stale: true } }, expectedUpdatedAt: "2026-08-12T00:00:00.000Z" },
+      headers: { "If-Match": '"2026-08-12T00:00:00.000Z"' },
+      body: { payload: { entities: { stale: true } } },
     });
 
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "App data changed since preview" });
+    expect(response.status).toBe(412);
+    expect(await response.json()).toEqual({ error: "App data changed; refresh before retrying" });
     expect(calls).toHaveLength(1);
-    expect(calls[0].query).toContain("app_data.updated_at =");
+    expect(calls[0].query).toContain("AND updated_at =");
   });
 
   it("validates profile writes before SQL mutation", async () => {
@@ -281,8 +293,8 @@ function encodeJwtPart(value) {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function signedJwt({ privateKey, kid, payload }) {
-  const header = encodeJwtPart({ alg: "EdDSA", kid, typ: "JWT" });
+async function signedJwt({ privateKey, kid, payload, header: jwtHeader = { alg: "EdDSA", kid, typ: "JWT" } }) {
+  const header = encodeJwtPart(jwtHeader);
   const body = encodeJwtPart(payload);
   const signature = await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(`${header}.${body}`));
   const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
@@ -330,6 +342,8 @@ describe("JWT authority boundary", () => {
         return response;
       };
       const rejectedPayloads = [
+        null,
+        [],
         { sub: "member-user", iss: "https://auth.example.test", aud: "elistly-api" },
         { sub: "member-user", exp: "not-a-timestamp", iss: "https://auth.example.test", aud: "elistly-api" },
         { sub: "member-user", exp: now + 60, iss: "https://wrong-issuer.example.test", aud: "elistly-api" },
@@ -343,6 +357,12 @@ describe("JWT authority boundary", () => {
         const token = await signedJwt({ privateKey: pair.privateKey, kid, payload });
         const response = await request("/app-data", token);
         expect(response.status).toBe(401);
+      }
+      for (const header of [null, []]) {
+        const token = await signedJwt({ privateKey: pair.privateKey, kid, header, payload: {
+          sub: "member-user", exp: now + 60, iss: "https://auth.example.test", aud: "elistly-api",
+        } });
+        expect((await request("/app-data", token)).status).toBe(401);
       }
 
       const unsigned = `${encodeJwtPart({ alg: "EdDSA", kid, typ: "JWT" })}.${encodeJwtPart({

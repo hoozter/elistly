@@ -247,7 +247,8 @@ function corsHeaders(origin) {
     headers["Access-Control-Allow-Origin"] = origin;
     headers["Access-Control-Allow-Credentials"] = "true";
     headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
-    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, If-Match, If-None-Match";
+    headers["Access-Control-Expose-Headers"] = "ETag";
     headers.Vary = "Origin";
   }
   return headers;
@@ -309,6 +310,8 @@ async function verifyNeonJwt(token, env) {
   } catch {
     return null;
   }
+  if (!header || typeof header !== "object" || Array.isArray(header)
+    || !payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const now = Math.floor(Date.now() / 1000);
   const issuer = typeof env.NEON_AUTH_JWT_ISSUER === "string" ? env.NEON_AUTH_JWT_ISSUER.trim() : "";
   const audience = typeof env.NEON_AUTH_JWT_AUDIENCE === "string" ? env.NEON_AUTH_JWT_AUDIENCE.trim() : "";
@@ -804,7 +807,8 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
       if (path === "/app-data") {
         if (req.method === "GET") {
           const rows = await sql`SELECT payload, updated_at::text AS updated_at FROM app_data WHERE user_id = ${user.id}`;
-          return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
+          const row = normalizeAppDataRow(rows[0]);
+          return jsonResponse(row, 200, origin, row.updated_at ? { ETag: `"${row.updated_at}"` } : {});
         }
         if (req.method === "PUT") {
           const body = await readJsonBody(req);
@@ -812,24 +816,29 @@ export function createWorker({ createSql = neon, authenticate = getAuthenticated
             throw new RequestBodyError(400, "Payload object required");
           }
           const payload = body.payload;
-          if (!Object.hasOwn(body, "expectedUpdatedAt")) {
-            throw new RequestBodyError(400, "App data revision required");
-          }
-          const expectedUpdatedAt = body.expectedUpdatedAt;
-          if (expectedUpdatedAt !== null && (typeof expectedUpdatedAt !== "string" || Number.isNaN(Date.parse(expectedUpdatedAt)))) {
-            throw new RequestBodyError(400, "expectedUpdatedAt must be a timestamp or null");
-          }
+          const ifMatch = req.headers.get("If-Match");
+          const ifNoneMatch = req.headers.get("If-None-Match");
+          if ((ifMatch === null) === (ifNoneMatch === null)) return jsonResponse({ error: "One revision precondition required" }, 428, origin);
+          if (ifNoneMatch !== null && ifNoneMatch !== "*") return jsonResponse({ error: "If-None-Match must be *" }, 400, origin);
+          if (ifMatch !== null && (!/^"[^"\r\n]+"$/.test(ifMatch) || Number.isNaN(Date.parse(ifMatch.slice(1, -1))))) return jsonResponse({ error: "Strong app data ETag required" }, 400, origin);
+          const expectedUpdatedAt = ifMatch === null ? null : ifMatch.slice(1, -1);
           const rows = await sql`
-            INSERT INTO app_data (user_id, payload, updated_at)
-            VALUES (${user.id}, ${JSON.stringify(payload)}::jsonb, NOW())
-            ON CONFLICT (user_id) DO UPDATE
-              SET payload = EXCLUDED.payload,
-                  updated_at = EXCLUDED.updated_at
-              WHERE (${expectedUpdatedAt}::timestamptz IS NOT NULL AND app_data.updated_at = ${expectedUpdatedAt}::timestamptz)
-            RETURNING payload, updated_at::text AS updated_at
+            WITH updated AS (
+              UPDATE app_data SET payload = ${JSON.stringify(payload)}::jsonb, updated_at = clock_timestamp()
+              WHERE user_id = ${user.id} AND ${expectedUpdatedAt}::timestamptz IS NOT NULL
+                AND updated_at = ${expectedUpdatedAt}::timestamptz
+              RETURNING payload, updated_at::text AS updated_at
+            ), created AS (
+              INSERT INTO app_data (user_id, payload, updated_at)
+              SELECT ${user.id}, ${JSON.stringify(payload)}::jsonb, clock_timestamp()
+              WHERE ${expectedUpdatedAt}::timestamptz IS NULL
+              ON CONFLICT (user_id) DO NOTHING
+              RETURNING payload, updated_at::text AS updated_at
+            ) SELECT * FROM updated UNION ALL SELECT * FROM created
           `;
-          if (!rows[0]) return jsonResponse({ error: "App data changed since preview" }, 409, origin);
-          return jsonResponse(normalizeAppDataRow(rows[0]), 200, origin);
+          if (!rows[0]) return jsonResponse({ error: "App data changed; refresh before retrying" }, 412, origin);
+          const row = normalizeAppDataRow(rows[0]);
+          return jsonResponse(row, 200, origin, { ETag: `"${row.updated_at}"` });
         }
       }
 

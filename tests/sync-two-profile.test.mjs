@@ -48,41 +48,39 @@ try {
  await db.query("INSERT INTO app_data(user_id,payload,updated_at) VALUES ('owner',$1::jsonb,'2026-09-17T06:11:53.746204Z')",[JSON.stringify(data)]);
  await home.evaluate(()=>localStorage.setItem('elistlyData:outbox:owner',JSON.stringify([{id:'obsolete',payload:{entities:{obsolete:{name:'Old local'}}},expectedUpdatedAt:null,createdAt:'2026-09-15T00:00:00Z'}])));
  assert.deepEqual((await load(home)).entities,data.entities);
- const recovery=await home.evaluate(()=>Storage.getConflictRecovery());
- assert.equal(recovery.outbox[0].expectedUpdatedAt,null);
- assert.equal(recovery.outbox[0].createdAt,'2026-09-15T00:00:00Z');
+ const recovery=await home.evaluate(()=>Storage.getHistoricalCopies());
+ assert.equal(JSON.parse(recovery[0].value)[0].expectedUpdatedAt,null);
+ assert.equal(JSON.parse(recovery[0].value)[0].createdAt,'2026-09-15T00:00:00Z');
  assert.equal(writes,0,'startup must not overwrite remote');
  assert.equal(await save(home,'Home edit'),null);
  assert.equal((await load(work)).entities.record.name,'Home edit');
  assert.equal(await save(work,'Work edit'),null);
  assert.equal((await load(home)).entities.record.name,'Work edit');
- // Two independent browser profiles race on the same server revision.
  const results=await Promise.all([save(work,'Work concurrent'),save(home,'Home concurrent')]);
  assert.equal(results.filter(x=>x===null).length,1,'exactly one conditional write succeeds');
  const loser=results[0]===null?home:work;
  const winner=(await row()).payload;
+ assert.equal(await loser.evaluate(()=>Storage._isDirty),true);
+ assert.equal((await load(loser)).entities.record.name,results[0]===null?'Home concurrent':'Work concurrent','the losing draft remains visible');
+ await loser.evaluate(()=>Storage.discardDraftAndRefresh());
  assert.deepEqual((await load(loser)).entities,winner.entities);
- assert.ok(await loser.evaluate(()=>Storage.getConflictRecovery()));
- // Current pending state remains usable offline and synchronizes on retry.
+ await load(work);
  failedWrite=true;assert.ok(await save(work,'Offline edit'));assert.ok(await save(work,'Offline edit 2'));failedRead=true;
  assert.equal((await load(work)).entities.record.name,'Offline edit 2');
  failedRead=false;failedWrite=false;
- assert.equal((await load(work)).entities.record.name,'Offline edit 2');
- await work.evaluate(()=>Storage.retryPendingSaves());
+ await work.evaluate(()=>Storage.retrySave());
  assert.equal((await row()).payload.entities.record.name,'Offline edit 2');
- // A successful commit with a lost response is acknowledged by exact readback.
  lostWrite=true;assert.ok(await save(work,'Lost response'));
  const writesBeforeRead=writes;
+ await work.evaluate(()=>Storage.retrySave());
  assert.equal((await load(work)).entities.record.name,'Lost response');
- assert.equal(await work.evaluate(()=>Storage._readOutbox('owner').length),0);
- assert.equal(writes,writesBeforeRead,'readback must not replay a confirmed payload');
- // A second tab must not attach stale edits as children of the first tab's queue.
+ assert.equal(await work.evaluate(()=>Storage._isDirty),false);
+ assert.equal(writes,writesBeforeRead,'verified lost acknowledgment must not replay a saved payload');
  const sibling=await contexts[0].newPage();await sibling.goto(`http://127.0.0.1:${server.address().port}/sync-harness`);await load(sibling);
- await load(work);failedWrite=true;assert.ok(await save(work,'First tab pending'));
- assert.ok(await save(sibling,'Stale second tab'));
- failedWrite=false;
- try {await work.evaluate(()=>Storage.retryPendingSaves());}catch(_){}
- try {await sibling.evaluate(()=>Storage.retryPendingSaves());}catch(_){}
+ await load(work);failedWrite=true;assert.ok(await save(work,'First tab pending'));assert.ok(await save(sibling,'Stale second tab'));
+ failedWrite=false;await work.evaluate(()=>Storage.retrySave());
+ let siblingError;try{await sibling.evaluate(()=>Storage.retrySave())}catch(error){siblingError=error.message}
+ assert.match(siblingError,/Account changed/);
  assert.equal((await row()).payload.entities.record.name,'First tab pending','a stale tab cannot overwrite another tab by borrowing its acknowledgement');
  // Exercise the real app's cached first render while account GET and unrelated admin are held.
  const fixture=await work.evaluate(()=>{
@@ -96,13 +94,13 @@ try {
  cachedFixture.entities.one.name='Cached visible inventory';cachedFixture.workspaces.default.entities.one.name='Cached visible inventory';
  const uiContext=await browser.newContext();
  await uiContext.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
- await uiContext.addInitScript(({token,payload})=>{localStorage.setItem('elistly_token',token);localStorage.setItem('elistlyData:user:owner',JSON.stringify(payload));localStorage.setItem('elistlyData:userUpdated:owner','2026-09-01T00:00:00.000000Z');},{token:tokens.owner,payload:cachedFixture});
+ await uiContext.addInitScript(({token,payload})=>{localStorage.setItem('elistly_token',token);localStorage.setItem('elistlyData:confirmed:v1:owner',JSON.stringify({format:'server-ack-v1',payload,revision:'2026-09-01T00:00:00.000000Z'}));},{token:tokens.owner,payload:cachedFixture});
  let releaseRead,releaseAdmin;readGate=new Promise(r=>releaseRead=r);adminGate=new Promise(r=>releaseAdmin=r);
- const ui=await uiContext.newPage();await ui.goto(`http://127.0.0.1:${server.address().port}/app.html`,{waitUntil:'domcontentloaded'});
- await ui.waitForFunction(()=>App._isReady);
+ const ui=await uiContext.newPage();ui.setDefaultTimeout(8000);ui.on('pageerror',error=>console.error('UI ERROR:',error.message));await ui.goto(`http://127.0.0.1:${server.address().port}/app.html`,{waitUntil:'domcontentloaded'});
+ await ui.waitForFunction(()=>App._isReady).catch(async error=>{console.error('WARM STATE',await ui.evaluate(()=>({ready:App._isReady,status:Storage.getSyncStatus(),hasCache:!!Storage._cached,user:Storage._cachedUserId,view:App.currentView,content:document.getElementById('mainContent').textContent})));throw error;});
  const warmMs=await ui.evaluate(()=>performance.now());
  assert.match(await ui.locator('#mainContent').textContent(),/Cached visible inventory/);
- assert.match(await ui.locator('#syncStatus').textContent(),/Refreshing/);
+ assert.match(await ui.locator('#syncStatus').textContent(),/refreshing/i);
  assert.equal(await ui.locator('#mainContent').evaluate(el=>el.inert),true);
  const beforeRefreshWrites=writes;const refreshStart=Date.now();readGate=null;releaseRead();
  await ui.waitForFunction(()=>Storage._accountVerified===true);
@@ -111,49 +109,28 @@ try {
  assert.equal(writes,beforeRefreshWrites,'cache display must not save normalized stale data');
  const freshMs=Date.now()-refreshStart;adminGate=null;releaseAdmin();
  await ui.screenshot({path:path.join(root,'.hermes/sync-repair-warm.png')});
- // Recovery review must actually overlay the viewport, close, and reopen without changing either copy.
- await ui.evaluate(recovery=>{
-  localStorage.setItem(Storage.USER_RECOVERY_PREFIX+'owner',JSON.stringify([recovery]));
-  Storage._conflictRecovery=recovery;
-  App.renderSyncStatus();
- },recovery);
- const recoveryBefore=await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner'));
+ // Historical copies are quiet until sign-out; export/cancel works on desktop and mobile without changing account data.
+ const oldCopy=JSON.stringify([{payload:{entities:{historical:{name:'Preserved copy'}}}}]);
+ await ui.evaluate(value=>localStorage.setItem('elistlyData:recovery:owner',value),oldCopy);
  const accountBefore=await row();
- for (const viewport of [{width:1280,height:720},{width:390,height:844}]) {
-  await ui.setViewportSize(viewport);
-  await ui.getByRole('button',{name:'Review preserved local changes'}).click();
-  const dialog=ui.locator('#syncRecoveryModal');
-  assert.equal(await dialog.evaluate(el=>getComputedStyle(el).position),'fixed','recovery review must overlay the app, not render below its viewport');
-  await dialog.getByRole('button',{name:'Keep both copies'}).click({timeout:2000});
-  await dialog.waitFor({state:'detached'});
-  assert.equal(await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner')),recoveryBefore);
-  assert.deepEqual(await row(),accountBefore);
-  assert.equal(await ui.locator('#mainContent').evaluate(el=>el.inert),false);
+ for(const viewport of [{width:1280,height:720},{width:390,height:844}]) {
+  await ui.setViewportSize(viewport);await ui.evaluate(()=>App.handleSignOut());
+  const dialog=ui.locator('#syncSignOutModal');await dialog.waitFor({state:'visible'});
+  assert.equal(await dialog.evaluate(el=>getComputedStyle(el).position),'fixed','sign-out consent must overlay the viewport');
+  const downloadEvent=ui.waitForEvent('download');await dialog.getByRole('button',{name:'Download a copy',exact:true}).click();
+  const archive=JSON.parse(fs.readFileSync(await (await downloadEvent).path(),'utf8'));
+  assert.equal(archive.historical[0].value,oldCopy);
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  assert.equal(await ui.evaluate(()=>localStorage.getItem('elistlyData:recovery:owner')),oldCopy);
+  assert.deepEqual(await row(),accountBefore);assert.equal(await ui.locator('#mainContent').evaluate(el=>el.inert),false);
  }
- // Removing the recovery archive must clear the notice, but never delete account inventory.
- await ui.setViewportSize({width:1280,height:720});
- await ui.getByRole('button',{name:'Review preserved local changes'}).click();
- const backupEvent=ui.waitForEvent('download');
- await ui.getByRole('button',{name:'Download local backup',exact:true}).click();
- const backup=await backupEvent;
- const archive=JSON.parse(fs.readFileSync(await backup.path(),'utf8'));
- assert.deepEqual(archive.records,JSON.parse(recoveryBefore));
- await ui.getByRole('button',{name:'Download current account backup'}).waitFor({state:'visible'});
- await ui.waitForFunction(()=>!document.querySelector('#syncRecoveryModal button:nth-child(2)')?.disabled);
- const accountBackupEvent=ui.waitForEvent('download');
- await ui.getByRole('button',{name:'Download current account backup'}).click();
- const accountBackup=JSON.parse(fs.readFileSync(await (await accountBackupEvent).path(),'utf8'));
- assert.deepEqual(accountBackup.payload,(await row()).payload);
- await ui.getByRole('button',{name:'Remove downloaded browser copy',exact:true}).click();
- await ui.getByRole('button',{name:'I saved the archive — remove browser copy',exact:true}).click();
- await ui.locator('#syncRecoveryModal').waitFor({state:'detached'});
- assert.equal(await ui.evaluate(()=>localStorage.getItem(Storage.USER_RECOVERY_PREFIX+'owner')),null);
- assert.equal(await ui.getByRole('button',{name:'Review preserved local changes'}).count(),0);
- assert.deepEqual(await row(),accountBefore);
+ // Explicit consent can remove preserved browser copies, never account inventory.
+ await ui.evaluate(async()=>Storage.prepareForSignOut({discardHistoricalCopies:Storage.getHistoricalCopies()}));
+ assert.equal(await ui.evaluate(()=>localStorage.getItem('elistlyData:recovery:owner')),null);assert.deepEqual(await row(),accountBefore);
  // Empty cache must not offer destructive setup before or after populated refresh.
  const emptyContext=await browser.newContext();
  await emptyContext.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
- await emptyContext.addInitScript(token=>{localStorage.setItem('elistly_token',token);localStorage.setItem('elistlyData:user:owner',JSON.stringify({entities:{},categories:{},entityTypes:{}}));},tokens.owner);
+ await emptyContext.addInitScript(token=>{localStorage.setItem('elistly_token',token);localStorage.setItem('elistlyData:confirmed:v1:owner',JSON.stringify({format:'server-ack-v1',payload:{entities:{},categories:{},entityTypes:{}},revision:null}));},tokens.owner);
  readGate=new Promise(r=>releaseRead=r);
  const empty=await emptyContext.newPage();await empty.goto(`http://127.0.0.1:${server.address().port}/app.html`,{waitUntil:'domcontentloaded'});
  await empty.waitForFunction(()=>App._isReady);
@@ -178,5 +155,5 @@ try {
  assert.equal(await newcomer.evaluate(()=>Storage._accountVerified),true);
  assert.equal((await row()).payload.entities.one.name,'Fresh visible inventory','another account setup does not mutate owner');
  console.log(JSON.stringify({environment:'loopback real app + Worker + file-backed PGlite; headless Chrome; external assets blocked',warmFirstRenderMs:Math.round(warmMs),freshAfterReleasingHeldGETMs:freshMs,coldFirstFreshRenderMs:Math.round(coldMs)}));
- console.log('PASS: durable PostgreSQL, independent profiles, null-base recovery, current offline queue, conflicts, lost response, stale same-profile tab');
+ console.log('PASS: durable PostgreSQL, independent profiles, confirmed cache, manual draft retry, conflicts, lost response, stale same-profile tab, responsive export/consent, warm/cold startup and onboarding');
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));await db.close();fs.rmSync(dir,{recursive:true,force:true});}
