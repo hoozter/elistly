@@ -2264,6 +2264,7 @@ const App = {
           confirmLabel: 'Delete selected',
           confirmVariant: 'danger',
           onConfirm: () => {
+            this.removeLinksToDeletedEntities(selectedIds);
             selectedIds.forEach(id => delete this.data.entities[id]);
             this.saveData();
             this.clearBulkSelection();
@@ -4590,7 +4591,9 @@ ${removal}
           for (const [sourceTypeId, related] of incoming) {
             const sourceType = this.data.entityTypes[sourceTypeId];
             const section = makeElement('section', 'entity-related-section');
-            section.appendChild(makeElement('h4', 'entity-related-heading', `${sourceType.label || sourceTypeId}s`));
+            const label = sourceType.label || sourceTypeId;
+            const plural = label.toLowerCase() === 'person' ? 'People' : /[^aeiou]y$/i.test(label) ? `${label.slice(0, -1)}ies` : /s$/i.test(label) ? label : `${label}s`;
+            section.appendChild(makeElement('h4', 'entity-related-heading', plural));
             const list = makeElement('div', 'entity-related-list');
             for (const relatedEntity of related) {
               const item = makeElement('button', 'entity-related-item', this.getEntityDisplayName(relatedEntity.id) || relatedEntity.id);
@@ -4660,6 +4663,30 @@ ${removal}
           type.associations.forEach(assoc => associations.appendChild(this.createEntityAssociationField(assoc, entity ? entity[assoc.name] : '')));
           sections.appendChild(associations);
         }
+        if (entity) {
+          const incoming = this.getIncomingAssociationChoices(entity);
+          if (incoming.length) {
+            const section = makeElement('div', 'modal-group carded-section');
+            section.appendChild(makeElement('h4', '', 'Linked items'));
+            for (const { sourceType, association, choices } of incoming) {
+              const group = makeElement('fieldset', 'entity-incoming-group');
+              group.appendChild(makeElement('legend', '', `${sourceType.label || sourceType.id}: ${association.label || association.name}`));
+              for (const source of choices) {
+                const label = makeElement('label', 'entity-incoming-link');
+                label.dataset.entityId = source.id;
+                label.dataset.assocName = association.name;
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = source[association.name] === entity.id;
+                label.append(checkbox, document.createTextNode(this.getEntityDisplayName(source.id) || source.id));
+                group.appendChild(label);
+              }
+              if (!choices.length) group.appendChild(makeElement('p', 'entity-incoming-empty', 'No available items yet'));
+              section.appendChild(group);
+            }
+            sections.appendChild(section);
+          }
+        }
         form.appendChild(sections);
         const actions = makeElement('div', 'modal-actions');
         const viewActions = makeElement('div', ''); viewActions.id = 'entityViewActions'; if (!isEdit) viewActions.classList.add('hidden');
@@ -4707,6 +4734,31 @@ ${removal}
           }
         }
         return byType;
+      },
+      getIncomingAssociationChoices(target) {
+        if (!target?.id) return [];
+        const groups = [];
+        for (const sourceType of this.getEnabledEntityTypes()) {
+          for (const association of sourceType.associations || []) {
+            if (association.association?.kind !== 'belongs_to' || association.association.targetType !== target.type) continue;
+            const choices = Object.values(this.data.entities || {}).filter(source =>
+              source.type === sourceType.id && source.id !== target.id &&
+              (!source[association.name] || source[association.name] === target.id));
+            groups.push({ sourceType, association, choices });
+          }
+        }
+        return groups;
+      },
+      removeLinksToDeletedEntities(ids) {
+        const deleted = new Set(ids);
+        for (const source of Object.values(this.data.entities || {})) {
+          if (deleted.has(source.id)) continue;
+          for (const association of this.data.entityTypes[source.type]?.associations || []) {
+            if (association.association?.kind !== 'belongs_to') continue;
+            const target = this.data.entities[source[association.name]];
+            if (target && deleted.has(target.id) && target.type === association.association.targetType) delete source[association.name];
+          }
+        }
       },
       createDeviceIntakeDraftSection(type, form) {
         const make = (tag, className, text) => {
@@ -4892,6 +4944,10 @@ ${removal}
         if (targetTypeAvailable) {
           Object.values(this.data.entities).filter(entity => entity.type === targetType).forEach(entity => select.appendChild(new Option(this.getEntityDisplayName(entity), entity.id, false, value === entity.id)));
         }
+        if (value && ![...select.options].some(option => option.value === value)) {
+          const existing = this.data.entities[value];
+          select.appendChild(new Option(`${existing ? this.getEntityDisplayName(existing) : value} (${targetTypeAvailable ? 'missing' : 'inactive'})`, value, true, true));
+        }
         const link = document.createElement('a'); link.href = '#'; link.className = 'association-add-link'; link.dataset.targetType = targetType; link.dataset.assocName = assoc.name; link.dataset.targetLabel = this.data.entityTypes[targetType]?.label || targetType;
         if (targetTypeAvailable) {
           link.append(document.createTextNode('Add '), document.createTextNode(link.dataset.targetLabel));
@@ -4974,6 +5030,10 @@ ${removal}
           if (key === 'name' && type.enableNameGen) continue;
           if (value !== '') data[key] = value;
         }
+        // Empty selects must remove the old reference; omitting them retains stale links.
+        for (const association of type.associations || []) {
+          if (formData.has(association.name) && formData.get(association.name) === '') delete data[association.name];
+        }
         type.fields.filter(f => f.type === 'checkbox').forEach(f => {
           data[f.name] = formData.get(f.name) === 'yes';
         });
@@ -5004,6 +5064,15 @@ ${removal}
         
         // Save the entity
         this.data.entities[data.id] = data;
+        // Inverse controls edit the same source-of-truth belongs_to field, not a second link.
+        if (entityId) form.querySelectorAll('.entity-incoming-link').forEach(label => {
+          const source = this.data.entities[label.dataset.entityId];
+          const association = this.data.entityTypes[source?.type]?.associations?.find(item =>
+            item.name === label.dataset.assocName && item.association?.kind === 'belongs_to' && item.association.targetType === entityType);
+          if (!source || !association) return;
+          if (label.querySelector('input').checked && !source[association.name]) source[association.name] = data.id;
+          else if (!label.querySelector('input').checked && source[association.name] === data.id) delete source[association.name];
+        });
         
         this.saveData();
         this.closeEntityModal();
@@ -5045,6 +5114,7 @@ ${removal}
         const catIds = this.getEntityTypeCategoryIds(type);
         const category = catIds.length ? catIds[0] : null;
         
+        this.removeLinksToDeletedEntities([entityId]);
         delete this.data.entities[entityId];
         this.saveData();
         
@@ -5082,6 +5152,9 @@ ${removal}
         const formData = new FormData(form);
         formData.forEach((value, key) => {
           data.push([key, String(value)]);
+        });
+        form.querySelectorAll('.entity-incoming-link').forEach(label => {
+          data.push([`incoming:${label.dataset.entityId}:${label.dataset.assocName}`, String(label.querySelector('input').checked)]);
         });
         return JSON.stringify(data.sort((a, b) => a[0].localeCompare(b[0])));
       },
@@ -5208,6 +5281,9 @@ ${removal}
           return this.setCategoryEnabled(categoryId, false);
         }
         // Delete all entities in this category
+        this.removeLinksToDeletedEntities(Object.values(this.data.entities)
+          .filter(entity => this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId))
+          .map(entity => entity.id));
         Object.entries(this.data.entities).forEach(([entityId, entity]) => {
           if (this.getEntityTypeCategoryIds(this.data.entityTypes[entity.type]).includes(categoryId)) {
             delete this.data.entities[entityId];
@@ -5929,6 +6005,8 @@ ${removal}
           return;
         }
         // Delete all entities of this type
+        this.removeLinksToDeletedEntities(Object.values(this.data.entities)
+          .filter(entity => entity.type === typeId).map(entity => entity.id));
         Object.entries(this.data.entities).forEach(([entityId, entity]) => {
           if (entity.type === typeId) {
             delete this.data.entities[entityId];
