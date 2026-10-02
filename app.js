@@ -4586,6 +4586,24 @@ ${removal}
           (type.associations || []).forEach(assoc => appendDetail(assoc.label || '', this.getEntityDisplayName(entity[assoc.name])));
           card.appendChild(properties);
           view.appendChild(card);
+          const incoming = this.getIncomingEntityLinks(entity);
+          for (const [sourceTypeId, related] of incoming) {
+            const sourceType = this.data.entityTypes[sourceTypeId];
+            const section = makeElement('section', 'entity-related-section');
+            section.appendChild(makeElement('h4', 'entity-related-heading', `${sourceType.label || sourceTypeId}s`));
+            const list = makeElement('div', 'entity-related-list');
+            for (const relatedEntity of related) {
+              const item = makeElement('button', 'entity-related-item', this.getEntityDisplayName(relatedEntity.id) || relatedEntity.id);
+              item.type = 'button';
+              item.addEventListener('click', () => {
+                document.getElementById('entityModal')?.remove();
+                this.showEntityForm(relatedEntity.type, relatedEntity.id);
+              });
+              list.appendChild(item);
+            }
+            section.appendChild(list);
+            view.appendChild(section);
+          }
           content.appendChild(view);
         }
         if (entityType === 'computer') {
@@ -4674,6 +4692,22 @@ ${removal}
         });
       },
 
+      getIncomingEntityLinks(target) {
+        const byType = new Map();
+        if (!target?.id) return byType;
+        for (const entity of Object.values(this.data.entities || {})) {
+          const type = this.data.entityTypes?.[entity.type];
+          if (!type || !this.isEntityTypeAvailable(type)) continue;
+          for (const association of type.associations || []) {
+            if (association.association?.targetType !== target.type || association.association?.kind !== 'belongs_to') continue;
+            const ids = Array.isArray(entity[association.name]) ? entity[association.name] : [entity[association.name]];
+            if (!ids.includes(target.id)) continue;
+            if (!byType.has(entity.type)) byType.set(entity.type, []);
+            if (!byType.get(entity.type).some(related => related.id === entity.id)) byType.get(entity.type).push(entity);
+          }
+        }
+        return byType;
+      },
       createDeviceIntakeDraftSection(type, form) {
         const make = (tag, className, text) => {
           const element = document.createElement(tag);
@@ -5647,7 +5681,7 @@ ${removal}
         };
         const nameGenerationEnabled = () => form.querySelector('[name="enableNameGen"]')?.checked ?? !!type.enableNameGen;
         const addField = field => { const index = fields.querySelectorAll('.field-card').length; const card = make('div', 'field-card sortable-item'); card.dataset.index = index; const fieldLabel = input(`fields[${index}].label`, field.label || ''); fieldLabel.required = true; const fieldName = input(`fields[${index}].name`, field.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `fields[${index}].type`; ['text','number','dropdown','textarea','date','checkbox','qr'].forEach(value => kind.appendChild(new Option(value, value, false, (field.type || 'text') === value))); const part = checkbox(`fields[${index}].partOfName`, field.partOfName, 'In title', !nameGenerationEnabled()); part.querySelector('input').addEventListener('change', syncComponents); const remove = button('Remove Field', 'btn btn-danger'); remove.addEventListener('click', () => { card.remove(); renumber(fields, 'fields'); syncComponents(); }); kind.addEventListener('change', () => renderOptions(card, Number(card.dataset.index))); fieldLabel.addEventListener('input', () => { if (!fieldName.value) fieldName.value = fieldLabel.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); syncComponents(); }); card.append(make('div', 'form-group', 'Label *'), fieldLabel, fieldName, kind, checkbox(`fields[${index}].required`, field.required, 'Required'), checkbox(`fields[${index}].visibleInCard`, field.visibleInCard, 'Visible in card'), part, remove); fields.appendChild(card); renderOptions(card, index, field.options || []); };
-        const addAssociation = assoc => { const index = associations.querySelectorAll('.assoc-card').length; const card = make('div', 'assoc-card association-editor sortable-item'); card.dataset.index = index; const label = input(`associations[${index}].label`, assoc.label || ''); label.required = true; const name = input(`associations[${index}].name`, assoc.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `associations[${index}].association.kind`; ['belongs_to','has_many','hierarchy'].forEach(value => kind.appendChild(new Option(value, value, false, (assoc.association?.kind || 'belongs_to') === value))); const target = document.createElement('select'); target.name = `associations[${index}].association.targetType`; Object.values(this.data.entityTypes || {}).forEach(candidate => target.appendChild(new Option(candidate.label || candidate.id || '', candidate.id || '', false, assoc.association?.targetType === candidate.id))); const part = checkbox(`associations[${index}].partOfName`, assoc.partOfName, 'In title', !nameGenerationEnabled()); part.querySelector('input').addEventListener('change', syncComponents); const remove = button('Remove link', 'btn btn-danger'); remove.addEventListener('click', () => { card.remove(); renumber(associations, 'associations'); syncComponents(); }); label.addEventListener('input', () => { if (!name.value) name.value = label.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); syncComponents(); }); card.append(make('div', 'form-group', 'Label *'), label, name, kind, target, checkbox(`associations[${index}].required`, assoc.required, 'Required'), checkbox(`associations[${index}].visibleInCard`, assoc.visibleInCard, 'Visible in card'), part, remove); associations.appendChild(card); };
+        const addAssociation = assoc => { const index = associations.querySelectorAll('.assoc-card').length; const card = make('div', 'assoc-card association-editor sortable-item'); card.dataset.index = index; const label = input(`associations[${index}].label`, assoc.label || ''); label.required = true; const name = input(`associations[${index}].name`, assoc.name || '', 'hidden'); const kind = document.createElement('select'); kind.name = `associations[${index}].association.kind`; ['belongs_to','has_many','hierarchy'].forEach(value => kind.appendChild(new Option(value, value, false, (assoc.association?.kind || 'belongs_to') === value))); const target = document.createElement('select'); target.name = `associations[${index}].association.targetType`; this.getEnabledEntityTypes().forEach(candidate => target.appendChild(new Option(candidate.label || candidate.id || '', candidate.id || '', false, assoc.association?.targetType === candidate.id))); if (assoc.association?.targetType && !this.isEntityTypeAvailable(assoc.association.targetType)) { const previous = this.data.entityTypes[assoc.association.targetType]; target.appendChild(new Option(`${previous?.label || assoc.association.targetType} (inactive)`, assoc.association.targetType, true, true)); } const part = checkbox(`associations[${index}].partOfName`, assoc.partOfName, 'In title', !nameGenerationEnabled()); part.querySelector('input').addEventListener('change', syncComponents); const remove = button('Remove link', 'btn btn-danger'); remove.addEventListener('click', () => { card.remove(); renumber(associations, 'associations'); syncComponents(); }); label.addEventListener('input', () => { if (!name.value) name.value = label.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); syncComponents(); }); card.append(make('div', 'form-group', 'Label *'), label, name, kind, target, checkbox(`associations[${index}].required`, assoc.required, 'Required'), checkbox(`associations[${index}].visibleInCard`, assoc.visibleInCard, 'Visible in card'), part, remove); associations.appendChild(card); };
         const close = button('×', 'modal-close'); close.addEventListener('click', () => this.closeEntityTypeForm()); const header = make('div', 'modal-header'); header.appendChild(make('h3', '', typeId ? type.label || '' : 'New entity type'));
         const basics = make('div', 'entity-type-editor carded-section'); const label = input('label', type.label || ''); label.required = true; const iconInput = input('icon', type.icon || 'folder', 'hidden'); iconInput.id = 'entityTypeIcon'; const iconPicker = button('Choose icon'); iconPicker.addEventListener('click', () => this.showIconPicker('entityTypeIcon')); basics.append(make('label', '', 'Label *'), label, iconInput, iconPicker);
         Object.values(this.data.categories || {}).forEach(category => basics.appendChild(checkbox(`category_${category.id}`, this.getEntityTypeCategoryIds(type).includes(category.id), category.label || category.id || '')));
@@ -6307,7 +6341,7 @@ ${removal}
                 <div role="tabpanel" id="noticesPanel" aria-labelledby="noticesTab" hidden>
                 <section class="legal-section">
                   <p>Full third-party copyright and license notices for the shipped browser assets and production Worker dependencies.</p>
-                  <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=652590665d5e9baba36d973d16969c4d158de09209c70dbfcdebccdb05ae5e02" title="Full third-party notices"></iframe>
+                  <div class="third-party-notices-content" data-notices-src="THIRD_PARTY_NOTICES.html?v=652590665d5e9baba36d973d16969c4d158de09209c70dbfcdebccdb05ae5e02" aria-label="Full third-party notices">Loading notices…</div>
                 </section>
                 </div>
               </div>
@@ -6320,6 +6354,7 @@ ${removal}
         div.innerHTML = modalHtml;
         document.body.appendChild(div.firstElementChild);
         this.initLegalTabs(document.getElementById('legalModal'));
+        window.loadThirdPartyNotices(document.getElementById('legalModal'));
         this.showModal('legalModal');
       },
 

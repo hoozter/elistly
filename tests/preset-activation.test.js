@@ -332,6 +332,24 @@ async function testDisabledCategoriesHideTheirTypesAndAssociationEntities() {
   });
 }
 
+async function testLinkEditorOnlyOffersActiveTargets() {
+  await withPage(async page => {
+    const result = await page.evaluate(() => {
+      App.data = {
+        settings: {}, categories: { assets: { id: 'assets', label: 'Assets', enabled: true }, people: { id: 'people', label: 'People', enabled: true } },
+        entityTypes: {
+          computer: { id: 'computer', label: 'Computer', categories: ['assets'], enabled: true, fields: [], associations: [{ name: 'assignedTo', label: 'Assigned To', association: { kind: 'belongs_to', targetType: 'person' } }] },
+          person: { id: 'person', label: 'Person', categories: ['people'], enabled: true },
+          book: { id: 'book', label: 'Book', categories: ['assets'], enabled: false }
+        }, entities: {}
+      };
+      App.editEntityType('computer');
+      return [...document.querySelector('[name="associations[0].association.targetType"]').options].map(option => option.value);
+    });
+    assert.deepEqual(result, ['computer', 'person']);
+  });
+}
+
 Promise.resolve()
   .then(testPresetTypesAreEnabledDisabledWithoutDeletion)
   .then(testActivationStateIsWorkspaceLocalAndMigratesExistingTypesEnabled)
@@ -341,5 +359,6 @@ Promise.resolve()
   .then(testBuiltInCategoryDisableIsNonDestructiveAndHidden)
   .then(testDisabledTypesDoNotLeakIntoNavigationOrFilters)
   .then(testDisabledCategoriesHideTheirTypesAndAssociationEntities)
+  .then(testLinkEditorOnlyOffersActiveTargets)
   .then(() => console.log('PASS preset activation'))
   .catch(error => { console.error(error); process.exitCode = 1; });

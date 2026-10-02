@@ -14,8 +14,9 @@ test('third-party notices ship complete texts and match the worker lock', () => 
   const landing = read('index.html');
   const app = read('app.js');
   for (const page of [landing, app]) {
-    assert.ok(page.includes(`src="THIRD_PARTY_NOTICES.html?v=${createHash('sha256').update(notices).digest('hex')}"`), 'notices are available in the Legal popup with the notices content version');
-    assert.ok(page.includes('title="Full third-party notices"'), 'embedded notices have an accessible title');
+    assert.ok(page.includes(`data-notices-src="THIRD_PARTY_NOTICES.html?v=${createHash('sha256').update(notices).digest('hex')}"`), 'notices are available in the Legal popup with the notices content version');
+    assert.ok(page.includes('aria-label="Full third-party notices"'), 'notices have an accessible label');
+    assert.ok(!page.includes('third-party-notices-frame'), 'notices use the existing panel rather than a nested frame');
     assert.ok(page.includes('role="tablist"'), 'Legal popup separates notices into tabs');
     assert.ok(page.includes('role="tabpanel"'), 'tab panels are identified for assistive technology');
     assert.ok(page.includes('>Privacy</button>'), 'privacy is a separate tab');

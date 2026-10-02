@@ -551,14 +551,23 @@ aside a.active {
   font-weight: 600;
 }
 .legal-tabs [role="tab"]:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
-.third-party-notices-frame {
-  display: block;
-  width: 100%;
-  height: 22rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--bg-primary);
+.third-party-notices-content {
+  color: var(--text-primary);
+  font: inherit;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
+.third-party-notices-content h1 { font: inherit; font-size: 1.25rem; font-weight: 700; margin: 1.5rem 0 1rem; }
+.third-party-notices-content h2 { font: inherit; font-size: 1.1rem; font-weight: 600; margin: 1.75rem 0 .75rem; }
+.third-party-notices-content section { border-top: 1px solid var(--border-color); margin-top: 1.5rem; }
+.third-party-notices-content pre {
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.third-party-notices-content code { color: inherit; white-space: normal; overflow-wrap: anywhere; }
 
 /* Footer link with icon (e.g. GitHub) */
 .app-footer-github { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -3025,6 +3034,20 @@ input.elistly-checkbox:disabled {
 .entity-detail-value {
   color: var(--text-primary);
 }
+.entity-related-section { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border-color); }
+.entity-related-heading { margin: 0 0 .75rem; color: var(--text-primary); font-size: 1rem; }
+.entity-related-list { display: flex; flex-wrap: wrap; gap: .5rem; }
+.entity-related-item {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: .5rem .75rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.entity-related-item:hover, .entity-related-item:focus-visible { border-color: var(--accent-color); }
 
 /* Selections & Scrollbars */
 ::selection {

@@ -25,7 +25,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=22" />
+  <link rel="stylesheet" href="styles.css?v=23" />
 </head>
 <body class="landing-page">
   <div class="landing-profile-anchor">
@@ -123,7 +123,7 @@
         <div role="tabpanel" id="landingNoticesPanel" aria-labelledby="landingNoticesTab" hidden>
         <section class="legal-section">
           <p>Full third-party copyright and license notices for the shipped browser assets and production Worker dependencies.</p>
-          <iframe class="third-party-notices-frame" src="THIRD_PARTY_NOTICES.html?v=652590665d5e9baba36d973d16969c4d158de09209c70dbfcdebccdb05ae5e02" title="Full third-party notices"></iframe>
+          <div class="third-party-notices-content" data-notices-src="THIRD_PARTY_NOTICES.html?v=652590665d5e9baba36d973d16969c4d158de09209c70dbfcdebccdb05ae5e02" aria-label="Full third-party notices">Loading notices…</div>
         </section>
         </div>
       </div>
@@ -193,6 +193,7 @@
     });
   })();
   </script>
+  <script src="notices-view.js"></script>
   <script src="pwa-register.js"></script>
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 </body>
